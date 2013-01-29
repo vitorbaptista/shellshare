@@ -1,0 +1,34 @@
+html, body, .wrapper {
+  height: 100%;
+  margin-top: 0px;
+  margin-bottom: 0px;
+}
+
+.header {
+  padding-top: 5px;
+  font-family: ‘Lucida Console’, Monaco, monospace;
+}
+
+.title {
+  font-size: 2em;
+}
+
+.bold {
+  font-weight: bold;
+}
+
+.online {
+  float: right;
+}
+
+.term {
+  font-family: courier,fixed,swiss,monospace,sans-serif;
+  font-size: 14px;
+  color: #f0f0f0;
+  background: #000000;
+}
+
+.termReverse {
+  color: #000000;
+  background: #ccc;
+}
