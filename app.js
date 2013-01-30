@@ -36,6 +36,13 @@ app.get('/:room', user.join);
 app.get('/', routes.index);
 
 io = io.listen(server);
+
+// Configuring for Heroku
+io.configure(function () {
+  io.set("transports", ["xhr-polling"]);
+  io.set("polling duration", 10);
+});
+
 io.sockets.on('connection', function (socket) {
   socket.on('join', function (room) {
     socket.join(room);
