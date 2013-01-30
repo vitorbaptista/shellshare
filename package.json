@@ -2,6 +2,9 @@
   "name": "application-name",
   "version": "0.0.1",
   "private": true,
+  "engines": {
+    "node": "0.6"
+  },
   "scripts": {
     "start": "node app"
   },
