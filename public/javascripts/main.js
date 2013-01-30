@@ -7,6 +7,9 @@
   socket.on('usersCount', function (onlineUsers) {
     document.getElementById('online-counter').innerHTML = onlineUsers;
   });
+  socket.on('message', function (message) {
+    term.write(atob(message));
+  });
 
   term.open();
 

@@ -33,6 +33,12 @@ app.configure('development', function(){
 server.listen(app.get('port'));
 
 app.get('/:room', user.join);
+app.post('/:room', function (req, res) {
+  var room = req.url,
+      message = req.body.message;
+  io.sockets.in(room).send(message);
+  res.send('');
+});
 app.get('/', routes.index);
 
 io = io.listen(server);
