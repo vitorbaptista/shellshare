@@ -1,5 +1,5 @@
 (function () {
-  var socket = io.connect(),
+  var socket = io.connect('', {'sync disconnect on unload' : true}),
       room = window.location.pathname,
       term = new Term(80, 30);
 

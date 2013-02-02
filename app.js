@@ -54,4 +54,16 @@ io.sockets.on('connection', function (socket) {
     socket.join(room);
     io.sockets.in(room).emit('usersCount', io.sockets.clients(room).length);
   });
+
+  socket.on('disconnect', function () {
+    var rooms = io.sockets.manager.roomClients[socket.id];
+    for (var room in rooms) {
+      if (room !== '') {
+        var usersCount = io.sockets.manager.rooms[room].length - 1,
+            realRoom = room.substr(1); // We need to remove the starting
+                                       // '/' from the room name
+        io.sockets.in(realRoom).emit('usersCount', usersCount);
+      }
+    }
+  });
 });
