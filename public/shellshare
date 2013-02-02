@@ -1,0 +1,37 @@
+#!/usr/bin/env python
+import tempfile
+import string
+import random
+import thread
+import time
+import base64
+import sys
+import httplib2
+import urllib
+import os
+
+def id_generator(size=9, chars=string.ascii_letters + string.digits):
+    return ''.join(random.choice(chars) for x in range(size))
+
+def post(url, data):
+    headers = {'Content-type': 'application/x-www-form-urlencoded'}
+    postData = dict(message=data)
+    httplib2.Http().request(url, 'POST', headers=headers, body=urllib.urlencode(postData))
+
+def stream_file(path, url):
+    file = open(path, "r")
+    while True:
+        time.sleep(1)
+        str = file.read()
+        if not (str == ""):
+            encoded_str = base64.b64encode(str)
+            post(url, encoded_str)
+
+tmp = tempfile.NamedTemporaryFile()
+channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
+url = 'http://www.shellshare.net/%s' % channel
+
+print 'Sharing session in %s...' % url
+thread.start_new_thread(stream_file, (tmp.name,url))
+os.system('script -qf %s' % tmp.name)
+print 'End of transmission.'
