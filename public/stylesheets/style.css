@@ -21,11 +21,11 @@ html, body, .wrapper {
   float: right;
 }
 
-.term {
-  font-family: courier,fixed,swiss,monospace,sans-serif;
+.terminal {
+  font-family: 'Inconsolata', sans-serif;
   font-size: 14px;
-  color: #f0f0f0;
-  background: #000000;
+  padding-left: 3px;
+  padding-right: 3px;
 }
 
 .reverse-video {
