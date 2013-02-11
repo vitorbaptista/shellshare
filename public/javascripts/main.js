@@ -1,7 +1,7 @@
 (function () {
   var socket = io.connect('', {'sync disconnect on unload' : true}),
       room = window.location.pathname,
-      term = new Term(80, 30);
+      term = new Terminal(80, 30);
 
   socket.emit('join', room);
   socket.on('usersCount', function (onlineUsers) {
@@ -12,11 +12,4 @@
   });
 
   term.open();
-
-  window.onresize = function () {
-    var termContainer = document.getElementById('main'),
-        termFontWidth = 8;
-    term.w = termContainer.offsetWidth / termFontWidth;
-  };
-  window.onresize();
 })();
