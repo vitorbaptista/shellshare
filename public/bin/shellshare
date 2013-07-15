@@ -10,13 +10,16 @@ import httplib2
 import urllib
 import os
 
+
 def id_generator(size=9, chars=string.ascii_letters + string.digits):
     return ''.join(random.choice(chars) for x in range(size))
+
 
 def post(url, data):
     headers = {'Content-type': 'application/x-www-form-urlencoded'}
     postData = dict(message=data)
     httplib2.Http().request(url, 'POST', headers=headers, body=urllib.urlencode(postData))
+
 
 def stream_file(path, url):
     file = open(path, "r")
@@ -32,6 +35,6 @@ channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
 url = 'http://www.shellshare.net/%s' % channel
 
 print 'Sharing session in %s...' % url
-thread.start_new_thread(stream_file, (tmp.name,url))
+thread.start_new_thread(stream_file, (tmp.name, url))
 os.system('script -qf %s' % tmp.name)
 print 'End of transmission.'
