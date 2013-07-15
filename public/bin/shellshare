@@ -26,13 +26,10 @@ def stream_file(path, url):
     f = open(path, 'rb')
     while True:
         time.sleep(1)
-        data = ''
-        while True:
-            new = f.readline()
-            if not new:
-                break
-            data += new
-        if not (data == ''):
+        # osx wants this because EOF is cached
+        f.seek(0, os.SEEK_CUR)
+        data = f.read()
+        if not (data == ""):
             encoded_str = base64.b64encode(data)
             post(url, encoded_str)
 
