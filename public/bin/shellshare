@@ -14,7 +14,7 @@ import shutil
 
 
 class TemporaryPipe(object):
-    def __init__(self, pipename="pipe"):
+    def __init__(self, pipename='pipe'):
         self.pipename = pipename
         self.tempdir = None
 
@@ -42,28 +42,26 @@ def post(url, data):
 
 
 def stream_file(path, url):
-    f = open(path, 'rb')
+    f = os.open(path, os.O_RDONLY)
     while True:
         time.sleep(1)
-        # osx wants this because EOF is cached
-        f.seek(0, os.SEEK_CUR)
-        data = f.read()
-        if not (data == ""):
+        data = os.read(f, 1024)
+        if not (data == ''):
             encoded_str = base64.b64encode(data)
             post(url, encoded_str)
 
 
 with TemporaryPipe('shellshare') as pipe:
-    if platform.system() == 'Darwin':
-        shell_args = '-qt 0'
-    else:
-        shell_args = '-qf'
-
     channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
-    url = 'http://shellshare-staging.herokuapp.com/{channel}'.format(channel=channel)
+    url = 'http://shellshare.net/{channel}'.format(channel=channel)
 
-    print 'Sharing session in %s...' % url
+    if platform.system() == 'Darwin':
+        script_args = '-qt 0'
+    else:
+        script_args = '-qf'
+
+    print 'Sharing session at {url}...'.format(url=url)
     thread.start_new_thread(stream_file, (pipe, url))
-    os.system('script %s %s' % (shell_args, pipe))
+    os.system('script {args} {pipe}'.format(args=script_args, pipe=pipe))
 
     print 'End of transmission.'
