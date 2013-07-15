@@ -20,7 +20,11 @@ def post(url, data):
     postData = dict(message=data)
     data = urllib.urlencode(postData)
     req = urllib2.Request(url, data, headers)
-    urllib2.urlopen(req)
+    try:
+        urllib2.urlopen(req)
+    except urllib2.URLError:
+        print 'Cannot share session. You have to be connected to the internet.'
+        thread.exit()
 
 
 def stream_file(path, url):
