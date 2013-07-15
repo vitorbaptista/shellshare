@@ -42,9 +42,11 @@ def post(url, data):
 
 
 def stream_file(path, url):
-    f = open(path, "rb")
+    f = open(path, 'rb')
     while True:
         time.sleep(1)
+        # osx wants this because EOF is cached
+        f.seek(0, os.SEEK_CUR)
         data = f.read()
         if not (data == ""):
             encoded_str = base64.b64encode(data)
