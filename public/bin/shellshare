@@ -6,9 +6,27 @@ import thread
 import time
 import base64
 import sys
-import httplib2
 import urllib
+import urllib2
 import os
+import platform
+import shutil
+
+
+class TemporaryPipe(object):
+    def __init__(self, pipename='pipe'):
+        self.pipename = pipename
+        self.tempdir = None
+
+    def __enter__(self):
+        self.tempdir = tempfile.mkdtemp()
+        pipe_path = os.path.join(self.tempdir, self.pipename)
+        os.mkfifo(pipe_path)
+        return pipe_path
+
+    def __exit__(self, type, value, traceback):
+        if self.tempdir is not None:
+            shutil.rmtree(self.tempdir)
 
 
 def id_generator(size=9, chars=string.ascii_letters + string.digits):
@@ -18,24 +36,32 @@ def id_generator(size=9, chars=string.ascii_letters + string.digits):
 def post(url, data):
     headers = {'Content-type': 'application/x-www-form-urlencoded'}
     postData = dict(message=data)
-    httplib2.Http().request(url, 'POST', headers=headers, body=urllib.urlencode(postData))
+    data = urllib.urlencode(postData)
+    req = urllib2.Request(url, data, headers)
+    urllib2.urlopen(req)
 
 
 def stream_file(path, url):
-    f = open(path, "r")
+    f = os.open(path, os.O_RDONLY)
     while True:
         time.sleep(1)
-        data = f.read()
-        if not (data == ""):
+        data = os.read(f, 1024)
+        if not (data == ''):
             encoded_str = base64.b64encode(data)
             post(url, encoded_str)
 
 
-tmp = tempfile.NamedTemporaryFile()
-channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
-url = 'http://www.shellshare.net/%s' % channel
+with TemporaryPipe('shellshare') as pipe:
+    channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
+    url = 'http://shellshare.net/{channel}'.format(channel=channel)
 
-print 'Sharing session in %s...' % url
-thread.start_new_thread(stream_file, (tmp.name, url))
-os.system('script -qf %s' % tmp.name)
-print 'End of transmission.'
+    if platform.system() == 'Darwin':
+        script_args = '-qt 0'
+    else:
+        script_args = '-qf'
+
+    print 'Sharing session at {url}...'.format(url=url)
+    thread.start_new_thread(stream_file, (pipe, url))
+    os.system('script {args} {pipe}'.format(args=script_args, pipe=pipe))
+
+    print 'End of transmission.'
