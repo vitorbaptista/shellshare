@@ -6,8 +6,8 @@ import thread
 import time
 import base64
 import sys
-import httplib2
 import urllib
+import urllib2
 import os
 
 
@@ -18,7 +18,9 @@ def id_generator(size=9, chars=string.ascii_letters + string.digits):
 def post(url, data):
     headers = {'Content-type': 'application/x-www-form-urlencoded'}
     postData = dict(message=data)
-    httplib2.Http().request(url, 'POST', headers=headers, body=urllib.urlencode(postData))
+    data = urllib.urlencode(postData)
+    req = urllib2.Request(url, data, headers)
+    urllib2.urlopen(req)
 
 
 def stream_file(path, url):
