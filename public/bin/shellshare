@@ -9,6 +9,7 @@ import sys
 import urllib
 import urllib2
 import os
+import platform
 
 
 def id_generator(size=9, chars=string.ascii_letters + string.digits):
@@ -28,9 +29,11 @@ def post(url, data):
 
 
 def stream_file(path, url):
-    f = open(path, "r")
+    f = open(path, 'rb')
     while True:
         time.sleep(1)
+        # osx wants this because EOF is cached
+        f.seek(0, os.SEEK_CUR)
         data = f.read()
         if not (data == ""):
             encoded_str = base64.b64encode(data)
@@ -41,7 +44,12 @@ tmp = tempfile.NamedTemporaryFile()
 channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
 url = 'http://www.shellshare.net/%s' % channel
 
+if platform.system() == 'Darwin':
+    shell_args = '-qt 0'
+else:
+    shell_args = '-qf'
+
 print 'Sharing session in %s...' % url
 thread.start_new_thread(stream_file, (tmp.name, url))
-os.system('script -qf %s' % tmp.name)
+os.system('script %s %s' % (shell_args, tmp.name))
 print 'End of transmission.'
