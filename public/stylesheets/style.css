@@ -22,10 +22,9 @@ body {
 }
 
 .terminal {
-  font-family: 'Inconsolata', sans-serif;
-  font-size: 14px;
-  padding-left: 3px;
-  padding-right: 3px;
+  font-family: 'Inconsolata', monospace;
+  font-size: 12px;
+  padding: 5px;
   overflow: hidden;
 }
 
