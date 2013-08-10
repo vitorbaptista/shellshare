@@ -8,10 +8,12 @@ var express = require('express')
   , user = require('./routes/user')
   , http = require('http')
   , path = require('path')
-  , io = require('socket.io');
+  , io = require('socket.io')
+  , memjs = require('memjs');
 
 var app = express()
-  , server = http.createServer(app);
+  , server = http.createServer(app)
+  , memcached = memjs.Client.create();
 
 app.configure(function(){
   app.set('port', process.env.PORT || 3000);
@@ -37,9 +39,20 @@ app.post('/:room', function (req, res) {
   var room = req.url,
       size = req.body.size,
       message = req.body.message;
-  io.sockets.in(room).emit('size', size);
-  io.sockets.in(room).emit('message', message);
-  res.send('');
+  memcached.get(room, function (error, secret) {
+    var authorization = req.get('Authorization'),
+        authorized = !secret || secret.toString() == authorization;
+    if (!authorized || !authorization) {
+      res.send(401);
+      return;
+    }
+    if (!secret) {
+      memcached.set(room, authorization);
+    }
+    io.sockets.in(room).emit('size', size);
+    io.sockets.in(room).emit('message', message);
+    res.send('');
+  });
 });
 app.get('/', routes.index);
 

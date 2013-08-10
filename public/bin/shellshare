@@ -28,20 +28,27 @@ def terminal_size():
     return {'cols': cols, 'rows': rows}
 
 
-def post(url, data):
-    headers = {'Content-type': 'application/x-www-form-urlencoded'}
+def post(url, data, authorization):
+    headers = {'Content-type': 'application/x-www-form-urlencoded',
+               'Authorization': authorization}
     size = json.dumps(terminal_size())
     postData = dict(message=data, size=size)
     data = urllib.urlencode(postData)
     req = urllib2.Request(url, data, headers)
     try:
         urllib2.urlopen(req)
+    except urllib2.HTTPError as e:
+        if e.code == 401:
+            print 'You\'re unauthorized to share shell to %s. Try another one.' % url
+        else:
+            print 'Received HTTP Error %s. Exiting.' % e.code
+        thread.exit()
     except urllib2.URLError:
         print 'Cannot share session. You have to be connected to the internet.'
         thread.exit()
 
 
-def stream_file(path, url):
+def stream_file(path, url, authorization):
     f = open(path, 'rb')
     while True:
         time.sleep(1)
@@ -51,11 +58,12 @@ def stream_file(path, url):
         if not (data == ""):
             urlencoded = urllib2.quote(data)
             encoded_str = base64.b64encode(urlencoded)
-            post(url, encoded_str)
+            post(url, encoded_str, authorization)
 
 
 tmp = tempfile.NamedTemporaryFile()
 channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
+authorization = id_generator()
 url = 'http://www.shellshare.net/%s' % channel
 
 if platform.system() == 'Darwin':
@@ -64,6 +72,6 @@ else:
     shell_args = '-qf'
 
 print 'Sharing session in %s...' % url
-thread.start_new_thread(stream_file, (tmp.name, url))
+thread.start_new_thread(stream_file, (tmp.name, url, authorization))
 subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
 print 'End of transmission.'

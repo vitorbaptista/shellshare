@@ -12,6 +12,7 @@
     "express": "3.1.x",
     "jade": "*",
     "less-middleware": "*",
-    "socket.io": "*"
+    "socket.io": "*",
+    "memjs": "*"
   }
 }
