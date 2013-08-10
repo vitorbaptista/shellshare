@@ -64,5 +64,5 @@ else:
 
 print 'Sharing session in %s...' % url
 thread.start_new_thread(stream_file, (tmp.name, url))
-subprocess.call('script %s %s' % (tmp.name, shell_args), shell=True)
+subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
 print 'End of transmission.'
