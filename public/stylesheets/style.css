@@ -1,11 +1,11 @@
-html, body, .wrapper {
-  height: 100%;
-  margin-top: 0px;
-  margin-bottom: 0px;
+body {
+  background: black;
+  margin: 0px;
 }
 
 .header {
-  padding-top: 5px;
+  background: #fffffd;
+  padding: 5px;
   font-family: ‘Lucida Console’, Monaco, monospace;
 }
 
@@ -26,6 +26,7 @@ html, body, .wrapper {
   font-size: 14px;
   padding-left: 3px;
   padding-right: 3px;
+  overflow: hidden;
 }
 
 .reverse-video {
