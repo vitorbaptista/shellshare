@@ -9,16 +9,29 @@ import sys
 import urllib
 import urllib2
 import os
+import subprocess
 import platform
+import json
 
 
 def id_generator(size=9, chars=string.ascii_letters + string.digits):
     return ''.join(random.choice(chars) for x in range(size))
 
 
+def terminal_size():
+    cols = subprocess.Popen('tput cols', shell=True,
+            stdout=subprocess.PIPE).stdout.read().strip()
+    rows = subprocess.Popen('tput lines', shell=True,
+            stdout=subprocess.PIPE).stdout.read().strip()
+    cols = int(cols)
+    rows = int(rows)
+    return {'cols': cols, 'rows': rows}
+
+
 def post(url, data):
     headers = {'Content-type': 'application/x-www-form-urlencoded'}
-    postData = dict(message=data)
+    size = json.dumps(terminal_size())
+    postData = dict(message=data, size=size)
     data = urllib.urlencode(postData)
     req = urllib2.Request(url, data, headers)
     try:
@@ -51,5 +64,5 @@ else:
 
 print 'Sharing session in %s...' % url
 thread.start_new_thread(stream_file, (tmp.name, url))
-os.system('script %s %s' % (shell_args, tmp.name))
+subprocess.call('script %s %s' % (tmp.name, shell_args), shell=True)
 print 'End of transmission.'

@@ -35,8 +35,10 @@ server.listen(app.get('port'));
 app.get('/:room', user.join);
 app.post('/:room', function (req, res) {
   var room = req.url,
+      size = req.body.size,
       message = req.body.message;
-  io.sockets.in(room).send(message);
+  io.sockets.in(room).emit('size', size);
+  io.sockets.in(room).emit('message', message);
   res.send('');
 });
 app.get('/', routes.index);
