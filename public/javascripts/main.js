@@ -9,7 +9,8 @@
   });
   socket.on('message', function (message) {
     if (term) {
-      term.write(atob(message));
+      decoded_message = decodeURIComponent(atob(message));
+      term.write(decoded_message);
     }
   });
   socket.on('size', function (size) {

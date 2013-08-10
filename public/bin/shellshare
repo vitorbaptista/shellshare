@@ -49,7 +49,8 @@ def stream_file(path, url):
         f.seek(0, os.SEEK_CUR)
         data = f.read()
         if not (data == ""):
-            encoded_str = base64.b64encode(data)
+            urlencoded = urllib2.quote(data)
+            encoded_str = base64.b64encode(urlencoded)
             post(url, encoded_str)
 
 
