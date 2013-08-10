@@ -14,7 +14,7 @@ import platform
 import json
 
 
-def id_generator(size=9, chars=string.ascii_letters + string.digits):
+def id_generator(size=18, chars=string.ascii_letters + string.digits):
     return ''.join(random.choice(chars) for x in range(size))
 
 
