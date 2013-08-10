@@ -51,7 +51,7 @@ app.post('/:room', function (req, res) {
     }
     io.sockets.in(room).emit('size', size);
     io.sockets.in(room).emit('message', message);
-    res.send('');
+    res.send(200);
   });
 });
 app.get('/', routes.index);
