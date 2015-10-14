@@ -67,18 +67,20 @@ io.configure(function () {
 io.sockets.on('connection', function (socket) {
   socket.on('join', function (room) {
     socket.join(room);
-    io.sockets.in(room).emit('usersCount', io.sockets.clients(room).length);
+    updateUsersCount(io, room);
   });
 
   socket.on('disconnect', function () {
-    var rooms = io.sockets.manager.roomClients[socket.id];
-    for (var room in rooms) {
-      if (room !== '') {
-        var usersCount = io.sockets.manager.rooms[room].length - 1,
-            realRoom = room.substr(1); // We need to remove the starting
-                                       // '/' from the room name
-        io.sockets.in(realRoom).emit('usersCount', usersCount);
-      }
+    for (var i in socket.rooms) {
+      updateUsersCount(io, socket.rooms[i]);
     }
   });
 });
+
+function updateUsersCount(io, room) {
+  var clients = io.sockets.adapter.rooms[room];
+
+  if (clients !== undefined) {
+    io.sockets.in(room).emit('usersCount', Object.keys(clients).length);
+  }
+}
