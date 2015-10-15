@@ -65,14 +65,20 @@ io.configure(function () {
 });
 
 io.sockets.on('connection', function (socket) {
+  var rooms = [];
+
   socket.on('join', function (room) {
-    socket.join(room);
-    updateUsersCount(io, room);
+    socket.join(room, function (err) {
+      if (!err) {
+        rooms.push(room);
+        updateUsersCount(io, room);
+      }
+    });
   });
 
   socket.on('disconnect', function () {
-    for (var i in socket.rooms) {
-      updateUsersCount(io, socket.rooms[i]);
+    for (var i in rooms) {
+      updateUsersCount(io, rooms[i]);
     }
   });
 });
