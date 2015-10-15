@@ -9,51 +9,50 @@ var express = require('express')
   , http = require('http')
   , path = require('path')
   , io = require('socket.io')
-  , memjs = require('memjs');
+  , memjs = require('memjs')
+  , logger = require('morgan')
+  , bodyParser = require('body-parser')
+  , errorHandler = require('errorhandler');
 
 var app = express()
   , server = http.createServer(app)
   , memcached = memjs.Client.create();
 
-app.configure(function(){
-  app.set('port', process.env.PORT || 3000);
-  app.set('views', __dirname + '/views');
-  app.set('view engine', 'jade');
-  app.use(express.favicon());
-  app.use(express.logger('dev'));
-  app.use(express.bodyParser());
-  app.use(express.methodOverride());
-  app.use(app.router);
-  app.use(require('less-middleware')({ src: __dirname + '/public' }));
-  app.use(express.static(path.join(__dirname, 'public')));
-});
+app.set('port', process.env.PORT || 3000);
+app.set('views', path.join(__dirname, '/views'));
+app.set('view engine', 'jade');
+app.use(logger('dev'));
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-app.configure('development', function(){
-  app.use(express.errorHandler());
-});
+if ('development' == app.get('env')) {
+  app.use(errorHandler());
+}
 
 server.listen(app.get('port'));
 
-app.get('/:room', user.join);
-app.post('/:room', function (req, res) {
-  var room = req.url,
-      size = req.body.size,
-      message = req.body.message;
-  memcached.get(room, function (error, secret) {
-    var authorization = req.get('Authorization'),
-        authorized = !secret || secret.toString() == authorization;
-    if (!authorized || !authorization) {
-      res.send(401);
-      return;
-    }
-    if (!secret) {
-      memcached.set(room, authorization);
-    }
-    io.sockets.in(room).emit('size', size);
-    io.sockets.in(room).emit('message', message);
-    res.send(200);
-  });
-});
+app.route('/:room')
+   .get(user.join)
+   .post(function (req, res) {
+     var room = req.url,
+         size = req.body.size,
+         message = req.body.message;
+     memcached.get(room, function (error, secret) {
+       var authorization = req.get('Authorization'),
+           authorized = !secret || secret.toString() == authorization;
+       if (!authorized || !authorization) {
+         res.sendStatus(401);
+         return;
+       }
+       if (!secret) {
+         memcached.set(room, authorization);
+       }
+       io.sockets.in(room).emit('size', size);
+       io.sockets.in(room).emit('message', message);
+       res.sendStatus(200);
+     });
+   });
 app.get('/', routes.index);
 
 io = io.listen(server);
