@@ -64,7 +64,7 @@ def stream_file(path, url, authorization):
 tmp = tempfile.NamedTemporaryFile()
 channel = sys.argv[1] if len(sys.argv) > 1 else id_generator()
 authorization = id_generator()
-url = 'http://localhost:3000/%s' % channel
+url = 'http://www.shellshare.net/%s' % channel
 
 if platform.system() == 'Darwin':
     shell_args = '-qt 0'
