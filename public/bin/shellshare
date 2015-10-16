@@ -72,6 +72,7 @@ def stream_file(path, url, channel, authorization):
 
 tmp = tempfile.NamedTemporaryFile()
 channel = sys.argv[1] if len(sys.argv) >= 2 else id_generator()
+channel = 'r/%s' % channel
 authorization = sys.argv[2] if len(sys.argv) >= 3 else id_generator()
 url = 'www.shellshare.net'
 

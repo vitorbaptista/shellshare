@@ -4,19 +4,17 @@
  */
 
 var express = require('express')
-  , routes = require('./routes')
-  , user = require('./routes/user')
+  , indexRoute = require('./routes/index')
+  , roomsRoute = require('./routes/rooms')
   , http = require('http')
   , path = require('path')
   , io = require('socket.io')
-  , memjs = require('memjs')
   , logger = require('morgan')
   , bodyParser = require('body-parser')
   , errorHandler = require('errorhandler');
 
 var app = express()
-  , server = http.createServer(app)
-  , memcached = memjs.Client.create();
+  , server = http.createServer(app);
 
 app.set('port', process.env.PORT || 3000);
 app.set('views', path.join(__dirname, '/views'));
@@ -32,28 +30,17 @@ if ('development' == app.get('env')) {
 
 server.listen(app.get('port'));
 
-app.route('/:room')
-   .get(user.join)
-   .post(function (req, res) {
-     var room = req.url,
-         size = req.body.size,
-         message = req.body.message;
-     memcached.get(room, function (error, secret) {
-       var authorization = req.get('Authorization'),
-           authorized = !secret || secret.toString() == authorization;
-       if (!authorized || !authorization) {
-         res.sendStatus(401);
-         return;
-       }
-       if (!secret) {
-         memcached.set(room, authorization);
-       }
-       io.sockets.in(room).emit('size', size);
-       io.sockets.in(room).emit('message', message);
-       res.sendStatus(200);
-     });
-   });
-app.get('/', routes.index);
+app.use('/', indexRoute);
+app.use('/r', roomsRoute);
+app.post('/r/:room', function(req, res) {
+  var room = req.url,
+      size = req.body.size,
+      message = req.body.message;
+
+  io.sockets.in(room).emit('size', size);
+  io.sockets.in(room).emit('message', message);
+  res.sendStatus(200);
+});
 
 io = io.listen(server);
 
