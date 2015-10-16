@@ -45,6 +45,8 @@ db.connect(config.mongodb.uri, function(err) {
 });
 
 function setUpRoomsSockets(url, app, io) {
+  var roomsModel = require('./models/rooms');
+
   app.post(url, function(req, res) {
     var room = req.url,
         size = req.body.size,
@@ -52,6 +54,8 @@ function setUpRoomsSockets(url, app, io) {
 
     io.sockets.in(room).emit('size', size);
     io.sockets.in(room).emit('message', message);
+
+    roomsModel.push(room, size, message);
     res.sendStatus(200);
   });
 
@@ -63,6 +67,12 @@ function setUpRoomsSockets(url, app, io) {
         if (!err) {
           rooms.push(room);
           updateUsersCount(io, room);
+          roomsModel.all(room, function(err, data) {
+            if (!err) {
+              socket.emit('size', data.size);
+              socket.emit('message', data.message);
+            }
+          });
         }
       });
     });
