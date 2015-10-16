@@ -12,6 +12,9 @@ import os
 import subprocess
 import platform
 import json
+import httplib
+import socket
+import errno
 
 
 def id_generator(size=18, chars=string.ascii_letters + string.digits):
@@ -19,36 +22,42 @@ def id_generator(size=18, chars=string.ascii_letters + string.digits):
 
 
 def terminal_size():
-    cols = subprocess.Popen('tput cols', shell=True,
-            stdout=subprocess.PIPE).stdout.read().strip()
-    rows = subprocess.Popen('tput lines', shell=True,
-            stdout=subprocess.PIPE).stdout.read().strip()
-    cols = int(cols)
-    rows = int(rows)
+    cols = subprocess.Popen('tput cols', shell=True, stdout=subprocess.PIPE)
+    rows = subprocess.Popen('tput lines', shell=True, stdout=subprocess.PIPE)
+    cols = int(cols.stdout.read().strip())
+    rows = int(rows.stdout.read().strip())
     return {'cols': cols, 'rows': rows}
 
 
-def post(url, data, authorization):
+def post(conn, url, data, channel, authorization):
     headers = {'Content-type': 'application/x-www-form-urlencoded',
                'Authorization': authorization}
     size = json.dumps(terminal_size())
-    postData = dict(message=data, size=size)
-    data = urllib.urlencode(postData)
-    req = urllib2.Request(url, data, headers)
+    data = urllib.urlencode({'message': data, 'size': size})
     try:
-        urllib2.urlopen(req)
-    except urllib2.HTTPError as e:
-        if e.code == 401:
-            print 'You\'re unauthorized to share shell to %s. Try another one.' % url
-        else:
-            print 'Received HTTP Error %s. Exiting.' % e.code
+        conn.request('POST', '/%s' % channel, data, headers)
+        res = conn.getresponse()
+        res.read()
+
+        if res.status == 401:
+            print 'You\'re unauthorized to share on http://%s/%s.' % \
+                  (url, channel)
+            thread.exit()
+        elif res.status != 200:
+            print 'Received HTTP Error (Status Code %d).' % res.status
+            thread.exit()
+    except httplib.BadStatusLine as e:
+        print 'Can\'t contact the server. Please try again later.'
         thread.exit()
-    except urllib2.URLError:
-        print 'Cannot share session. You have to be connected to the internet.'
+    except socket.error as e:
+        if e.errno != errno.ECONNREFUSED:
+            raise e
+        print 'Can\'t contact the server. Please try again later.'
         thread.exit()
 
 
-def stream_file(path, url, authorization):
+def stream_file(path, url, channel, authorization):
+    conn = httplib.HTTPConnection(url)
     f = open(path, 'rb')
     while True:
         time.sleep(1)
@@ -58,20 +67,20 @@ def stream_file(path, url, authorization):
         if not (data == ""):
             urlencoded = urllib2.quote(data)
             encoded_str = base64.b64encode(urlencoded)
-            post(url, encoded_str, authorization)
+            post(conn, url, encoded_str, channel, authorization)
 
 
 tmp = tempfile.NamedTemporaryFile()
 channel = sys.argv[1] if len(sys.argv) >= 2 else id_generator()
 authorization = sys.argv[2] if len(sys.argv) >= 3 else id_generator()
-url = 'http://www.shellshare.net/%s' % channel
+url = 'www.shellshare.net'
 
 if platform.system() == 'Darwin':
     shell_args = '-qt 0'
 else:
     shell_args = '-qf'
 
-print 'Sharing session in %s...' % url
-thread.start_new_thread(stream_file, (tmp.name, url, authorization))
+print 'Sharing session in http://%s/%s...' % (url, channel)
+thread.start_new_thread(stream_file, (tmp.name, url, channel, authorization))
 subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
 print 'End of transmission.'
