@@ -3,19 +3,20 @@
  * Module dependencies.
  */
 
-var config = require('./config')
-  , express = require('express')
-  , indexRoute = require('./routes/index')
-  , roomsRoute = require('./routes/rooms')
-  , http = require('http')
-  , path = require('path')
-  , io = require('socket.io')
-  , logger = require('morgan')
-  , bodyParser = require('body-parser')
-  , errorHandler = require('errorhandler');
+var express = require('express');
+var http = require('http');
+var path = require('path');
+var io = require('socket.io');
+var logger = require('morgan');
+var bodyParser = require('body-parser');
+var errorHandler = require('errorhandler');
 
-var app = express()
-  , server = http.createServer(app);
+var config = require('./config');
+var indexRoute = require('./routes/index');
+var roomsRoute = require('./routes/rooms');
+
+var app = express();
+var server = http.createServer(app);
 
 app.set('port', config.express.port);
 app.set('views', path.join(__dirname, '/views'));
