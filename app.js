@@ -3,7 +3,8 @@
  * Module dependencies.
  */
 
-var express = require('express')
+var config = require('./config')
+  , express = require('express')
   , indexRoute = require('./routes/index')
   , roomsRoute = require('./routes/rooms')
   , http = require('http')
@@ -16,7 +17,7 @@ var express = require('express')
 var app = express()
   , server = http.createServer(app);
 
-app.set('port', process.env.PORT || 3000);
+app.set('port', config.express.port);
 app.set('views', path.join(__dirname, '/views'));
 app.set('view engine', 'jade');
 app.use(logger('dev'));
@@ -24,7 +25,7 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-if ('development' == app.get('env')) {
+if (config.env == 'development') {
   app.use(errorHandler());
 }
 
