@@ -1,7 +1,8 @@
 (function () {
   var socket = io.connect('', {'sync disconnect on unload' : true}),
       room = window.location.pathname,
-      term;
+      term,
+      currentSize = {};
 
   socket.emit('join', room);
   socket.on('usersCount', function (onlineUsers) {
@@ -14,10 +15,23 @@
     }
   });
   socket.on('size', function (size) {
-    if (!term) {
-      size = JSON.parse(size)
-      term = new Terminal(size.cols, size.rows);
+    var sizeChanged;
+    size = JSON.parse(size)
+    sizeChanged = (currentSize.cols != size.cols ||
+                   currentSize.rows != size.rows);
+
+    if (term && sizeChanged) {
+      term.destroy();
+    }
+
+    if (!term || sizeChanged) {
+      term = new Terminal({
+        cols: size.cols,
+        rows: size.rows,
+      });
       term.open();
     }
+
+    currentSize = size;
   });
 })();
