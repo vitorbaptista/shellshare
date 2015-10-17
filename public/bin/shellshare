@@ -70,6 +70,17 @@ def stream_file(path, url, room, password):
             post(conn, url, encoded_str, room, password)
 
 
+def delete(url, room, password):
+    headers = {'Authorization': password}
+    try:
+        conn = httplib.HTTPConnection(url)
+        conn.request('DELETE', '/%s' % room, {}, headers)
+        res = conn.getresponse()
+        res.read()
+    except Exception as e:
+        pass
+
+
 def parse_args():
     description = 'Transmits the current shell to shellshare'
     parser = argparse.ArgumentParser(description=description)
@@ -101,4 +112,5 @@ print 'Sharing session in http://%s/%s' % (args.server, room)
 thread.start_new_thread(stream_file,
                         (tmp.name, args.server, room, args.password))
 subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
+delete(args.server, room, args.password)
 print 'End of transmission.'
