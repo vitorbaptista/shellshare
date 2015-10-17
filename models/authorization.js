@@ -6,7 +6,9 @@ function _collection() {
   var collection = cache.get('authorizations-collection');
   if (!collection) {
     collection = db.get().collection('authorizations');
-    collection.ensureIndex('updatedAt', { expireAfterSeconds: 86400 });
+    collection.ensureIndex('updatedAt', {
+      expireAfterSeconds: config.mongodb.authorizations_ttl
+    });
     cache.set('authorizations-collection', collection);
   }
   return collection;
