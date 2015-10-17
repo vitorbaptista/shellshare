@@ -4,6 +4,12 @@
       term,
       currentSize = {};
 
+  Terminal.bindKeys = function() {
+    // FIXME: Ugly monkey patch to avoid term.js capturing the key presses,
+    // as we're just using term.js as read-only. There should be a better way
+    // to do this, but I couldn't find it.
+  }
+
   socket.emit('join', room);
   socket.on('usersCount', function (onlineUsers) {
     document.getElementById('online-counter').innerHTML = onlineUsers;
