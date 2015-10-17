@@ -5,7 +5,6 @@ import random
 import thread
 import time
 import base64
-import sys
 import urllib
 import urllib2
 import os
@@ -15,6 +14,7 @@ import json
 import httplib
 import socket
 import errno
+import argparse
 
 
 def id_generator(size=18, chars=string.ascii_letters + string.digits):
@@ -29,19 +29,19 @@ def terminal_size():
     return {'cols': cols, 'rows': rows}
 
 
-def post(conn, url, data, channel, authorization):
+def post(conn, url, data, room, password):
     headers = {'Content-type': 'application/x-www-form-urlencoded',
-               'Authorization': authorization}
+               'Authorization': password}
     size = json.dumps(terminal_size())
     data = urllib.urlencode({'message': data, 'size': size})
     try:
-        conn.request('POST', '/%s' % channel, data, headers)
+        conn.request('POST', '/%s' % room, data, headers)
         res = conn.getresponse()
         res.read()
 
         if res.status == 401:
             print 'You\'re unauthorized to share on http://%s/%s.' % \
-                  (url, channel)
+                  (url, room)
             thread.exit()
         elif res.status != 200:
             print 'Received HTTP Error (Status Code %d).' % res.status
@@ -56,7 +56,7 @@ def post(conn, url, data, channel, authorization):
         thread.exit()
 
 
-def stream_file(path, url, channel, authorization):
+def stream_file(path, url, room, password):
     conn = httplib.HTTPConnection(url)
     f = open(path, 'rb')
     while True:
@@ -67,21 +67,38 @@ def stream_file(path, url, channel, authorization):
         if not (data == ""):
             urlencoded = urllib2.quote(data)
             encoded_str = base64.b64encode(urlencoded)
-            post(conn, url, encoded_str, channel, authorization)
+            post(conn, url, encoded_str, room, password)
 
 
+def parse_args():
+    description = 'Transmits the current shell to shellshare'
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('-v', '--version', action='version',
+                        version='%(prog)s 0.0.1')
+    parser.add_argument('-s', '--server', dest='server',
+                        help=('shellshare instance URL '
+                              '(default: www.shellshare.net)'),
+                        default='www.shellshare.net')
+    parser.add_argument('-r', '--room', dest='room',
+                        help='room to share into (default: random room)',
+                        default=id_generator())
+    parser.add_argument('-p', '--password', dest='password',
+                        help='room\'s password (default: random password)',
+                        default=id_generator())
+    return parser.parse_args()
+
+
+args = parse_args()
+room = 'r/%s' % args.room
 tmp = tempfile.NamedTemporaryFile()
-channel = sys.argv[1] if len(sys.argv) >= 2 else id_generator()
-channel = 'r/%s' % channel
-authorization = sys.argv[2] if len(sys.argv) >= 3 else id_generator()
-url = 'www.shellshare.net'
 
 if platform.system() == 'Darwin':
     shell_args = '-qt 0'
 else:
     shell_args = '-qf'
 
-print 'Sharing session in http://%s/%s...' % (url, channel)
-thread.start_new_thread(stream_file, (tmp.name, url, channel, authorization))
+print 'Sharing session in http://%s/%s' % (args.server, room)
+thread.start_new_thread(stream_file,
+                        (tmp.name, args.server, room, args.password))
 subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
 print 'End of transmission.'
