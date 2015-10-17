@@ -1,16 +1,23 @@
 var db = require('../db');
 var config = require('../config');
+var cache = require('../cache').createStore();
 
 function _collection(room, callback) {
-  var collectionName = 'rooms:' + room;
-  var collection = db.get().createCollection(collectionName, {
-    capped: true,
-    size: config.mongodb.capped_size_limit,
-  });
+  var collection = cache.get(room);
 
-  collection.then(callback, function(err) {
-    console.log(err);
-  });
+  if (collection) {
+    callback(collection);
+  } else {
+    var collectionName = 'rooms:' + room;
+
+    db.get().createCollection(collectionName, {
+      capped: true,
+      size: config.mongodb.capped_size_limit,
+    }).then(function(collection) {
+      cache.set(room, collection);
+      callback(collection);
+    });
+  }
 }
 
 function push(room, size, message, callback) {

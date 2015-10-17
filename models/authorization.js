@@ -1,34 +1,53 @@
 var db = require('../db');
 var config = require('../config');
-
-var _collection_cache = null;
+var cache = require('../cache').createStore();
 
 function _collection() {
-  if (_collection_cache == null) {
-    _collection_cache = db.get().collection('authorizations');
-    _collection_cache.ensureIndex('updatedAt', { expireAfterSeconds: 86400 });
+  var collection = cache.get('authorizations-collection');
+  if (!collection) {
+    collection = db.get().collection('authorizations');
+    collection.ensureIndex('updatedAt', { expireAfterSeconds: 86400 });
+    cache.set('authorizations-collection', collection);
   }
-  return _collection_cache;
+  return collection;
 }
 
 function isAuthorized(room, secret, callback) {
-  _collection().findOne({'_id': room}, function(err, item) {
-    if (!item || item.secret == secret) {
-      _collection().updateOne({
-        '_id': room,
-      },
-      {
-        '_id': room,
-        'secret': secret,
-        'updatedAt': new Date(),
-      },
-      {
-        upsert: true,
-      });
+  var cache_key = 'room:' + room;
+  var authorization = cache.get(cache_key);
+  if (authorization) {
+    if (authorization == secret) {
+      _upsertAuthorization(room, secret);
       callback(true);
     } else {
       callback(false);
     }
+  } else {
+    _collection().findOne({'_id': room}, function(err, item) {
+      if (item) {
+        cache.set(cache_key, item.secret);
+      }
+
+      if (!item || item.secret == secret) {
+        _upsertAuthorization(room, secret);
+        callback(true);
+      } else {
+        callback(false);
+      }
+    });
+  }
+}
+
+function _upsertAuthorization(room, secret) {
+  _collection().updateOne({
+    '_id': room,
+  },
+  {
+    'secret': secret,
+    'updatedAt': new Date(),
+  },
+  {
+    upsert: true,
   });
 }
 
