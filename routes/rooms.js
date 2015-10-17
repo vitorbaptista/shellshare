@@ -7,7 +7,7 @@ var roomsModel;
 
 /* GET room. */
 router.get('/:room', function(req, res, next) {
-  res.render('join');
+  res.render('room');
   next();
 });
 

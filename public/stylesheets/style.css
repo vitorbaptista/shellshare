@@ -1,27 +1,73 @@
-body {
-  background: black;
-  margin: 0px;
+html, body {
+  height: 100%;
 }
 
-.header {
-  background: #fffffd;
+body {
+  max-width: 1140px;
+  min-width: 748px;
+  margin: 0 auto;
+}
+
+.wrapper {
+  min-height: 100%;
+  position: relative;
+}
+
+header {
   padding: 5px;
   font-family: ‘Lucida Console’, Monaco, monospace;
+  text-align: center;
 }
 
-.title {
+.main {
+  padding-bottom: 100px;
+}
+
+footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  margin-bottom: 0;
+  margin-left: 0;
+  color: #333333;
+  width: 100%;
+}
+
+.title h1 {
+  font-size: 6em;
+  margin-bottom: 0;
+}
+
+.title h2 {
+  font-size: 1.5em;
+}
+
+.room header {
+  text-align: left;
+}
+
+.room .title {
   font-size: 2em;
+  margin: 0;
 }
 
-.bold {
+.title-shell {
+  font-weight: normal;
+}
+
+.title-share {
   font-weight: bold;
 }
 
+/* ROOM */
 .online {
   float: right;
 }
 
+#terminal,
 .terminal {
+  background-color: black;
+  color: rgb(240, 240, 240);
   font-family: 'Inconsolata', monospace;
   font-size: 14px;
   padding: 5px;

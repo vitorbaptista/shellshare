@@ -1,0 +1,23 @@
+doctype html
+html
+  head
+    title shellshare
+    meta(charset='utf-8')
+    link(rel='stylesheet', href='/stylesheets/style.css')
+    link(rel='stylesheet', href='/stylesheets/ansi2html.css')
+    link(rel='stylesheet', href='http://fonts.googleapis.com/css?family=Inconsolata')
+  body.room
+    .wrapper
+      header
+        .online
+          span#online-counter 0
+          |  user(s) online
+        h1.title
+          span.title-shell shell
+          span.title-share share
+      .main
+        #terminal
+      include footer
+    script(src='/javascripts/vendor/term.js')
+    script(src='/socket.io/socket.io.js')
+    script(src='/javascripts/room.js')
