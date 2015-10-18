@@ -39,5 +39,19 @@ gulp.task('minify-js', ['browserify'], function() {
              .pipe(gulp.dest('./public/javascript/'));
 });
 
+gulp.task('start', ['lint', 'browserify'], function() {
+  var nodemon = require('gulp-nodemon');
+
+  nodemon({
+    script: 'app.js',
+    ext: 'js',
+    tasks: ['lint', 'browserify'],
+    ignore: ['*.bundle.js', '*.min.js'],
+    env: {'NODE_ENV': 'development'}
+  });
+});
+
 gulp.task('build:development', ['lint', 'browserify']);
 gulp.task('build:production', ['minify-css', 'minify-js']);
+
+gulp.task('default', ['start']);

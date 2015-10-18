@@ -27,6 +27,7 @@
     "vinyl-source-stream": "^1.1.0"
   },
   "devDependencies": {
-    "gulp-jshint": "^1.11.2"
+    "gulp-jshint": "^1.11.2",
+    "gulp-nodemon": "^2.0.4"
   }
 }
