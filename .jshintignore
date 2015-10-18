@@ -1,2 +1,4 @@
 node_modules
 public/javascript/vendor
+public/javascript/*.min.js
+public/javascript/*.bundle.js

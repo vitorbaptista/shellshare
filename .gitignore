@@ -1,3 +1,4 @@
 node_modules
-public/javascript/room.bundle.js
+public/javascript/*.bundle.js
+public/javascript/*.min.js
 public/stylesheet/*.min.css

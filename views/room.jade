@@ -25,4 +25,7 @@ html
       .main
         #terminal
       include footer
-  script(src='/javascript/room.bundle.js')
+  if isDev
+    script(src='/javascript/room.bundle.js')
+  else
+    script(src='/javascript/room.bundle.min.js')

@@ -6,6 +6,7 @@ var browserify = require('browserify');
 var source = require('vinyl-source-stream');
 var minifyCss = require('gulp-minify-css');
 var rename = require('gulp-rename');
+var uglify = require('gulp-uglify');
 
 gulp.task('lint', function() {
   gulp.src('./**/*.js')
@@ -25,4 +26,11 @@ gulp.task('minify-css', function() {
              .pipe(minifyCss({compatibility: 'ie8'}))
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('public/stylesheet'));
+});
+
+gulp.task('minify-js', ['browserify'], function() {
+  return gulp.src('./public/javascript/room.bundle.js')
+             .pipe(uglify())
+             .pipe(rename({suffix: '.min'}))
+             .pipe(gulp.dest('./public/javascript/'));
 });
