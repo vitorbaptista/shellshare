@@ -3,6 +3,8 @@
       room = window.location.pathname,
       term,
       currentSize = {},
+      onlineCounter = document.getElementById('online-counter'),
+      onlineCounterPlural = document.getElementById('online-counter-plural'),
       terminalContainer = document.getElementById('terminal');
 
   Terminal.bindKeys = function() {
@@ -13,7 +15,12 @@
 
   socket.emit('join', room);
   socket.on('usersCount', function (onlineUsers) {
-    document.getElementById('online-counter').innerHTML = onlineUsers;
+    onlineCounter.innerHTML = onlineUsers;
+    if (onlineUsers == 1) {
+      onlineCounterPlural.innerHTML = '';
+    } else {
+      onlineCounterPlural.innerHTML = 's';
+    }
   });
   socket.on('message', function (message) {
     if (term && message) {
