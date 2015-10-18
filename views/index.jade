@@ -8,33 +8,47 @@ block header
     h2 Live terminal broadcasting
   
 block main
-  h2 What is it?
-  p.
-    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec a diam
-    lectus. Sed sit amet ipsum mauris. Maecenas congue ligula ac quam viverra nec
-    consectetur ante hendrerit. Donec et mollis dolor. Praesent et diam eget libero
-    egestas mattis sit amet vitae augue. Nam tincidunt congue enim, ut porta lorem
-    lacinia consectetur. Donec ut libero sed arcu vehicula ultricies a non tortor.
-    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aenean ut gravida
-    lorem. Ut turpis felis, pulvinar a semper sed, adipiscing id dolor.
-    Pellentesque auctor nisi id magna consequat sagittis. Curabitur dapibus enim
-    sit amet elit pharetra tincidunt feugiat nisl imperdiet. Ut convallis libero in
-    urna ultrices accumsan. Donec sed odio eros. Donec viverra mi quis quam
-    pulvinar at malesuada arcu rhoncus. Cum sociis natoque penatibus et magnis dis
-    parturient montes, nascetur ridiculus mus. In rutrum accumsan ultricies. Mauris
-    vitae nisi at sem facilisis semper ac in est.
-  h2 How to use?
-  p.
-    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec a diam
-    lectus. Sed sit amet ipsum mauris. Maecenas congue ligula ac quam viverra nec
-    consectetur ante hendrerit. Donec et mollis dolor. Praesent et diam eget libero
-    egestas mattis sit amet vitae augue. Nam tincidunt congue enim, ut porta lorem
-    lacinia consectetur. Donec ut libero sed arcu vehicula ultricies a non tortor.
-    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aenean ut gravida
-    lorem. Ut turpis felis, pulvinar a semper sed, adipiscing id dolor.
-    Pellentesque auctor nisi id magna consequat sagittis. Curabitur dapibus enim
-    sit amet elit pharetra tincidunt feugiat nisl imperdiet. Ut convallis libero in
-    urna ultrices accumsan. Donec sed odio eros. Donec viverra mi quis quam
-    pulvinar at malesuada arcu rhoncus. Cum sociis natoque penatibus et magnis dis
-    parturient montes, nascetur ridiculus mus. In rutrum accumsan ultricies. Mauris
-    vitae nisi at sem facilisis semper ac in est.
+  section.instructions
+    p.download
+      code
+        | wget -qO shellshare 
+        a(href='http://get.shellshare.net') http://get.shellshare.net
+        | ; python shellshare
+    h3 What is it?
+    p.
+      Shellshare allows you to broadcast your terminal live with a single command.
+    h3 How to use?
+    p
+      | Open a terminal and write:
+      pre
+        code.
+          $ wget -qO shellshare http://get.shellshare.net; python shellshare
+          <span class="shell-output">Sharing terminal in http://www.shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
+          $ # Everything you do now will be broadcast live on the URL above.
+          $ # When you're done, hit CTRL+D
+          $ exit
+          <span class="shell-output">End of transmission.</span>
+    h3 Supported platforms
+    p.
+      It has been tested on Ubuntu 14.04 and Mac OS X, but should work on any
+      platform that has Python 2.7 and <a
+      href="http://man7.org/linux/man-pages/man1/script.1.html">script</a>.
+      If it doesn't work on your system, please <a
+      href="github.com/vitorbaptista/shellshare/issues">let me know</a>.
+  section.faq
+    h2 Frequently asked questions
+    h3 Can I save the broadcast?
+    p.
+      No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try
+      <a href="https://asciinema.org">asciinema.org</a>.
+    h3 Can I broadcast to a friendlier link?
+    p
+      | Yes. You can broadcast to a named room secured with a password by calling shellshare as:
+      pre
+        code.
+          $ wget -qO shellshare http://get.shellshare.net; python shellshare --room MY-ROOM --password MY-PASS
+          <span class="shell-output">Sharing terminal in http://www.shellshare.net/r/MY-ROOM</span>
+          $ # ...
+          $ exit
+          <span class="shell-output">End of transmission.</span>
+      | Keep in mind that the rooms are deleted when they have no activity for more than a day.

@@ -6,6 +6,16 @@ body {
   max-width: 1140px;
   min-width: 748px;
   margin: 0 auto;
+  color: #333;
+  font-family: 'Open Sans', sans-serif;
+}
+
+a, a:visited {
+  color: black;
+}
+
+a:hover {
+  color: #999;
 }
 
 .wrapper {
@@ -38,17 +48,13 @@ footer {
   margin-bottom: 0;
 }
 
+.title a {
+  text-decoration: none;
+  color: black;
+}
+
 .title h2 {
   font-size: 1.5em;
-}
-
-.room header {
-  text-align: left;
-}
-
-.room .title {
-  font-size: 2em;
-  margin: 0;
 }
 
 .title-shell {
@@ -59,9 +65,70 @@ footer {
   font-weight: bold;
 }
 
+.instructions .download * {
+  display: inline-block;
+}
+
+.instructions .download {
+  text-align: center;
+}
+
+pre,
+.download code {
+  background: #f7f7f7;
+}
+
+section {
+  margin: 4em 0;
+}
+
+footer {
+  margin: 20px;
+  margin-bottom: 40px;
+  text-transforM: uppercase;
+  text-align: center;
+  font-size: 11px;
+}
+
+pre {
+  -webkit-border-radius: 10px;
+  -moz-border-radius: 10px;
+  -ms-border-radius: 10px;
+  -o-border-radius: 10px;
+  border-radius: 10px;
+}
+
+.download code {
+  -webkit-border-radius: 41px;
+  -moz-border-radius: 41px;
+  -ms-border-radius: 41px;
+  -o-border-radius: 41px;
+  border-radius: 41px;
+  padding: 1em 4em;
+}
+
+pre {
+  padding: 1em;
+  line-height: 1.5em;
+}
+
+.shell-output {
+  color: #666;
+  font-style: italic;
+}
+
 /* ROOM */
 .online {
   float: right;
+}
+
+.room header {
+  text-align: left;
+}
+
+.room .title {
+  font-size: 2em;
+  margin: 0;
 }
 
 #terminal,
