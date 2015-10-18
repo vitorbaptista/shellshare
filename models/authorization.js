@@ -1,3 +1,5 @@
+'use strict';
+
 var db = require('../db');
 var config = require('../config');
 var cache = require('../cache').createStore();

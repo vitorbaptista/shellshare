@@ -1,4 +1,6 @@
 (function () {
+  'use strict';
+
   var socket = io.connect('', {'sync disconnect on unload' : true}),
       room = window.location.pathname,
       term,
@@ -24,7 +26,7 @@
   });
   socket.on('message', function (message) {
     if (term && message) {
-      decoded_message = decodeURIComponent(atob(message));
+      var decoded_message = decodeURIComponent(atob(message));
       term.write(decoded_message);
     }
   });
