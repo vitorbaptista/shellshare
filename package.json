@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "body-parser": "1.14.1",
+    "browserify": "11.2.0",
     "errorhandler": "1.4.2",
     "express": "4.13.3",
     "gulp": "3.9.0",
@@ -17,7 +18,9 @@
     "mongodb": "2.0.46",
     "morgan": "1.6.1",
     "node-cache": "3.0.0",
-    "socket.io": "1.3.7"
+    "socket.io": "1.3.7",
+    "socket.io-client": "^1.3.7",
+    "vinyl-source-stream": "^1.1.0"
   },
   "devDependencies": {
     "gulp-jshint": "^1.11.2"

@@ -1,13 +1,16 @@
 (function () {
   'use strict';
 
-  var socket = io.connect('', {'sync disconnect on unload' : true}),
-      room = window.location.pathname,
-      term,
-      currentSize = {},
-      onlineCounter = document.getElementById('online-counter'),
-      onlineCounterPlural = document.getElementById('online-counter-plural'),
-      terminalContainer = document.getElementById('terminal');
+  require('./vendor/base64');
+  var io = require('socket.io-client');
+  var Terminal = require('./vendor/term');
+  var socket = io.connect('', {'sync disconnect on unload' : true});
+  var room = window.location.pathname;
+  var term;
+  var currentSize = {};
+  var onlineCounter = document.getElementById('online-counter');
+  var onlineCounterPlural = document.getElementById('online-counter-plural');
+  var terminalContainer = document.getElementById('terminal');
 
   Terminal.bindKeys = function() {
     // FIXME: Ugly monkey patch to avoid term.js capturing the key presses,
