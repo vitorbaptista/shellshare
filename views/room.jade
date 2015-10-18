@@ -26,6 +26,6 @@ html
         #terminal
       include footer
   if isDev
-    script(src='/javascript/room.bundle.js')
+    script(src='/javascript/room.bundle.js' async defer)
   else
-    script(src='/javascript/room.bundle.min.js')
+    script(src='/javascript/room.bundle.min.js' async defer)
