@@ -108,7 +108,13 @@ if platform.system() == 'Darwin':
 else:
     shell_args = '-qf'
 
-print 'Sharing session in http://%s/%s' % (args.server, room)
+size = terminal_size()
+if (size['rows'] > 30 or size['cols'] > 160):
+    print 'Current terminal size is %dx%d.' % (size['rows'], size['cols'])
+    print 'It\'s too big to be viewed on smaller screens.'
+    print 'You can resize it anytime.'
+
+print 'Sharing terminal in http://%s/%s' % (args.server, room)
 thread.start_new_thread(stream_file,
                         (tmp.name, args.server, room, args.password))
 subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
