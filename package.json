@@ -6,7 +6,8 @@
     "node": "0.10.x"
   },
   "scripts": {
-    "start": "node app"
+    "start": "node app",
+    "postinstall": "gulp build:production"
   },
   "dependencies": {
     "body-parser": "1.14.1",
