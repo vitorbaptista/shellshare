@@ -15,10 +15,8 @@ router.get('/:room', function(req, res, next) {
 
 /* POST room. */
 router.post('/:room', function(req, res, next) {
-  var room = req.url;
-  var secret = req.get('Authorization');
-
-  authorizeOrDie(room, secret, function() {
+  authorizeOrDie(req, res, function() {
+    var room = req.url;
     var size = req.body.size;
     var message = req.body.message;
 
@@ -32,17 +30,18 @@ router.post('/:room', function(req, res, next) {
 
 /* DELETE room */
 router.delete('/:room', function(req, res, next) {
-  var room = req.url;
-  var secret = req.get('Authorization');
-
-  authorizeOrDie(room, secret, function() {
+  authorizeOrDie(req, res, function() {
+    var room = req.url;
     roomsModel.drop(room, function(err, col) {
     });
     res.sendStatus(202);
   });
 });
 
-function authorizeOrDie(room, secret, callback) {
+function authorizeOrDie(req, res, callback) {
+  var room = req.url;
+  var secret = req.get('Authorization');
+
   // FIXME: secret might be empty
   authorizationModel.isAuthorized(room, secret, function(authorized) {
     if (!authorized) {
@@ -105,4 +104,4 @@ module.exports = function(_roomPrefix, _io) {
 
   setupSockets();
   return router;
-}
+};

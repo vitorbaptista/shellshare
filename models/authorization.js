@@ -57,4 +57,4 @@ function _upsertAuthorization(room, secret) {
 
 module.exports = {
   isAuthorized: isAuthorized,
-}
+};

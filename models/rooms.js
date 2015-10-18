@@ -31,7 +31,7 @@ function push(room, size, message, callback) {
 function all(room, callback) {
   _collection(room, function(collection) {
     collection.find({}).toArray(function(err, items) {
-      if (err || items.length == 0) {
+      if (err || items.length === 0) {
         callback(err, items);
       } else {
         var messageAscii = items.map(function (item) {
@@ -59,4 +59,4 @@ module.exports = {
   push: push,
   all: all,
   drop: drop,
-}
+};

@@ -8,4 +8,4 @@ exports.createStore = function() {
     stdTTL: config.cache.ttl,
     useClones: false,
   });
-}
+};
