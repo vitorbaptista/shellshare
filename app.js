@@ -27,7 +27,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 if (config.env == 'development') {
   app.use(errorHandler());
   app.use(function(req, res, next) {
-    res.locals.development = true;
+    res.locals.isDev = true;
     next();
   });
 }

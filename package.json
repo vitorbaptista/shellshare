@@ -14,6 +14,8 @@
     "errorhandler": "1.4.2",
     "express": "4.13.3",
     "gulp": "3.9.0",
+    "gulp-minify-css": "1.2.1",
+    "gulp-rename": "1.2.2",
     "jade": "1.11.0",
     "mongodb": "2.0.46",
     "morgan": "1.6.1",

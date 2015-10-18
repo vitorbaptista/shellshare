@@ -3,7 +3,10 @@ html
   head
     title shellshare
     meta(charset='utf-8')
-    link(rel='stylesheet', href='/stylesheet/style.css')
+    if isDev
+      link(rel='stylesheet', href='/stylesheet/style.css')
+    else
+      link(rel='stylesheet', href='/stylesheet/style.min.css')
   body
     .wrapper
       header
