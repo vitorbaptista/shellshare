@@ -24,7 +24,7 @@ gulp.task('browserify', function() {
 gulp.task('minify-css', function() {
   var minifyCss = require('gulp-minify-css');
 
-  return gulp.src(['public/stylesheet/**/*.css'])
+  return gulp.src(['!./**/*.min.css', 'public/stylesheet/**/*.css'])
              .pipe(minifyCss({compatibility: 'ie8'}))
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('public/stylesheet'));
