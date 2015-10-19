@@ -1,0 +1,72 @@
+@import "vendor/cssreset.css";
+@import "vendor/cssbase.css";
+
+html, body {
+  height: 100%;
+}
+
+body {
+  max-width: 1140px;
+  min-width: 748px;
+  margin: 0 auto;
+  color: #333;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 16px;
+}
+
+a,
+a:visited {
+  text-decoration: underline;
+  color: black;
+}
+
+a:hover {
+  color: #999;
+}
+
+.wrapper {
+  min-height: 100%;
+  position: relative;
+  margin: 0 auto;
+}
+
+header {
+  padding: 5px;
+  text-align: center;
+}
+
+.main {
+  padding-bottom: 100px;
+}
+
+footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  margin-bottom: 0;
+  margin-left: 0;
+  color: #333333;
+  width: 100%;
+  margin: 20px;
+  margin-bottom: 40px;
+  text-transform: uppercase;
+  text-align: center;
+  font-size: 11px;
+}
+
+.title {
+  font-family: ‘Lucida Console’, Monaco, monospace;
+}
+
+.title-shell {
+  font-weight: normal;
+}
+
+.title-share {
+  font-weight: bold;
+}
+
+section {
+  margin: 4em 0;
+}
+

@@ -1,0 +1,30 @@
+@import "base.css";
+
+.online {
+  float: right;
+}
+
+header {
+  text-align: left;
+}
+
+.title {
+  font-size: 2em;
+  margin: 0;
+}
+
+#terminal,
+.terminal {
+  background-color: black;
+  color: rgb(240, 240, 240);
+  font-family: 'Inconsolata', monospace;
+  font-size: 14px;
+  padding: 5px;
+  overflow: hidden;
+}
+
+.reverse-video {
+  color: #000000;
+  background: #ccc;
+}
+

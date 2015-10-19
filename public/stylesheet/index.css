@@ -1,0 +1,47 @@
+@import "base.css";
+
+.title h1 {
+  font-size: 6em;
+  margin-bottom: 0;
+}
+
+.title h2 {
+  font-size: 1.5em;
+}
+
+.instructions .download * {
+  display: inline-block;
+}
+
+.instructions .download {
+  text-align: center;
+}
+
+pre,
+.download code {
+  background: #f7f7f7;
+}
+
+pre {
+  -webkit-border-radius: 10px;
+  -moz-border-radius: 10px;
+  -ms-border-radius: 10px;
+  -o-border-radius: 10px;
+  border-radius: 10px;
+  padding: 1em;
+  line-height: 1.5em;
+}
+
+.download code {
+  -webkit-border-radius: 41px;
+  -moz-border-radius: 41px;
+  -ms-border-radius: 41px;
+  -o-border-radius: 41px;
+  border-radius: 41px;
+  padding: 1em 4em;
+}
+
+.shell-output {
+  color: #666;
+  font-style: italic;
+}
