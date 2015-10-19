@@ -47,6 +47,7 @@ function _upsertAuthorization(room, secret) {
     '_id': room,
   },
   {
+    '_id': room,
     'secret': secret,
     'updatedAt': new Date(),
   },
