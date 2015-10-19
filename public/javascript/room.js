@@ -62,5 +62,5 @@
   }
 
   // Init terminal with a default size.
-  onSize('{"cols": 80, "rows": 40}');
+  onSize('{"cols": 80, "rows": 30}');
 })();
