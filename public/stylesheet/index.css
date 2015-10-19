@@ -41,8 +41,9 @@
 pre,
 .download code {
   background: #222;
-  color: rgb(240, 240, 240);
+  color: #F0F0F0;
   line-height: 1.5em;
+  display: block;
 }
 
 pre a,
