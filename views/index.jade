@@ -38,11 +38,19 @@ block main
       href="github.com/vitorbaptista/shellshare/issues">let me know</a>.
   section.faq
     h2 Frequently asked questions
+    h3 Can someone control my terminal through shellshare?
+    p.
+      No. All communication is just one-way: from your terminal to shellshare.
+      There's no way someone could send commands to your terminal. If you'd
+      like to allow it, try <a
+      href="https://savannah.gnu.org/projects/screen">screen</a> or <a
+      href="https://tmux.github.io/">tmux</a> (specially with <a
+      href="http://tmate.io">tmate</a>).
     h3 Can I save the broadcast?
     p.
       No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try
       <a href="https://asciinema.org">asciinema.org</a>.
-    h3 Can I broadcast to a friendlier link?
+    h3 Can I broadcast to a custom link?
     p
       | Yes. You can broadcast to a named room secured with a password by calling shellshare as:
       pre
@@ -54,3 +62,16 @@ block main
           $ exit
           <span class="shell-output">End of transmission.</span>
       | Keep in mind that the rooms are deleted when they have no activity for more than a day.
+    h3 I found a problem! What do I do?
+    p.
+      Please, open an issue at our <a
+      href="https://github.com/vitorbaptista/shellshare/issues">issues page</a>
+      describing what the problem was, your shellshare version, and your operating
+      system.
+    h3 How can I help?
+    p.
+      Great! Any help is appreciated. Check out the code on <a
+      href="https://github.com/vitorbaptista/shellshare">GitHub</a> and the <a
+      href="https://github.com/vitorbaptista/shellshare/issues">issues
+      page</a>. If you find anything that could be improved, go ahead, create an
+      issue and send me a pull request.
