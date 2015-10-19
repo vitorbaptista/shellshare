@@ -1,12 +1,23 @@
 @import "base.css";
 
+.wrapper {
+  width: 45em;
+}
+
+.title {
+  text-align: center;
+  margin: 4em;
+}
+
 .title h1 {
   font-size: 6em;
-  margin-bottom: 0;
+  margin: 0;
 }
 
 .title h2 {
   font-size: 1.5em;
+  text-transform: uppercase;
+  margin: 0;
 }
 
 .instructions .download * {
@@ -15,11 +26,28 @@
 
 .instructions .download {
   text-align: center;
+  margin: 4em 0;
+}
+
+.main h2 {
+  text-transform: uppercase;
+  font-size: 2em;
+}
+
+.main h3 {
+  font-size: 1.5em;
 }
 
 pre,
 .download code {
-  background: #f7f7f7;
+  background: #222;
+  color: rgb(240, 240, 240);
+  line-height: 1.5em;
+}
+
+pre a,
+.download code a {
+  color: #aaa;
 }
 
 pre {
@@ -29,7 +57,6 @@ pre {
   -o-border-radius: 10px;
   border-radius: 10px;
   padding: 1em;
-  line-height: 1.5em;
 }
 
 .download code {
@@ -38,10 +65,10 @@ pre {
   -ms-border-radius: 41px;
   -o-border-radius: 41px;
   border-radius: 41px;
-  padding: 1em 4em;
+  padding: 1em 2em;
 }
 
 .shell-output {
-  color: #666;
+  color: #888;
   font-style: italic;
 }

@@ -24,15 +24,17 @@ a:hover {
   color: #999;
 }
 
+.title a,
+.title a:hover,
+.title a:visited {
+  text-decoration: none;
+  color: black;
+}
+
 .wrapper {
   min-height: 100%;
   position: relative;
   margin: 0 auto;
-}
-
-header {
-  padding: 5px;
-  text-align: center;
 }
 
 .main {

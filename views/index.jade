@@ -5,7 +5,7 @@ block header
     h1
       span.title-shell shell
       span.title-share share
-    h2 Live terminal broadcasting
+    h2 Live terminal broadcasts
   
 block main
   section.instructions
@@ -22,7 +22,8 @@ block main
       | Open a terminal and write:
       pre
         code.
-          $ wget -qO shellshare http://get.shellshare.net; python shellshare
+          $ wget -qO shellshare http://get.shellshare.net
+          $ python shellshare
           <span class="shell-output">Sharing terminal in http://www.shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
           $ # Everything you do now will be broadcast live on the URL above.
           $ # When you're done, hit CTRL+D
@@ -46,7 +47,8 @@ block main
       | Yes. You can broadcast to a named room secured with a password by calling shellshare as:
       pre
         code.
-          $ wget -qO shellshare http://get.shellshare.net; python shellshare --room MY-ROOM --password MY-PASS
+          $ wget -qO shellshare http://get.shellshare.net
+          $ python shellshare --room MY-ROOM --password MY-PASS
           <span class="shell-output">Sharing terminal in http://www.shellshare.net/r/MY-ROOM</span>
           $ # ...
           $ exit
