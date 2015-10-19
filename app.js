@@ -10,6 +10,8 @@ var errorHandler = require('errorhandler');
 
 var config = require('./config');
 var db = require('./db');
+var analytics = require('./analytics');
+
 var indexRoute = require('./routes/index');
 var roomsRoute = require('./routes/rooms');
 
@@ -30,6 +32,10 @@ if (config.env == 'development') {
     res.locals.isDev = true;
     next();
   });
+} else {
+  if (analytics.trackingId) {
+    app.use(analytics.middleware(analytics.trackingId));
+  }
 }
 
 app.use('/', indexRoute);

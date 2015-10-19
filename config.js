@@ -17,3 +17,7 @@ config.mongodb = {
 config.cache = {
   ttl: 3600,
 };
+
+config.analytics = {
+  tracking_id: process.env.GOOGLE_ANALYTICS_TID,
+};

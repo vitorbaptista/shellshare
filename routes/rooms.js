@@ -1,6 +1,7 @@
 'use strict';
 
 var express = require('express');
+var analytics = require('../analytics');
 var router = express.Router();
 var roomPrefix;
 var io;
@@ -11,7 +12,7 @@ var roomsModel;
 router.get('/:room', function(req, res, next) {
   res.render('room');
   next();
-});
+}, analytics.pageview());
 
 /* POST room. */
 router.post('/:room', function(req, res, next) {
@@ -19,11 +20,20 @@ router.post('/:room', function(req, res, next) {
     var room = req.url;
     var size = JSON.parse(req.body.size);
     var message = req.body.message;
+    var analyticsEventOptions = {};
 
     io.sockets.in(room).emit('size', size);
     io.sockets.in(room).emit('message', message);
 
     roomsModel.push(room, size, message);
+
+    if (size.rows && size.cols) {
+      // Use screenResolution as the terminal's size.
+      analyticsEventOptions.sr = size.rows + 'x' + size.cols;
+    }
+    analytics.sendEvent(req, 'rooms', 'write', room, message.length,
+                        analyticsEventOptions);
+
     res.sendStatus(200);
   });
 });
@@ -32,8 +42,8 @@ router.post('/:room', function(req, res, next) {
 router.delete('/:room', function(req, res, next) {
   authorizeOrDie(req, res, function() {
     var room = req.url;
-    roomsModel.drop(room, function(err, col) {
-    });
+    roomsModel.drop(room);
+    analytics.sendEvent(req, 'rooms', 'delete', room);
     res.sendStatus(202);
   });
 });
@@ -45,8 +55,10 @@ function authorizeOrDie(req, res, callback) {
   // FIXME: secret might be empty
   authorizationModel.isAuthorized(room, secret, function(authorized) {
     if (!authorized) {
+      analytics.sendEvent(req, 'rooms', 'authorization', 'failure');
       res.sendStatus(401);
     } else {
+      analytics.sendEvent(req, 'rooms', 'authorization', 'success');
       callback();
     }
   });
