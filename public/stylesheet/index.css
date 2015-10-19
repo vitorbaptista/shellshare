@@ -48,6 +48,13 @@ pre,
 pre a,
 .download code a {
   color: #aaa;
+  text-decoration: none;
+}
+
+pre a:hover,
+.download code a:hover {
+  color: #ccc;
+  text-decoration: underline;
 }
 
 pre {
