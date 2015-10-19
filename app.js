@@ -7,10 +7,12 @@ var io = require('socket.io');
 var logger = require('morgan');
 var bodyParser = require('body-parser');
 var errorHandler = require('errorhandler');
+var cookieParser = require('cookie-parser');
 
 var config = require('./config');
 var db = require('./db');
 var analytics = require('./analytics');
+var configureSession = require('./middleware/session');
 
 var indexRoute = require('./routes/index');
 var roomsRoute = require('./routes/rooms');
@@ -25,6 +27,7 @@ app.use(logger('dev'));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(cookieParser());
 
 if (config.env == 'development') {
   app.use(errorHandler());
@@ -33,6 +36,7 @@ if (config.env == 'development') {
     next();
   });
 }// else {
+  app.use(configureSession('_ga'));
   app.use(analytics.middleware(analytics.trackingId));
 //}
 
