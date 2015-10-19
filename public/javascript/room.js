@@ -37,8 +37,7 @@
 
   function onSize(size) {
     var sizeChanged;
-    size = JSON.parse(size);
-    if (!size) {
+    if (!size || !size.cols || !size.rows) {
       return;
     }
 

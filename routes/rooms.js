@@ -17,7 +17,7 @@ router.get('/:room', function(req, res, next) {
 router.post('/:room', function(req, res, next) {
   authorizeOrDie(req, res, function() {
     var room = req.url;
-    var size = req.body.size;
+    var size = JSON.parse(req.body.size);
     var message = req.body.message;
 
     io.sockets.in(room).emit('size', size);
