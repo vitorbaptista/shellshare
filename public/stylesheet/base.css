@@ -38,7 +38,7 @@ a:hover {
 }
 
 .main {
-  padding-bottom: 100px;
+  padding-bottom: 150px;
 }
 
 footer {
@@ -49,11 +49,10 @@ footer {
   margin-left: 0;
   color: #333333;
   width: 100%;
-  margin: 20px;
-  margin-bottom: 40px;
+  margin: 2em;
   text-transform: uppercase;
   text-align: center;
-  font-size: 11px;
+  font-size: 0.7em;
 }
 
 .title {
