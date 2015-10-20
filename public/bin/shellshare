@@ -17,6 +17,10 @@ import errno
 import argparse
 
 
+class NotAuthorizedException(Exception):
+    pass
+
+
 def id_generator(size=18, chars=string.ascii_letters + string.digits):
     return ''.join(random.choice(chars) for x in range(size))
 
@@ -30,6 +34,7 @@ def terminal_size():
 
 
 def post(conn, url, data, room, password):
+    is_successful = lambda status: status >= 200 and status < 300
     headers = {'Content-type': 'application/x-www-form-urlencoded',
                'Authorization': password}
     size = json.dumps(terminal_size())
@@ -40,34 +45,45 @@ def post(conn, url, data, room, password):
         res.read()
 
         if res.status == 401:
-            print 'You\'re unauthorized to share on http://%s/%s.' % \
-                  (url, room)
-            thread.exit()
-        elif res.status != 200:
-            print 'Received HTTP Error (Status Code %d).' % res.status
-            thread.exit()
-    except httplib.BadStatusLine as e:
-        print 'Can\'t contact the server. Please try again later.'
-        thread.exit()
+            raise NotAuthorizedException()
+        else:
+            return is_successful(res.status)
+    except httplib.HTTPException:
+        pass
     except socket.error as e:
         if e.errno != errno.ECONNREFUSED:
             raise e
-        print 'Can\'t contact the server. Please try again later.'
-        thread.exit()
+        pass
 
 
 def stream_file(path, url, room, password):
-    conn = httplib.HTTPConnection(url)
-    f = open(path, 'rb')
-    while True:
-        time.sleep(1)
-        # osx wants this because EOF is cached
-        f.seek(0, os.SEEK_CUR)
-        data = f.read()
-        if not (data == ""):
-            urlencoded = urllib2.quote(data)
-            encoded_str = base64.b64encode(urlencoded)
-            post(conn, url, encoded_str, room, password)
+    retries = 3
+    try:
+        conn = httplib.HTTPConnection(url)
+        f = open(path, 'rb')
+        success = True
+        while success:
+            time.sleep(1)
+            # osx wants this because EOF is cached
+            f.seek(0, os.SEEK_CUR)
+            data = f.read()
+            if not (data == ""):
+                urlencoded = urllib2.quote(data)
+                encoded_str = base64.b64encode(urlencoded)
+                for _ in range(retries):
+                    success = post(conn, url, encoded_str, room, password)
+                    if success:
+                        break
+                    else:
+                        time.sleep(1)
+        error('There was an error connecting to the server. Please try again later.')
+    except NotAuthorizedException:
+        error('You\'re not authorized to share on http://%s/%s.' % (url, room))
+
+
+def error(msg):
+    print
+    print msg
 
 
 def delete(url, room, password):
@@ -77,7 +93,7 @@ def delete(url, room, password):
         conn.request('DELETE', '/%s' % room, {}, headers)
         res = conn.getresponse()
         res.read()
-    except Exception as e:
+    except Exception:
         pass
 
 
