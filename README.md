@@ -18,6 +18,25 @@ wget -qO shellshare http://get.shellshare.net; python shellshare
 
 You should see a line saying `Sharing session in http://www.shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different). Anyone that opens this link will be able to see what you're doing in your terminal. When you're done, type `exit` or hit CTRL+D.
 
+## Installing
+
+It requires Node 4.2.x (but should work with earlier versions), npm, Gulp and
+MongoDB. Considering that these dependencies are installed on your local
+machine, run:
+
+```
+npm install
+gulp
+```
+
+This will run the server on [localhost:3000](http://localhost:3000). To
+broadcast to this instance, use the `--server` option of the client, as
+following:
+
+```
+./public/bin/shellshare --server localhost:3000
+```
+
 ## Limitations
 
 This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org).
