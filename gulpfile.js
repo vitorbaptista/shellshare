@@ -33,7 +33,7 @@ gulp.task('minify-css', function() {
 gulp.task('minify-js', ['browserify'], function() {
   var uglify = require('gulp-uglify');
 
-  return gulp.src('./public/javascript/room.bundle.js')
+  return gulp.src(['!./**/*.min.js', './public/javascript/*.js'])
              .pipe(uglify())
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('./public/javascript/'));
