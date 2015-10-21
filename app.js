@@ -46,7 +46,7 @@ db.connect(config.mongodb.uri, function(err) {
     process.exit(1);
   }
 
-  server.listen(app.get('port'));
+  server.listen(app.get('port'), config.express.host);
   io = io.listen(server);
   app.use('/r', roomsRoute('/r', io));
 });
