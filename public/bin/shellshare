@@ -106,9 +106,9 @@ def parse_args():
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s 0.0.1')
     parser.add_argument('-s', '--server', dest='server',
-                        help=('shellshare instance URL '
-                              '(default: www.shellshare.net)'),
-                        default='www.shellshare.net')
+                        help=('shellshare instance URL'
+                              ' (default: shellshare.net)'),
+                        default='shellshare.net')
     parser.add_argument('-r', '--room', dest='room',
                         help='room to share into (default: random room)',
                         default=id_generator())
