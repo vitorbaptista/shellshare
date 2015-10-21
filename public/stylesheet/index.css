@@ -20,7 +20,7 @@
   margin: 0;
 }
 
-.instructions .download * {
+.instructions .download code {
   display: inline-block;
 }
 
@@ -79,4 +79,31 @@ pre {
 .shell-output {
   color: #888;
   font-style: italic;
+}
+
+.instructions-macos .linux,
+.instructions-linux .macos {
+  display: none;
+}
+
+.operating-systems {
+  margin: 1em;
+  text-align: right;
+  letter-spacing: 0.5em;
+}
+
+.operating-systems input {
+  display: none;
+}
+
+label[for] {
+  cursor: pointer;
+}
+
+.operating-systems input:not(:checked) + label {
+  color: #ccc;
+}
+
+.operating-systems input:not(:checked) + label:hover {
+  color: #888;
 }

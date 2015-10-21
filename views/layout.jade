@@ -4,12 +4,14 @@ html
     title shellshare
     meta(charset='utf-8')
     if isDev
+      link(rel='stylesheet', href='https://maxcdn.bootstrapcdn.com/font-awesome/4.4.0/css/font-awesome.min.css')
       link(rel='stylesheet', href='/stylesheet/vendor/cssreset.css')
       link(rel='stylesheet', href='/stylesheet/vendor/cssbase.css')
       link(rel='stylesheet', href='/stylesheet/index.css')
     else
+      link(rel='stylesheet', href='https://maxcdn.bootstrapcdn.com/font-awesome/4.4.0/css/font-awesome.min.css')
       link(rel='stylesheet', href='/stylesheet/index.min.css')
-  body
+  body.instructions-linux
     .wrapper
       header
         block header
@@ -17,3 +19,7 @@ html
         block main
       block scripts
       include footer
+    if isDev
+      script(src='/javascript/index.js' async defer)
+    else
+      script(src='/javascript/index.min.js' async defer)
