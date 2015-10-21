@@ -26,8 +26,7 @@ app.set('port', config.express.port);
 app.set('views', path.join(__dirname, '/views'));
 app.set('view engine', 'jade');
 app.use(logger('dev'));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: config.express.request_limit }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 if (config.env == 'development') {

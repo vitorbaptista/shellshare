@@ -36,12 +36,11 @@ def terminal_size():
     return {'cols': cols, 'rows': rows}
 
 
-def post(conn, url, data, room, password):
+def post(conn, url, message, room, password):
     is_successful = lambda status: status >= 200 and status < 300
-    headers = {'Content-type': 'application/x-www-form-urlencoded',
+    headers = {'Content-type': 'application/json',
                'Authorization': password}
-    size = json.dumps(terminal_size())
-    data = urllib.urlencode({'message': data, 'size': size})
+    data = json.dumps({'message': message, 'size': terminal_size()})
     try:
         conn.request('POST', '/%s' % room, data, headers)
         res = conn.getresponse()
