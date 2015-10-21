@@ -11,7 +11,7 @@ function pageview(options) {
       dp: req.path,
       dh: _getUrl(req),
       dr: req.get('Referer'),
-      uip: req.ip,
+      uip: req.get('X-Real-IP') || req.ip,
       ua: req.get('User-Agent'),
     };
 
