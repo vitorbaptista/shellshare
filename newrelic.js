@@ -24,4 +24,4 @@ exports.config = {
      */
     level: config.newrelic.log_level
   }
-}
+};

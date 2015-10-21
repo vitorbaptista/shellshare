@@ -25,6 +25,6 @@ config.analytics = {
 
 config.newrelic = {
   app_name: 'shellshare',
-  license_key: process.env.NEWRELIC_KEY || '',
+  license_key: process.env.NEWRELIC_KEY,
   log_level: 'info',
 };
