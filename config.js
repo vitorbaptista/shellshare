@@ -22,3 +22,9 @@ config.cache = {
 config.analytics = {
   tracking_id: process.env.GOOGLE_ANALYTICS_TID,
 };
+
+config.newrelic = {
+  app_name: 'shellshare',
+  license_key: process.env.NEWRELIC_KEY || '',
+  log_level: 'info',
+};
