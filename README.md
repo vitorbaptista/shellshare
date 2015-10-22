@@ -16,7 +16,16 @@ Copy and paste the following line in your terminal:
 wget -qO shellshare http://get.shellshare.net; python shellshare
 ```
 
-You should see a line saying `Sharing session in http://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different). Anyone that opens this link will be able to see what you're doing in your terminal. When you're done, type `exit` or hit CTRL+D.
+If you don't have `wget` installed (as in Mac OS X), you can use `curl` as:
+
+```
+curl -sLo shellshare http://get.shellshare.net; python shellshare
+```
+
+You'll see a line saying `Sharing session in
+http://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
+Anyone that opens this link will be able to see what you're doing in your
+terminal. When you're done, type `exit` or hit CTRL+D.
 
 ## Installing
 
