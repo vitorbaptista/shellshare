@@ -18,6 +18,9 @@
     // to do this, but I couldn't find it.
   };
 
+  // Init terminal with a default size.
+  onSize({cols: 80, rows: 30});
+
   socket.emit('join', room);
   socket.on('usersCount', function (onlineUsers) {
     onlineCounter.innerHTML = onlineUsers;
@@ -59,7 +62,4 @@
 
     currentSize = size;
   }
-
-  // Init terminal with a default size.
-  onSize({cols: 80, rows: 30});
 })();
