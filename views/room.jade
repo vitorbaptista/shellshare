@@ -1,9 +1,13 @@
 doctype html
-html(lang='en')
+html(lang='en', prefix='og: http://ogp.me/ns#')
   head
     title shellshare - live terminal broadcast
     meta(charset='utf-8')
-    meta(name='description', content='Broadcast your terminal live with a single command.')
+    meta(name='description', content='Shellshare allows you to broadcast your terminal live with a single command.')
+    meta(property='og:type', content='website')
+    meta(property='og:title', content='shellshare: live terminal broadcast')
+    meta(property='og:site_name', content='shellshare')
+    meta(property='og:description', content='Shellshare allows you to broadcast your terminal live with a single command.')
     if isDev
       link(rel='stylesheet', href='/stylesheet/vendor/cssreset.css')
       link(rel='stylesheet', href='/stylesheet/vendor/cssbase.css')
