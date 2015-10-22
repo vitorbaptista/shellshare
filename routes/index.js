@@ -13,7 +13,7 @@ router.get('/', function(req, res, next) {
 }, analytics.pageview());
 
 function _isLinux(userAgent) {
-  return userAgent.toLowerCase().search('linux') !== -1;
+  return (userAgent || '').toLowerCase().search('linux') !== -1;
 }
 
 module.exports = router;
