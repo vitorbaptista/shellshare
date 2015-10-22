@@ -1,5 +1,11 @@
 'use strict';
 
+var config = require('./config');
+
+if (config.newrelic.license_key) {
+  require('newrelic');
+}
+
 var express = require('express');
 var http = require('http');
 var path = require('path');
@@ -8,13 +14,9 @@ var logger = require('morgan');
 var bodyParser = require('body-parser');
 var errorHandler = require('errorhandler');
 
-var config = require('./config');
 var db = require('./db');
 var analytics = require('./analytics');
 
-if (config.newrelic.license_key) {
-  require('newrelic');
-}
 
 var indexRoute = require('./routes/index');
 var roomsRoute = require('./routes/rooms');
