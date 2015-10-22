@@ -17,10 +17,10 @@ block main
         a(href="http://get.shellshare.net") http://get.shellshare.net
         | ; python shellshare
       nav.operating-systems
-        input(type="radio" id="os-linux" name="os" value="linux")
+        input(type="radio" id="os-linux" name="os" value="linux" checked=isLinux)
         label(for="os-linux")
           i.fa.fa-2x.fa-linux
-        input(type="radio" id="os-macos" name="os" value="macos" checked="true")
+        input(type="radio" id="os-macos" name="os" value="macos" checked=!isLinux)
         label(for="os-macos")
           i.fa.fa-2x.fa-apple
     h3 What is it?

@@ -12,13 +12,6 @@
     }
   }
 
-  if (window.navigator && window.navigator.platform) {
-    var platform = window.navigator.platform.toLowerCase();
-    if (platform.search('linux') != -1) {
-      linuxElement.checked = true;
-    }
-  }
-
   macosElement.onclick = toggleOS;
   linuxElement.onclick = toggleOS;
 
