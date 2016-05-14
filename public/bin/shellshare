@@ -83,6 +83,7 @@ def stream_file(path, url, room, password):
                         break
                     else:
                         time.sleep(1)
+                        conn = httplib.HTTPConnection(url)
         error('There was an error connecting to the server.')
     except NotAuthorizedException:
         error('You\'re not authorized to share on http://%s/%s.' % (url, room))
