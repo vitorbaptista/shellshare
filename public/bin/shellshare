@@ -66,7 +66,7 @@ def post(conn, url, message, room, password):
 def stream_file(path, url, room, password):
     retries = 3
     try:
-        conn = httplib.HTTPConnection(url)
+        conn = httplib.HTTPSConnection(url)
         f = open(path, 'rb')
         success = True
         while success:
@@ -83,10 +83,10 @@ def stream_file(path, url, room, password):
                         break
                     else:
                         time.sleep(1)
-                        conn = httplib.HTTPConnection(url)
+                        conn = httplib.HTTPSConnection(url)
         error('There was an error connecting to the server.')
     except NotAuthorizedException:
-        error('You\'re not authorized to share on http://%s/%s.' % (url, room))
+        error('You\'re not authorized to share on https://%s/%s.' % (url, room))
     except RequestTooLargeException:
         error('You\'ve wrote too much too fast. Please, slow down.' % (url, room))
 
@@ -99,7 +99,7 @@ def error(*args):
 def delete(url, room, password):
     headers = {'Authorization': password}
     try:
-        conn = httplib.HTTPConnection(url)
+        conn = httplib.HTTPSConnection(url)
         conn.request('DELETE', '/%s' % room, {}, headers)
         res = conn.getresponse()
         res.read()
@@ -140,7 +140,7 @@ if (size['rows'] > 30 or size['cols'] > 160):
     print('It\'s too big to be viewed on smaller screens.')
     print('You can resize it anytime.')
 
-print('Sharing terminal in http://%s/%s' % (args.server, room))
+print('Sharing terminal in https://%s/%s' % (args.server, room))
 thread.start_new_thread(stream_file,
                         (tmp.name, args.server, room, args.password))
 subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)

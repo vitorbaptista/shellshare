@@ -6,7 +6,7 @@ Live broadcast of terminal sessions.
 
 Ever wanted to quickly show what you're doing to some friends? Maybe you're seeing a weird error and would like some help. Or the other way around: some friend of yours is asking for help on something, then you start to ping-pong: you tell a command, he pastes the output, then you tell another, and so on...
 
-The objective of [shellshare.net](http://shellshare.net) is to provide an easy way to broadcast your terminal live. No signups, no configurations, anything: simply run a command and you're good to go.
+The objective of [shellshare.net](https://shellshare.net) is to provide an easy way to broadcast your terminal live. No signups, no configurations, anything: simply run a command and you're good to go.
 
 ## Using
 
@@ -23,7 +23,7 @@ curl -sLo shellshare http://get.shellshare.net && python shellshare
 ```
 
 You'll see a line saying `Sharing session in
-http://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
+https://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
 Anyone that opens this link will be able to see what you're doing in your
 terminal. When you're done, type `exit` or hit CTRL+D.
 
