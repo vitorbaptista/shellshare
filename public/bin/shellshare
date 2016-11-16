@@ -87,7 +87,7 @@ def stream_file(path, url, room, password):
     except NotAuthorizedException:
         error('You\'re not authorized to share on https://%s/%s.' % (url, room))
     except RequestTooLargeException:
-        error('You\'ve wrote too much too fast. Please, slow down.' % (url, room))
+        error('You\'ve wrote too much too fast. Please, slow down.')
 
 
 def error(*args):
