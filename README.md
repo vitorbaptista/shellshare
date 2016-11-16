@@ -13,13 +13,13 @@ The objective of [shellshare.net](https://shellshare.net) is to provide an easy 
 Copy and paste the following line in your terminal:
 
 ```
-wget -qO shellshare http://get.shellshare.net && python shellshare
+wget -qO shellshare https://get.shellshare.net && python shellshare
 ```
 
 If you don't have `wget` installed (as in Mac OS X), you can use `curl` as:
 
 ```
-curl -sLo shellshare http://get.shellshare.net && python shellshare
+curl -sLo shellshare https://get.shellshare.net && python shellshare
 ```
 
 You'll see a line saying `Sharing session in

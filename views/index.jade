@@ -14,7 +14,7 @@ block main
         span(class="macos") curl -sLo
         span(class="linux") wget -qO
         |  shellshare 
-        a(href="http://get.shellshare.net") http://get.shellshare.net
+        a(href="https://get.shellshare.net") https://get.shellshare.net
         |  && python shellshare
       nav.operating-systems
         input(type="radio" id="os-linux" name="os" value="linux" checked=isLinux)
@@ -31,7 +31,7 @@ block main
       | Open a terminal and write:
       pre
         code.
-          $ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare http://get.shellshare.net
+          $ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
           $ python shellshare
           <span class="shell-output">Sharing terminal in https://shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
           $ # Everything you do now will be broadcast live on the URL above.
@@ -64,7 +64,7 @@ block main
       | Yes. You can broadcast to a named room secured with a password by calling shellshare as:
       pre
         code.
-          $ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare http://get.shellshare.net
+          $ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
           $ python shellshare --room MY-ROOM --password MY-PASS
           <span class="shell-output">Sharing terminal in https://shellshare.net/r/MY-ROOM</span>
           $ # ...
