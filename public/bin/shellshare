@@ -9,6 +9,7 @@ import time
 import base64
 import urllib2
 import os
+import uuid
 import subprocess
 import platform
 import json
@@ -119,8 +120,8 @@ def parse_args():
                         help='room to share into (default: random room)',
                         default=id_generator())
     parser.add_argument('-p', '--password', dest='password',
-                        help='room\'s broadcasting password (default: random password)',
-                        default=id_generator())
+                        help='room\'s broadcasting password (default: network card\'s MAC address)',
+                        default=uuid.getnode())
     return parser.parse_args()
 
 
