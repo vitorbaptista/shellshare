@@ -1,0 +1,148 @@
+#!/usr/bin/env python
+from __future__ import print_function
+
+import argparse
+import base64
+import errno
+import httplib
+import json
+import os
+import platform
+import random
+import socket
+import string
+import subprocess
+import sys
+import tempfile
+import thread
+import time
+import urllib2
+import uuid
+
+
+class NotAuthorizedException(Exception):
+    pass
+
+class RequestTooLargeException(Exception):
+    pass
+
+
+def id_generator(size=18, chars=string.ascii_letters + string.digits):
+    return ''.join(random.choice(chars) for x in range(size))
+
+
+def terminal_size():
+    cols = subprocess.Popen('tput cols', shell=True, stdout=subprocess.PIPE)
+    rows = subprocess.Popen('tput lines', shell=True, stdout=subprocess.PIPE)
+    cols = int(cols.stdout.read().strip())
+    rows = int(rows.stdout.read().strip())
+    return {'cols': cols, 'rows': rows}
+
+
+def post(conn, url, message, room, password):
+    is_successful = lambda status: status >= 200 and status < 300
+    headers = {'Content-type': 'application/json',
+               'Authorization': password}
+    data = json.dumps({'message': message, 'size': terminal_size()})
+    try:
+        conn.request('POST', '/%s' % room, data, headers)
+        res = conn.getresponse()
+        res.read()
+
+        if res.status == 401:
+            raise NotAuthorizedException()
+        elif res.status == 413:
+            raise RequestTooLargeException()
+        else:
+            return is_successful(res.status)
+    except httplib.HTTPException:
+        pass
+    except socket.error as e:
+        if e.errno != errno.ECONNREFUSED:
+            raise e
+        pass
+
+
+def stream_file(path, url, room, password):
+    retries = 3
+    try:
+        conn = httplib.HTTPSConnection(url)
+        f = open(path, 'rb')
+        success = True
+        while success:
+            time.sleep(1)
+            # osx wants this because EOF is cached
+            f.seek(0, os.SEEK_CUR)
+            data = f.read()
+            if not (data == ""):
+                urlencoded = urllib2.quote(data)
+                encoded_str = base64.b64encode(urlencoded)
+                for _ in range(retries):
+                    success = post(conn, url, encoded_str, room, password)
+                    if success:
+                        break
+                    else:
+                        time.sleep(1)
+                        conn = httplib.HTTPSConnection(url)
+        error('There was an error connecting to the server.')
+    except NotAuthorizedException:
+        error('You\'re not authorized to share on https://%s/%s.' % (url, room))
+    except RequestTooLargeException:
+        error('You\'ve wrote too much too fast. Please, slow down.')
+
+
+def error(*args):
+    print('\r\nERROR:', *args, file=sys.stderr)
+    print('\rERROR: Exit shellshare and try again later.', file=sys.stderr)
+
+
+def delete(url, room, password):
+    headers = {'Authorization': password}
+    try:
+        conn = httplib.HTTPSConnection(url)
+        conn.request('DELETE', '/%s' % room, {}, headers)
+        res = conn.getresponse()
+        res.read()
+    except Exception:
+        pass
+
+
+def parse_args():
+    description = 'Transmits the current shell to shellshare'
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('-v', '--version', action='version',
+                        version='%(prog)s 1.0.0')
+    parser.add_argument('-s', '--server', dest='server',
+                        help=('shellshare instance URL'
+                              ' (default: shellshare.net)'),
+                        default='shellshare.net')
+    parser.add_argument('-r', '--room', dest='room',
+                        help='room to share into (default: random room)',
+                        default=id_generator())
+    parser.add_argument('-p', '--password', dest='password',
+                        help='room\'s broadcasting password (default: network card\'s MAC address)',
+                        default=uuid.getnode())
+    return parser.parse_args()
+
+
+args = parse_args()
+room = 'r/%s' % args.room
+tmp = tempfile.NamedTemporaryFile()
+
+if platform.system() == 'Darwin':
+    shell_args = '-qt 0'
+else:
+    shell_args = '-qf'
+
+size = terminal_size()
+if (size['rows'] > 30 or size['cols'] > 160):
+    print('Current terminal size is %dx%d.' % (size['rows'], size['cols']))
+    print('It\'s too big to be viewed on smaller screens.')
+    print('You can resize it anytime.')
+
+print('Sharing terminal in https://%s/%s' % (args.server, room))
+thread.start_new_thread(stream_file,
+                        (tmp.name, args.server, room, args.password))
+subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
+delete(args.server, room, args.password)
+print('End of transmission.')
