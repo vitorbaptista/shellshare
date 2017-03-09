@@ -40,7 +40,7 @@ block main
           <span class="shell-output">End of transmission.</span>
     h3 Supported platforms
     p.
-      It has been tested on Ubuntu 14.04 and Mac OS X, but should work on any
+      It has been tested on Ubuntu 16.04 and Mac OS X, but should work on any
       platform that has Python 2.7 and <a
       href="http://man7.org/linux/man-pages/man1/script.1.html">script</a>.
       If it doesn't work on your system, please <a
@@ -59,7 +59,7 @@ block main
     p.
       No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try
       <a href="https://asciinema.org">asciinema.org</a>.
-    h3 Can I broadcast to a custom link?
+    h3 Can I broadcast to a custom room name?
     p
       | Yes. You can broadcast to a named room secured with a password by calling shellshare as:
       pre
@@ -70,12 +70,13 @@ block main
           $ # ...
           $ exit
           <span class="shell-output">End of transmission.</span>
-      | You don't have to set a password but, if you don't, you won't be able to transmit to
-      | the same room later.
+      | If you don't set a password, shellshare will use your network card's MAC
+      | address to uniquely identify your computer. This means you'll be able to
+      | transmit to the same room later if you're using the same computer.
       | The rooms are deleted when they have no activity for more than a day.
     h3 Can I recover the password to a custom room?
     p.
-      No. Although the rooms are deleted after a day of inactivity, so you can recreate it in 24 hours.
+      No. However, the rooms are deleted after a day of inactivity, so you can recreate it in 24 hours.
     h3 I found a problem! What do I do?
     p.
       Please, open an issue at our <a
