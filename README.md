@@ -35,7 +35,7 @@ machine, run:
 
 ```
 npm install
-gulp
+npm start
 ```
 
 This will run the server on [localhost:3000](http://localhost:3000). To
