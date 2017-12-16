@@ -7,7 +7,8 @@
   },
   "scripts": {
     "start": "node app",
-    "postinstall": "gulp build:production"
+    "postinstall": "gulp build:production",
+    "deploy": "pm2 deploy ecosystem.json5 production"
   },
   "dependencies": {
     "body-parser": "1.14.1",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "gulp-jshint": "^1.11.2",
-    "gulp-nodemon": "^2.0.4"
+    "gulp-nodemon": "^2.0.4",
+    "pm2": "^2.9.1"
   }
 }
