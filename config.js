@@ -22,7 +22,7 @@ config.cache = {
 };
 
 config.analytics = {
-  tracking_id: process.env.GOOGLE_ANALYTICS_TID,
+  tracking_id: process.env.GOOGLE_ANALYTICS_ID,
 };
 
 config.newrelic = {

@@ -39,6 +39,7 @@ if (config.env == 'development') {
   });
 } else {
   if (analytics.trackingId) {
+    console.log('Google Analytics enabled on', analytics.trackingId);
     app.use(analytics.middleware(analytics.trackingId));
   }
 }
