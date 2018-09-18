@@ -54,4 +54,6 @@ db.connect(config.mongodb.uri, function(err) {
   server.listen(app.get('port'), config.express.host);
   io = io.listen(server);
   app.use('/r', roomsRoute('/r', io));
+
+  console.log('Listening on http://' + (app.get('host') || 'localhost') + ':' + app.get('port'))
 });
