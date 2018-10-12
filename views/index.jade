@@ -40,8 +40,9 @@ block main
           <span class="shell-output">End of transmission.</span>
     h3 Supported platforms
     p.
-      It has been tested on Ubuntu 16.04 and Mac OS X, but should work on any
-      platform that has Python 2.7 and <a
+      It has been tested on Ubuntu 16.04, Mac OS X and Windows using <a
+      href="https://www.cygwin.com/" rel="external">Cygwin</a>, but it should
+      work on any platform that has Python and <a
       href="http://man7.org/linux/man-pages/man1/script.1.html">script</a>.
       If it doesn't work on your system, please <a
       href="https://github.com/vitorbaptista/shellshare/issues">let me know</a>.
@@ -86,6 +87,12 @@ block main
       | If you'd like to contribute, we have an <a
       | href="https://github.com/vitorbaptista/shellshare/issues/28"
       | rel="external">open issue to create a Debian package</a>.
+    h3 Can I run shellshare on Windows?
+    p.
+      Yes, but you need to install <a href="https://www.cygwin.com/"
+      rel="external">Cygwin</a>. Shellshare uses a few UNIX tools that aren't
+      available by default on Windows. After you have Cygwin set up, use the
+      Linux installation instructions and everything should work fine.
     h3 I found a problem! What do I do?
     p.
       Please, open an issue at our <a
