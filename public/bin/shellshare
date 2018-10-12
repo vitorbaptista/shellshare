@@ -45,11 +45,44 @@ def id_generator(size=18, chars=string.ascii_letters + string.digits):
 
 
 def terminal_size():
-    cols = subprocess.Popen('tput cols', shell=True, stdout=subprocess.PIPE)
-    rows = subprocess.Popen('tput lines', shell=True, stdout=subprocess.PIPE)
-    cols = int(cols.stdout.read().strip())
-    rows = int(rows.stdout.read().strip())
-    return {'cols': cols, 'rows': rows}
+    default_size = (80, 25)
+
+    size = terminal_size_windows() or terminal_size_posix()
+
+    if not size:
+        size = default_size
+
+    return {'cols': size[0], 'rows': size[1]}
+
+
+def terminal_size_posix():
+    try:
+        cols = int(subprocess.check_output(['tput', 'cols']))
+        rows = int(subprocess.check_output(['tput', 'lines']))
+        return (cols, rows)
+    except Exception:
+        pass
+
+
+def terminal_size_windows():
+    try:
+        import struct
+        from ctypes import windll, create_string_buffer
+
+        STDERR_HANDLE = -12
+        h = windll.kernel32.GetStdHandle(STDERR_HANDLE)
+        csbi = create_string_buffer(22)
+        res = windll.kernel32.GetConsoleScreenBufferInfo(h, csbi)
+
+        if res:
+            (_, _, _, _, _,
+             left, top, right, bottom,
+             _, _) = struct.unpack("hhhhHhhhhhh", csbi.raw)
+            cols = right - left + 1
+            rows = bottom - top + 1
+            return (cols, rows)
+    except Exception:
+        pass
 
 
 def post(conn, url, message, room, password):
