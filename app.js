@@ -29,7 +29,9 @@ app.set('views', path.join(__dirname, '/views'));
 app.set('view engine', 'jade');
 app.use(logger('dev'));
 app.use(bodyParser.json({ limit: config.express.request_limit }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: 2678400000,  // one month
+}));
 
 if (config.env == 'development') {
   app.use(errorHandler());
