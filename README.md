@@ -48,7 +48,8 @@ following:
 
 ## Limitations
 
-This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org).
+This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org)
+or [other terminal recording tools](https://github.com/topics/terminal-recording).
 
 # License
 
