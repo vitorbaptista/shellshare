@@ -85,7 +85,7 @@ def stream_file(path, url, room, password):
             time.sleep(1)
             # osx wants this because EOF is cached
             f.seek(0, os.SEEK_CUR)
-            data = f.read()
+            data = f.read(4096)
             if not (data == ""):
                 urlencoded = urllib_quote(data).encode('utf-8')
                 encoded_str = base64.b64encode(urlencoded).decode('utf-8')
