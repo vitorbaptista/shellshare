@@ -15,7 +15,7 @@
     "browserify": "11.2.0",
     "errorhandler": "1.4.2",
     "express": "4.13.3",
-    "extend": "3.0.0",
+    "extend": "3.0.2",
     "gulp": "3.9.0",
     "gulp-minify-css": "1.2.1",
     "gulp-rename": "1.2.2",
