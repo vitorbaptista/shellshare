@@ -1,0 +1,15 @@
+version: '3'
+services:
+  mongo:
+    image: mongo
+    ports:
+    - "27017:27017"
+  node:
+    build: .
+    ports:
+      - "3000:3000"
+    working_dir: /shellshare
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - mongo
