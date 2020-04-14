@@ -10,6 +10,8 @@ services:
       - "3000:3000"
     working_dir: /shellshare
     environment:
+      - MONGOLAB_URI=mongodb://mongo:27017/shellshare
       - NODE_ENV=production
+      # - HOST=
     depends_on:
       - mongo
