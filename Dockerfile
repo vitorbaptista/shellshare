@@ -10,3 +10,4 @@ COPY . /shellshare/
 WORKDIR /shellshare
 RUN npm set unsafe-perm true
 RUN npm install
+# HEALTHCHECK --interval=5m30s --timeout=3s CMD curl -f http://localhost:3000/ || exit 1

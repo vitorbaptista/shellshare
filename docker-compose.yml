@@ -15,3 +15,8 @@ services:
       # - HOST=
     depends_on:
       - mongo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 5m30s
+      timeout: 3s
+      retries: 3
