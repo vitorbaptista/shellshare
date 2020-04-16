@@ -1,0 +1,22 @@
+version: '3'
+services:
+  mongo:
+    image: mongo
+    expose:
+      - "27017"
+  node:
+    build: .
+    ports:
+      - "3000:3000"
+    working_dir: /shellshare
+    environment:
+      - MONGOLAB_URI=mongodb://mongo:27017/shellshare
+      - NODE_ENV=production
+      # - HOST=
+    depends_on:
+      - mongo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 5m30s
+      timeout: 3s
+      retries: 3

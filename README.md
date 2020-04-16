@@ -46,6 +46,20 @@ following:
 ./public/bin/shellshare --server localhost:3000
 ```
 
+### Docker
+
+Alternatively, you could run the server using [docker
+compose](https://docs.docker.com/compose/install/) as follows:
+
+```
+docker-compose up --build
+```
+
+It will build a container with shellshare and all its dependencies, pull the
+latest mongodb container and connect them as needed. If you want to modify any
+of the environment variables or properties, check the
+[`docker-compose.yml`](./docker-compose.yml) file.
+
 ## Limitations
 
 This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org)

@@ -1,0 +1,6 @@
+.git
+node_modules
+public/javascript/*.bundle.js
+public/javascript/*.min.js
+public/stylesheet/*.min.css
+ecosystem.json5
