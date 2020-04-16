@@ -186,12 +186,31 @@ def parse_args():
 
 args = parse_args()
 room = 'r/%s' % args.room
-tmp = tempfile.NamedTemporaryFile()
+tmp = tempfile.NamedTemporaryFile(delete=False)
+tmp.close()
 
-if platform.system() == 'Darwin':
-    shell_args = '-qt 0'
+# Using powershell or not? https://stackoverflow.com/a/55598796/1087595
+# Get the parent process name.
+pprocName = psutil.Process(os.getppid()).name()
+# See if it is Windows PowerShell (powershell.exe) or PowerShell Core (pwsh[.exe]):
+is_powershell = bool(re.fullmatch('pwsh|pwsh.exe|powershell.exe', pprocName))# Check whether script exist
+is_windows = platform.system() == 'Windows'
+
+if is_windows and is_powershell:
+    command = 'powershell.exe -noexit -ExecutionPolicy Unrestricted Start-Transcript -Append -Path %s' % (tmp.name)
 else:
-    shell_args = '-qf'
+    try:
+        subprocess.run(['script -V'], shell=True, check=True)
+    except subprocess.CalledProcessError:
+        extra_msg = " Try to run it from the PowerShell" if is_windows else ""
+        print("script command is not available on your platform." + extra_msg)
+        sys.exit(1)
+    if platform.system() == 'Darwin':
+        shell_args = '-qt 0'
+    else:
+        shell_args = '-qf'
+    command = 'script %s %s' % (shell_args, tmp.name)
+
 
 size = terminal_size()
 if (size['rows'] > 30 or size['cols'] > 160):
@@ -202,6 +221,6 @@ if (size['rows'] > 30 or size['cols'] > 160):
 print('Sharing terminal in %s/%s' % (args.server, room))
 thread.start_new_thread(stream_file,
                         (tmp.name, args.server, room, args.password))
-subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
+subprocess.call(command, shell=True)
 delete(args.server, room, args.password)
 print('End of transmission.')
