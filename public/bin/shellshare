@@ -165,20 +165,16 @@ else:
 
 if platform.system() == 'Windows':
     # Download and install MSYS2 version of script
-    bindir = os.path.join(os.path.expanduser('~'), '.bin')
+    bindir = os.path.join(os.path.expanduser('~'), '.shellshare')
     if not os.path.exists(bindir):
         os.mkdir(bindir)
     script_path = os.path.join(bindir, 'script.exe')
     if not os.path.exists(script_path):
         previous_dir = os.getcwd()
         os.chdir(bindir)
-        busybox_url = 'http://repo.msys2.org/msys/x86_64/busybox-1.23.2-1-x86_64.pkg.tar.xz'
-        busybox_filename = busybox_url.split('/')[-1]
-        url_req.urlretrieve(busybox_url, busybox_filename)
-        subprocess.call('tar Jxf {0}'.format(busybox_filename), shell=True)
-        shutil.copy('usr/bin/busybox.exe', 'script.exe')
-        shutil.rmtree(os.path.join(bindir, 'usr'))
-        os.remove(busybox_filename)
+        script_url = 'https://get.shellshare.net/script.exe'
+        script_filename = busybox_url.split('/')[-1]
+        url_req.urlretrieve(script_url, script_filename)
         os.chdir(previous_dir)
 else:
     # Use OS version of script
