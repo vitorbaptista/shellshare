@@ -139,7 +139,7 @@ def parse_args():
     description = 'Transmits the current shell to shellshare'
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('-v', '--version', action='version',
-                        version='%(prog)s 1.0.4')
+                        version='%(prog)s 1.1.0')
     parser.add_argument('-s', '--server', dest='server',
                         help=('shellshare instance URL'
                               ' (default: https://shellshare.net)'),
