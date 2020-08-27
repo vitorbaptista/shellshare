@@ -31,6 +31,10 @@ try:
     from urlparse import urlparse
 except ImportError:
     from urllib.parse import urlparse
+try:
+    input_func = raw_input
+except NameError:
+    input_func = input
 if platform.system() == 'Windows':
     import shutil
     try:
@@ -170,9 +174,17 @@ if platform.system() == 'Windows':
         os.mkdir(bindir)
     script_path = os.path.join(bindir, 'script.exe')
     if not os.path.exists(script_path):
+        script_url = '{0}/bin/script.exe'.format(args.server)
+        should_download = input_func(
+            'Confirm download of dependency from {} into {}? (Y/n) '.format(
+                script_url,
+                script_path
+            )
+        )
+        if should_download.lower() not in {'', 'y', 'yes'}:
+            exit(0)
         previous_dir = os.getcwd()
         os.chdir(bindir)
-        script_url = '{0}/bin/script.exe'.format(args.server)
         script_filename = script_url.split('/')[-1]
         url_req.urlretrieve(script_url, script_filename)
         os.chdir(previous_dir)
