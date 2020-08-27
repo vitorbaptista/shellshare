@@ -31,7 +31,12 @@ try:
     from urlparse import urlparse
 except ImportError:
     from urllib.parse import urlparse
-
+if platform.system() == 'Windows':
+    import shutil
+    try:
+        import urllib.request as url_req  # for Python 3
+    except ImportError:
+        import urllib as url_req  # for Python 2
 
 class NotAuthorizedException(Exception):
     pass
@@ -75,11 +80,10 @@ def post(conn, url, message, room, password):
             raise e
 
 
-def stream_file(path, url, room, password):
+def stream_file(f, url, room, password):
     retries = 3
     try:
         conn = create_connection(url)
-        f = open(path, 'rb')
         success = True
         while success:
             time.sleep(1)
@@ -153,12 +157,28 @@ def parse_args():
 
 args = parse_args()
 room = 'r/%s' % args.room
-tmp = tempfile.NamedTemporaryFile()
 
 if platform.system() == 'Darwin':
     shell_args = '-qt 0'
 else:
     shell_args = '-qf'
+
+if platform.system() == 'Windows':
+    # Download and install MSYS2 version of script
+    bindir = os.path.join(os.path.expanduser('~'), '.shellshare')
+    if not os.path.exists(bindir):
+        os.mkdir(bindir)
+    script_path = os.path.join(bindir, 'script.exe')
+    if not os.path.exists(script_path):
+        previous_dir = os.getcwd()
+        os.chdir(bindir)
+        script_url = '{0}/bin/script.exe'.format(args.server)
+        script_filename = script_url.split('/')[-1]
+        url_req.urlretrieve(script_url, script_filename)
+        os.chdir(previous_dir)
+else:
+    # Use OS version of script
+    script_path = 'script'
 
 size = terminal_size()
 if (size['rows'] > 30 or size['cols'] > 160):
@@ -167,8 +187,10 @@ if (size['rows'] > 30 or size['cols'] > 160):
     print('You can resize it anytime.')
 
 print('Sharing terminal in %s/%s' % (args.server, room))
-thread.start_new_thread(stream_file,
-                        (tmp.name, args.server, room, args.password))
-subprocess.call('script %s %s' % (shell_args, tmp.name), shell=True)
-delete(args.server, room, args.password)
-print('End of transmission.')
+sys.stdout.flush()
+with tempfile.NamedTemporaryFile(mode='r+b') as tmp:
+    thread.start_new_thread(stream_file,
+                            (tmp, args.server, room, args.password))
+    subprocess.call('%s %s %s' % (script_path, shell_args, tmp.name), shell=True)
+    delete(args.server, room, args.password)
+    print('End of transmission.')
