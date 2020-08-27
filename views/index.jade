@@ -40,8 +40,7 @@ block main
           <span class="shell-output">End of transmission.</span>
     h3 Supported platforms
     p.
-      It has been tested on Ubuntu 16.04, Mac OS X and Windows using <a
-      href="https://www.cygwin.com/" rel="external">Cygwin</a>, but it should
+      It has been tested on Ubuntu 20.04, Mac OS X and Windows, but it should
       work on any platform that has Python and <a
       href="http://man7.org/linux/man-pages/man1/script.1.html">script</a>.
       If it doesn't work on your system, please <a
@@ -89,10 +88,10 @@ block main
       | rel="external">open issue to create a Debian package</a>.
     h3 Can I run shellshare on Windows?
     p.
-      Yes, but you need to install <a href="https://www.cygwin.com/"
-      rel="external">Cygwin</a>. Shellshare uses a few UNIX tools that aren't
-      available by default on Windows. After you have Cygwin set up, use the
-      Linux installation instructions and everything should work fine.
+      Yes. On the first time shellshare runs, it will download the required
+      dependency into <span>.shellshare/script.exe</span> in your user's home
+      folder. This executable will be used in the next times you run
+      shellshare.
     h3 I found a problem! What do I do?
     p.
       Please, open an issue at our <a
