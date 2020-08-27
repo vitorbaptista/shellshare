@@ -36,7 +36,6 @@ try:
 except NameError:
     input_func = input
 if platform.system() == 'Windows':
-    import shutil
     try:
         import urllib.request as url_req  # for Python 3
     except ImportError:
@@ -183,11 +182,7 @@ if platform.system() == 'Windows':
         )
         if should_download.lower() not in {'', 'y', 'yes'}:
             exit(0)
-        previous_dir = os.getcwd()
-        os.chdir(bindir)
-        script_filename = script_url.split('/')[-1]
-        url_req.urlretrieve(script_url, script_filename)
-        os.chdir(previous_dir)
+        url_req.urlretrieve(script_url, script_path)
 else:
     # Use OS version of script
     script_path = 'script'
