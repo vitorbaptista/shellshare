@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node app",
     "postinstall": "gulp build:production",
-    "deploy": "pm2 deploy ecosystem.json5 production"
+    "deploy": "pm2 deploy ecosystem.json5 production",
+    "deploy:setup": "pm2 deploy ecosystem.json5 production setup"
   },
   "dependencies": {
     "body-parser": "1.14.1",
