@@ -3,15 +3,16 @@
 var gulp = require('gulp');
 var rename = require('gulp-rename');
 
-gulp.task('lint', function() {
+function lint(cb) {
   var jshint = require('gulp-jshint');
 
-  gulp.src('./**/*.js')
+  return gulp.src('./**/*.js')
       .pipe(jshint())
       .pipe(jshint.reporter('default'));
-});
+}
+gulp.task(lint);
 
-gulp.task('browserify', function() {
+function browserify(cb) {
   var browserify = require('browserify');
   var source = require('vinyl-source-stream');
 
@@ -19,39 +20,42 @@ gulp.task('browserify', function() {
            .bundle()
            .pipe(source('room.bundle.js'))
            .pipe(gulp.dest('./public/javascript/'));
-});
+}
+gulp.task(browserify);
 
-gulp.task('minify-css', function() {
+function minifyCss() {
   var minifyCss = require('gulp-minify-css');
 
   return gulp.src(['!./**/*.min.css', 'public/stylesheet/**/*.css'])
              .pipe(minifyCss({compatibility: 'ie8'}))
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('public/stylesheet'));
-});
+}
+gulp.task(minifyCss);
 
-gulp.task('minify-js', ['browserify'], function() {
+function minifyJs() {
   var uglify = require('gulp-uglify');
 
   return gulp.src(['!./**/*.min.js', './public/javascript/*.js'])
              .pipe(uglify())
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('./public/javascript/'));
-});
+}
+gulp.task('minifyJs', gulp.series(browserify, minifyJs));
 
-gulp.task('start', ['lint', 'browserify'], function() {
+function start() {
   var nodemon = require('gulp-nodemon');
+    nodemon({
+      script: 'app.js',
+      ext: 'js',
+      tasks: ['lint', 'browserify'],
+      ignore: ['*.bundle.js', '*.min.js'],
+      env: {'NODE_ENV': 'development'}
+    });
+}
+gulp.task('start', gulp.series(lint, browserify, start));
 
-  nodemon({
-    script: 'app.js',
-    ext: 'js',
-    tasks: ['lint', 'browserify'],
-    ignore: ['*.bundle.js', '*.min.js'],
-    env: {'NODE_ENV': 'development'}
-  });
-});
+gulp.task('build:development', gulp.series(lint, browserify));
+gulp.task('build:production', gulp.parallel(minifyCss, minifyJs));
 
-gulp.task('build:development', ['lint', 'browserify']);
-gulp.task('build:production', ['minify-css', 'minify-js']);
-
-gulp.task('default', ['start']);
+gulp.task('default', start);
