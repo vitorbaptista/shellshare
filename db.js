@@ -9,7 +9,7 @@ var state = {
 exports.connect = function(url, done) {
   if (state.db) return done();
 
-  MongoClient.connect(url, function(err, db) {
+  MongoClient.connect(url, { useUnifiedTopology: true }, function(err, db) {
     if (err) return done(err);
     state.db = db;
     done();
