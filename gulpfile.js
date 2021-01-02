@@ -33,7 +33,7 @@ function minifyCss() {
 }
 gulp.task(minifyCss);
 
-function minifyJs() {
+function _minifyJs() {
   var uglify = require('gulp-uglify');
 
   return gulp.src(['!./**/*.min.js', './public/javascript/*.js'])
@@ -41,9 +41,9 @@ function minifyJs() {
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('./public/javascript/'));
 }
-gulp.task('minifyJs', gulp.series(browserify, minifyJs));
+gulp.task('minifyJs', gulp.series(browserify, _minifyJs));
 
-function start() {
+function _start() {
   var nodemon = require('gulp-nodemon');
     nodemon({
       script: 'app.js',
@@ -53,9 +53,9 @@ function start() {
       env: {'NODE_ENV': 'development'}
     });
 }
-gulp.task('start', gulp.series(lint, browserify, start));
+gulp.task('start', gulp.series(lint, browserify, _start));
 
 gulp.task('build:development', gulp.series(lint, browserify));
-gulp.task('build:production', gulp.parallel(minifyCss, minifyJs));
+gulp.task('build:production', gulp.parallel(minifyCss, gulp.task('minifyJs')));
 
-gulp.task('default', start);
+gulp.task('default', gulp.task('start'));
