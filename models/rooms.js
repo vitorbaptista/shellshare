@@ -35,11 +35,11 @@ function all(room, callback) {
         callback(err, items);
       } else {
         var messageAscii = items.map(function (item) {
-            return new Buffer(item.message, 'base64').toString('ascii');
+            return Buffer.from(item.message, 'base64').toString('ascii');
         }).join('');
         var item = {
           size: items[items.length - 1].size,
-          message: new Buffer(messageAscii).toString('base64'),
+          message: Buffer.from(messageAscii).toString('base64'),
         };
 
         callback(err, item);

@@ -8,7 +8,7 @@ function _collection() {
   var collection = cache.get('authorizations-collection');
   if (!collection) {
     collection = db.get().collection('authorizations');
-    collection.ensureIndex('updatedAt', {
+    collection.createIndexes('updatedAt', {
       expireAfterSeconds: config.mongodb.authorizations_ttl
     });
     cache.set('authorizations-collection', collection);
@@ -47,9 +47,11 @@ function _upsertAuthorization(room, secret) {
     '_id': room,
   },
   {
-    '_id': room,
-    'secret': secret,
-    'updatedAt': new Date(),
+    $set: {
+      '_id': room,
+      'secret': secret,
+      'updatedAt': new Date(),
+    }
   },
   {
     upsert: true,
