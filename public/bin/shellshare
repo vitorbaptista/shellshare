@@ -38,8 +38,11 @@ except NameError:
 if platform.system() == 'Windows':
     try:
         import urllib.request as url_req  # for Python 3
+        opener = url_req.URLopener()
+        opener.addheader('User-Agent', 'shellshare')
     except ImportError:
         import urllib as url_req  # for Python 2
+        opener = None
 
 class NotAuthorizedException(Exception):
     pass
@@ -182,7 +185,10 @@ if platform.system() == 'Windows':
         )
         if should_download.lower() not in {'', 'y', 'yes'}:
             exit(0)
-        url_req.urlretrieve(script_url, script_path)
+        if opener:
+            opener.retrieve(script_url, script_path)
+        else:
+            url_req.urlretrieve(script_url, script_path)
 else:
     # Use OS version of script
     script_path = 'script'
