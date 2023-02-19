@@ -1,7 +1,7 @@
 FROM nodesource/node:4.2.5
 
 RUN apt-get update
-RUN apt-get install -y gnupg libkrb5-dev
+RUN apt-get install -y --force-yes gnupg libkrb5-dev
 RUN npm install -g gulp-cli
 
 
