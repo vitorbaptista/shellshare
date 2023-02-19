@@ -11,7 +11,7 @@ config.express = {
 };
 
 config.mongodb = {
-  uri: process.env.MONGOLAB_URI || 'mongodb://localhost:27017/shellshare',
+  uri: process.env.MONGO_URL || 'mongodb://localhost:27017/shellshare',
   capped_size_limit: 400 * 1024,  // 400 KB
   capped_size_max: 30,
   authorizations_ttl: 86400,  // 1 day
