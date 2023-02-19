@@ -154,6 +154,7 @@ def parse_args():
 
     if not urlparse(args.server).scheme:
         args.server = 'http://' + args.server
+    args.server = args.server.strip('/')
 
     return args
 
