@@ -183,6 +183,9 @@ if platform.system() == 'Windows':
         )
         if should_download.lower() not in {'', 'y', 'yes'}:
             exit(0)
+        opener = url_req.build_opener()
+        opener.addheaders = [('User-Agent', 'Mozilla/5.0')]
+        url_req.install_opener(opener)
         url_req.urlretrieve(script_url, script_path)
 else:
     # Use OS version of script
