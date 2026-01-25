@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-900">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>shellshare - Share your terminal in real-time</title>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+  </head>
+  <body class="h-full">
+    <div class="min-h-full flex flex-col items-center justify-center px-4 py-12">
+      <div class="max-w-2xl w-full space-y-8">
+        <div class="text-center">
+          <h1 class="text-4xl font-bold text-white">shellshare</h1>
+          <p class="mt-2 text-lg text-gray-400">Share your terminal in real-time</p>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-6 space-y-4">
+          <h2 class="text-xl font-semibold text-white">Quick Start</h2>
+          
+          <div class="bg-gray-900 rounded p-4 font-mono text-sm">
+            <code class="text-green-400">$ curl -sL https://get.shellshare.net | python</code>
+          </div>
+
+          <p class="text-gray-400">
+            Or download the client and run it manually:
+          </p>
+
+          <div class="bg-gray-900 rounded p-4 font-mono text-sm space-y-2">
+            <div><code class="text-green-400">$ wget https://shellshare.net/bin/shellshare</code></div>
+            <div><code class="text-green-400">$ python shellshare</code></div>
+          </div>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-6 space-y-4">
+          <h2 class="text-xl font-semibold text-white">How it works</h2>
+          
+          <ol class="list-decimal list-inside space-y-2 text-gray-400">
+            <li>Run the shellshare client in your terminal</li>
+            <li>Share the generated URL with your viewers</li>
+            <li>Your terminal is streamed in real-time to all viewers</li>
+            <li>Exit the shellshare client to end the session</li>
+          </ol>
+        </div>
+
+        <div class="text-center text-gray-500 text-sm">
+          <p>Open source: <a href="https://github.com/vitorbaptista/shellshare" class="text-blue-400 hover:underline">github.com/vitorbaptista/shellshare</a></p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "shellshare-assets",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild js/app.js --bundle --target=es2017 --outdir=../priv/static/assets",
+    "watch": "esbuild js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --watch"
+  },
+  "dependencies": {
+    "phoenix": "file:../deps/phoenix",
+    "phoenix_html": "file:../deps/phoenix_html",
+    "phoenix_live_view": "file:../deps/phoenix_live_view"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.7",
+    "esbuild": "^0.17.11",
+    "tailwindcss": "^3.4.0"
+  }
+}

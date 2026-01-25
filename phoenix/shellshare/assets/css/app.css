@@ -1,0 +1,54 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+/* Terminal styles */
+#terminal-container {
+  padding: 8px;
+}
+
+#terminal-container .xterm {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
+#terminal-container .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+/* Custom scrollbar for terminal */
+#terminal-container .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+#terminal-container .xterm-viewport::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+#terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
+}
+
+#terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Animations */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Flash messages */
+.phx-no-feedback.phx-submit-loading .phx-submit-loading,
+.phx-no-feedback .phx-change-loading {
+  display: none;
+}
