@@ -19,12 +19,8 @@ function _collection(room, callback) {
       cache.set(room, collection);
       callback(collection);
     }).catch(function(err) {
-      // Sometimes we have non-cached collections in the DB. If that happens,
-      // we simply get the collection in the DB and update the cache. We log
-      // the error so we can refer back to it in case there's something else
-      // going on.
-      console.error(err);
-      collection = db.get().collection(collectionName)
+      // Collection might already exist, just get it
+      var collection = db.get().collection(collectionName);
       cache.set(room, collection);
       callback(collection);
     });
@@ -33,34 +29,52 @@ function _collection(room, callback) {
 
 function push(room, size, message, callback) {
   _collection(room, function(collection) {
-    collection.insertOne({message: message, size: size}, callback);
+    collection.insertOne({message: message, size: size})
+      .then(function() {
+        if (callback) callback(null);
+      })
+      .catch(function(err) {
+        console.error('Push error:', err);
+        if (callback) callback(err);
+      });
   });
 }
 
 function all(room, callback) {
   _collection(room, function(collection) {
-    collection.find({}).toArray(function(err, items) {
-      if (err || items.length === 0) {
-        callback(err, items);
-      } else {
-        var messageAscii = items.map(function (item) {
-            return Buffer.from(item.message, 'base64').toString('ascii');
-        }).join('');
-        var item = {
-          size: items[items.length - 1].size,
-          message: Buffer.from(messageAscii).toString('base64'),
-        };
-
-        callback(err, item);
-      }
-    });
+    collection.find({}).toArray()
+      .then(function(items) {
+        if (items.length === 0) {
+          callback(null, null);
+        } else {
+          var messageAscii = items.map(function (item) {
+              return Buffer.from(item.message, 'base64').toString('ascii');
+          }).join('');
+          var item = {
+            size: items[items.length - 1].size,
+            message: Buffer.from(messageAscii).toString('base64'),
+          };
+          callback(null, item);
+        }
+      })
+      .catch(function(err) {
+        console.error('All error:', err);
+        callback(err, null);
+      });
   });
 }
 
 function drop(room, callback) {
   _collection(room, function(collection) {
     cache.del(room);
-    collection.drop(callback);
+    collection.drop()
+      .then(function() {
+        if (callback) callback(null);
+      })
+      .catch(function(err) {
+        console.error('Drop error:', err);
+        if (callback) callback(err);
+      });
   });
 }
 
