@@ -1,7 +1,6 @@
 'use strict';
 
 var express = require('express');
-var analytics = require('../analytics');
 var router = express.Router();
 var roomPrefix;
 var io;
@@ -11,8 +10,7 @@ var roomsModel;
 /* GET room. */
 router.get('/:room', function(req, res, next) {
   res.render('room');
-  next();
-}, analytics.pageview());
+});
 
 /* POST room. */
 router.post('/:room', function(req, res, next) {
@@ -20,19 +18,11 @@ router.post('/:room', function(req, res, next) {
     var room = req.url;
     var size = req.body.size;
     var message = req.body.message;
-    var analyticsEventOptions = {};
 
-    io.sockets.in(room).emit('size', size);
-    io.sockets.in(room).emit('message', message);
+    io.to(room).emit('size', size);
+    io.to(room).emit('message', message);
 
     roomsModel.push(room, size, message);
-
-    if (size.rows && size.cols) {
-      // Use screenResolution as the terminal's size.
-      analyticsEventOptions.sr = size.rows + 'x' + size.cols;
-    }
-    analytics.sendEvent(req, 'rooms', 'write', room, message.length,
-                        analyticsEventOptions);
 
     res.sendStatus(200);
   });
@@ -43,7 +33,6 @@ router.delete('/:room', function(req, res, next) {
   authorizeOrDie(req, res, function() {
     var room = req.url;
     roomsModel.drop(room);
-    analytics.sendEvent(req, 'rooms', 'delete', room);
     res.sendStatus(202);
   });
 });
@@ -55,31 +44,26 @@ function authorizeOrDie(req, res, callback) {
   // FIXME: secret might be empty
   authorizationModel.isAuthorized(room, secret, function(authorized) {
     if (!authorized) {
-      analytics.sendEvent(req, 'rooms', 'authorization', 'failure');
       res.sendStatus(401);
     } else {
-      analytics.sendEvent(req, 'rooms', 'authorization', 'success');
       callback();
     }
   });
 }
 
 function setupSockets() {
-  io.sockets.on('connection', function (socket) {
+  io.on('connection', function (socket) {
     var rooms = [];
 
     socket.on('join', function (room) {
       room = stripPrefix(room);
-      socket.join(room, function (err) {
-        if (!err) {
-          rooms.push(room);
-          updateUsersCount(io, room);
-          roomsModel.all(room, function(err, data) {
-            if (!err) {
-              socket.emit('size', data.size);
-              socket.emit('message', data.message);
-            }
-          });
+      socket.join(room);
+      rooms.push(room);
+      updateUsersCount(io, room);
+      roomsModel.all(room, function(err, data) {
+        if (!err && data) {
+          socket.emit('size', data.size);
+          socket.emit('message', data.message);
         }
       });
     });
@@ -101,10 +85,10 @@ function stripPrefix(room) {
 }
 
 function updateUsersCount(io, room) {
-  var clients = io.sockets.adapter.rooms[room];
+  var clients = io.sockets.adapter.rooms.get(room);
 
   if (clients !== undefined) {
-    io.sockets.in(room).emit('usersCount', Object.keys(clients).length);
+    io.to(room).emit('usersCount', clients.size);
   }
 }
 

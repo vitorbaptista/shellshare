@@ -4,7 +4,7 @@
   require('./vendor/base64');
   var io = require('socket.io-client');
   var Terminal = require('./vendor/term');
-  var socket = io.connect('', {'sync disconnect on unload' : true});
+  var socket = io();
   var room = window.location.pathname;
   var term;
   var currentSize = {};

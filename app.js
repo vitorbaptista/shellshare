@@ -2,21 +2,15 @@
 
 var config = require('./config');
 
-if (config.newrelic.license_key) {
-  require('newrelic');
-}
-
 var express = require('express');
 var http = require('http');
 var path = require('path');
-var io = require('socket.io');
+var { Server } = require('socket.io');
 var logger = require('morgan');
 var bodyParser = require('body-parser');
 var errorHandler = require('errorhandler');
 
 var db = require('./db');
-var analytics = require('./analytics');
-
 
 var indexRoute = require('./routes/index');
 var roomsRoute = require('./routes/rooms');
@@ -26,7 +20,7 @@ var server = http.createServer(app);
 
 app.set('port', config.express.port);
 app.set('views', path.join(__dirname, '/views'));
-app.set('view engine', 'jade');
+app.set('view engine', 'pug');
 app.use(logger('dev'));
 app.use(bodyParser.json({ limit: config.express.request_limit }));
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -39,11 +33,6 @@ if (config.env == 'development') {
     res.locals.isDev = true;
     next();
   });
-} else {
-  if (analytics.trackingId) {
-    console.log('Google Analytics enabled on', analytics.trackingId);
-    app.use(analytics.middleware(analytics.trackingId));
-  }
 }
 
 app.use('/', indexRoute);
@@ -55,7 +44,7 @@ db.connect(config.mongodb.uri, function(err) {
   }
 
   server.listen(app.get('port'), config.express.host);
-  io = io.listen(server);
+  var io = new Server(server);
   app.use('/r', roomsRoute('/r', io));
 
   console.log('Listening on http://' + (app.get('host') || 'localhost') + ':' + app.get('port'));

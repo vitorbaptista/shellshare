@@ -6,7 +6,7 @@ var rename = require('gulp-rename');
 function lint(cb) {
   var jshint = require('gulp-jshint');
 
-  return gulp.src('./**/*.js')
+  return gulp.src(['./*.js', './routes/*.js', './models/*.js', './public/javascript/*.js', '!./public/javascript/*.bundle.js', '!./public/javascript/*.min.js'])
       .pipe(jshint())
       .pipe(jshint.reporter('default'));
 }
@@ -24,10 +24,10 @@ function browserify(cb) {
 gulp.task(browserify);
 
 function minifyCss() {
-  var minifyCss = require('gulp-minify-css');
+  var cleanCss = require('gulp-clean-css');
 
   return gulp.src(['!./**/*.min.css', 'public/stylesheet/**/*.css'])
-             .pipe(minifyCss({compatibility: 'ie8'}))
+             .pipe(cleanCss({compatibility: 'ie8'}))
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('public/stylesheet'));
 }
@@ -43,19 +43,6 @@ function _minifyJs() {
 }
 gulp.task('minifyJs', gulp.series(browserify, _minifyJs));
 
-function _start() {
-  var nodemon = require('gulp-nodemon');
-    nodemon({
-      script: 'app.js',
-      ext: 'js',
-      tasks: ['lint', 'browserify'],
-      ignore: ['*.bundle.js', '*.min.js'],
-      env: {'NODE_ENV': 'development'}
-    });
-}
-gulp.task('start', gulp.series(lint, browserify, _start));
-
-gulp.task('build:development', gulp.series(lint, browserify));
 gulp.task('build:production', gulp.parallel(minifyCss, gulp.task('minifyJs')));
 
-gulp.task('default', gulp.task('start'));
+gulp.task('default', gulp.task('build:production'));
