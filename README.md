@@ -1,5 +1,7 @@
 # shellshare
 
+[![E2E Tests](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e.yml/badge.svg)](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e.yml)
+
 Live broadcast of terminal sessions.
 
 ## Why?
