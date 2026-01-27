@@ -13,7 +13,7 @@ import string
 import time
 import urllib.request
 import urllib.parse
-from playwright.sync_api import sync_playwright, expect
+from playwright.sync_api import sync_playwright
 
 SERVER_URL = "http://localhost:3000"
 
