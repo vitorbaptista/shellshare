@@ -1,0 +1,13 @@
+[project]
+name = "shellshare-e2e"
+version = "0.1.0"
+description = "E2E black-box tests for Shellshare"
+requires-python = ">=3.10"
+dependencies = [
+    "playwright>=1.40.0",
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]

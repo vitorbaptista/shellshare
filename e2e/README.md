@@ -1,8 +1,8 @@
 # E2E Black-Box Tests
 
 These tests treat Shellshare as a black box. They interact only through public interfaces:
-- **HTTP API** (same as the Python CLI)
-- **Browser** (headless Chrome via Playwright)
+- **HTTP API** (same protocol as the Python CLI)
+- **Browser** (headless Chromium via Playwright)
 
 ## Why Black-Box?
 
@@ -14,34 +14,38 @@ These tests will continue to work even if:
 
 ## What's Tested
 
-1. **Happy Path**: Broadcast message → appears in browser
-2. **Multiple Messages**: Messages arrive in order
-3. **Replay**: New viewers see existing content
+- **Happy Path**: Broadcast message → appears in browser
 
 ## Running Locally
 
-1. Start MongoDB:
+1. Install [uv](https://docs.astral.sh/uv/):
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+2. Start MongoDB:
    ```bash
    docker run -d -p 27017:27017 mongo:5.0
    ```
 
-2. Start the server:
+3. Start the server:
    ```bash
    npm install
    npm start
    ```
 
-3. Run tests:
+4. Run tests:
    ```bash
    cd e2e
-   npm install
-   npx playwright install chromium
-   npx playwright test
+   uv sync
+   uv run playwright install chromium
+   uv run pytest -v
    ```
 
 ## CI
 
 Tests run automatically on GitHub Actions with:
 - MongoDB service container
+- Node.js 14 for the server
+- Python + UV for the tests
 - Headless Chromium browser
-- Server started in background
