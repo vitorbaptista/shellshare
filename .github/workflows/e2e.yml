@@ -42,11 +42,20 @@ jobs:
 
       - name: Wait for server
         run: |
+          server_up=false
           for i in {1..30}; do
-            curl -s http://localhost:3000 > /dev/null && break
+            if curl -s http://localhost:3000 > /dev/null; then
+              echo "Server is up after $i attempt(s)."
+              server_up=true
+              break
+            fi
             echo "Waiting for server... ($i)"
             sleep 2
           done
+          if [ "$server_up" = false ]; then
+            echo "Server did not become ready after 30 attempts."
+            exit 1
+          fi
 
       # Setup Python with UV
       - name: Install uv
