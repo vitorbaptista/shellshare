@@ -1,0 +1,71 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mongodb:
+        image: mongo:5.0
+        ports:
+          - 27017:27017
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '14.15'
+          cache: 'npm'
+
+      - name: Install app dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build assets
+        run: npm run postinstall
+
+      - name: Install Playwright
+        run: |
+          cd e2e
+          npm init -y
+          npm install @playwright/test
+          npx playwright install chromium
+          npx playwright install-deps chromium
+
+      - name: Start server
+        run: npm start &
+        env:
+          MONGODB_URI: mongodb://localhost:27017/shellshare_test
+          PORT: 3000
+
+      - name: Wait for server
+        run: |
+          for i in {1..30}; do
+            curl -s http://localhost:3000 > /dev/null && break
+            echo "Waiting for server... ($i)"
+            sleep 2
+          done
+
+      - name: Run E2E tests
+        run: |
+          cd e2e
+          npx playwright test --reporter=list
+        env:
+          CI: true
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/test-results/
+          retention-days: 7
