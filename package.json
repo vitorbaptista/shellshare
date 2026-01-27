@@ -35,7 +35,6 @@
     "gulp-jshint": "^2.1.0",
     "gulp-nodemon": "^2.5.0",
     "jshint": "^2.13.6",
-    "mongodb-memory-server": "^8.12.2",
     "pm2": "^4.5.1"
   }
 }

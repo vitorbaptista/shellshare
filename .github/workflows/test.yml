@@ -8,7 +8,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:5.0
+        ports:
+          - 27017:27017
 
     steps:
       - name: Checkout code
@@ -28,3 +34,5 @@ jobs:
 
       - name: Run tests
         run: npm test
+        env:
+          MONGODB_URI: mongodb://localhost:27017/shellshare_test

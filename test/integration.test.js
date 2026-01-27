@@ -1,13 +1,9 @@
 'use strict';
 
 /**
- * Integration tests for shellshare happy path.
- *
- * Tests the complete flow:
- * 1. Create a room by posting a message
- * 2. Connect a viewer via Socket.io
- * 3. Verify the viewer receives the broadcasted message
- * 4. Clean up the room
+ * Integration tests for shellshare.
+ * 
+ * Tests the actual application code (routes/rooms.js) with real MongoDB.
  */
 
 const http = require('http');
@@ -15,116 +11,87 @@ const express = require('express');
 const socketIo = require('socket.io');
 const socketIoClient = require('socket.io-client');
 const bodyParser = require('body-parser');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-const { MongoClient } = require('mongodb');
 const assert = require('assert');
 
 // Test configuration
-const TEST_PORT = 3001;
+const TEST_PORT = 3099;
 const TEST_ROOM = 'test-room-' + Date.now();
 const TEST_SECRET = 'test-secret-123';
 const BASE_URL = `http://localhost:${TEST_PORT}`;
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/shellshare_test';
 
 // Server components
-let mongoServer;
-let mongoClient;
 let app;
 let server;
 let io;
 
 /**
- * Create the Express app with routes (simplified version of app.js)
+ * Set up the test server using actual application code
  */
-function createApp(db) {
-  const app = express();
-  app.use(bodyParser.json({ limit: '300kb' }));
-
-  // Room route handlers
-  const roomsState = new Map(); // In-memory store for simplicity
-
-  app.post('/r/:room', (req, res) => {
-    const room = req.params.room;
-    const secret = req.get('Authorization');
-    const size = req.body.size;
-    const message = req.body.message;
-
-    // Simple authorization: first poster owns the room
-    if (!roomsState.has(room)) {
-      roomsState.set(room, { secret, messages: [] });
-    } else if (roomsState.get(room).secret !== secret) {
-      return res.sendStatus(401);
-    }
-
-    // Store message
-    const roomData = roomsState.get(room);
-    roomData.messages.push({ size, message });
-    roomData.size = size;
-
-    // Broadcast to viewers
-    io.sockets.in(room).emit('size', size);
-    io.sockets.in(room).emit('message', message);
-
-    res.sendStatus(200);
-  });
-
-  app.delete('/r/:room', (req, res) => {
-    const room = req.params.room;
-    const secret = req.get('Authorization');
-
-    if (roomsState.has(room) && roomsState.get(room).secret === secret) {
-      roomsState.delete(room);
-      res.sendStatus(202);
-    } else {
-      res.sendStatus(401);
-    }
-  });
-
-  app.get('/r/:room', (req, res) => {
-    res.send('Room viewer page');
-  });
-
-  return { app, roomsState };
-}
-
-/**
- * Setup Socket.io with room joining logic
- */
-function setupSocketIo(ioInstance, roomsState) {
-  ioInstance.on('connection', (socket) => {
-    socket.on('join', (room) => {
-      // Strip /r/ prefix if present
-      if (room.startsWith('/r/')) {
-        room = room.slice(3);
-      }
-
-      socket.join(room, (err) => {
-        if (!err) {
-          // Send current room state to new viewer
-          const roomData = roomsState.get(room);
-          if (roomData) {
-            socket.emit('size', roomData.size);
-            // Send all accumulated messages
-            const allMessages = roomData.messages.map(m => m.message).join('');
-            if (allMessages) {
-              socket.emit('message', allMessages);
-            }
-          }
-
-          // Update user count
-          const clients = ioInstance.sockets.adapter.rooms[room];
-          if (clients) {
-            ioInstance.in(room).emit('usersCount', Object.keys(clients.sockets || clients).length);
-          }
-        }
-      });
+async function setup() {
+  console.log('Setting up test environment...');
+  console.log('MongoDB URI:', MONGODB_URI);
+  
+  // Connect to MongoDB using the actual db module
+  const db = require('../db');
+  
+  await new Promise((resolve, reject) => {
+    db.connect(MONGODB_URI, (err) => {
+      if (err) reject(err);
+      else resolve();
     });
   });
+  
+  console.log('Connected to MongoDB');
+  
+  // Create Express app similar to app.js
+  app = express();
+  server = http.createServer(app);
+  
+  app.use(bodyParser.json({ limit: '300kb' }));
+  
+  // Set up Socket.io
+  io = socketIo.listen(server);
+  
+  // Use the actual rooms route
+  const roomsRoute = require('../routes/rooms');
+  app.use('/r', roomsRoute('/r', io));
+  
+  // Start server
+  await new Promise((resolve) => {
+    server.listen(TEST_PORT, resolve);
+  });
+  
+  console.log(`Test server running on port ${TEST_PORT}`);
 }
 
 /**
- * Helper to make HTTP requests
+ * Tear down the test server
  */
-function makeRequest(method, path, data, headers = {}) {
+async function teardown() {
+  console.log('Tearing down test environment...');
+  
+  if (io) {
+    io.close();
+  }
+  
+  if (server) {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  
+  // Close MongoDB connection
+  const db = require('../db');
+  if (db.get()) {
+    await new Promise((resolve) => db.get().close(resolve));
+  }
+  
+  console.log('Teardown complete!');
+}
+
+/**
+ * Make an HTTP request
+ */
+function request(method, path, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, BASE_URL);
     const options = {
@@ -139,321 +106,205 @@ function makeRequest(method, path, data, headers = {}) {
     };
 
     const req = http.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => body += chunk);
-      res.on('end', () => resolve({ status: res.statusCode, body }));
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, data }));
     });
 
     req.on('error', reject);
-
-    if (data) {
-      req.write(JSON.stringify(data));
+    
+    if (body) {
+      req.write(JSON.stringify(body));
     }
     req.end();
   });
 }
 
 /**
- * Helper to encode message like the Python client does
+ * Test: POST to room should broadcast to connected viewers
  */
-function encodeMessage(text) {
-  const urlEncoded = encodeURIComponent(text);
-  return Buffer.from(urlEncoded).toString('base64');
+async function testPostBroadcastsToViewers() {
+  console.log('\n--- Test: POST broadcasts to viewers ---');
+  
+  // Connect a viewer via Socket.io
+  const client = socketIoClient(BASE_URL, {
+    forceNew: true,
+    transports: ['websocket'],
+  });
+  
+  await new Promise((resolve) => client.on('connect', resolve));
+  console.log('Viewer connected');
+  
+  // Join the room
+  client.emit('join', `/r/${TEST_ROOM}`);
+  
+  // Wait a bit for the join to be processed
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  
+  // Set up message listener
+  const receivedMessages = [];
+  const receivedSizes = [];
+  
+  client.on('message', (msg) => receivedMessages.push(msg));
+  client.on('size', (size) => receivedSizes.push(size));
+  
+  // POST a message to the room (this creates the authorization)
+  const testMessage = 'Hello from test!';
+  const testSize = { rows: 24, cols: 80 };
+  
+  const response = await request('POST', `/r/${TEST_ROOM}`, {
+    message: testMessage,
+    size: testSize,
+  }, {
+    'Authorization': TEST_SECRET,
+  });
+  
+  console.log('POST response status:', response.status);
+  assert.strictEqual(response.status, 200, 'POST should return 200');
+  
+  // Wait for Socket.io messages
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  
+  // Verify the viewer received the message
+  console.log('Received messages:', receivedMessages);
+  console.log('Received sizes:', receivedSizes);
+  
+  assert.ok(receivedMessages.includes(testMessage), 'Viewer should receive the message');
+  assert.ok(receivedSizes.some(s => s.rows === 24 && s.cols === 80), 'Viewer should receive the size');
+  
+  client.disconnect();
+  console.log('✓ Test passed: POST broadcasts to viewers');
 }
 
 /**
- * Helper to decode message like the browser does
+ * Test: Unauthorized POST should fail
  */
-function decodeMessage(encoded) {
-  return decodeURIComponent(Buffer.from(encoded, 'base64').toString('utf-8'));
-}
-
-// ============================================================================
-// Test Setup and Teardown
-// ============================================================================
-
-async function setup() {
-  console.log('Setting up test environment...');
-
-  // Start in-memory MongoDB
-  mongoServer = await MongoMemoryServer.create();
-  const mongoUri = mongoServer.getUri();
-  mongoClient = await MongoClient.connect(mongoUri, { useUnifiedTopology: true });
-
-  console.log(`  MongoDB started at ${mongoUri}`);
-
-  // Create Express app
-  const { app: expressApp, roomsState } = createApp(mongoClient.db());
-  app = expressApp;
-
-  // Create HTTP server and Socket.io
-  server = http.createServer(app);
-  io = socketIo(server);
-
-  // Setup Socket.io handlers
-  setupSocketIo(io, roomsState);
-
-  // Start listening
-  await new Promise((resolve) => {
-    server.listen(TEST_PORT, () => {
-      console.log(`  Server started at ${BASE_URL}`);
-      resolve();
-    });
+async function testUnauthorizedPostFails() {
+  console.log('\n--- Test: Unauthorized POST fails ---');
+  
+  // First, create the room with one secret
+  await request('POST', `/r/${TEST_ROOM}-auth`, {
+    message: 'initial',
+    size: { rows: 24, cols: 80 },
+  }, {
+    'Authorization': 'correct-secret',
   });
-
-  console.log('Setup complete!\n');
+  
+  // Try to POST with a different secret
+  const response = await request('POST', `/r/${TEST_ROOM}-auth`, {
+    message: 'unauthorized',
+    size: { rows: 24, cols: 80 },
+  }, {
+    'Authorization': 'wrong-secret',
+  });
+  
+  console.log('Unauthorized POST response status:', response.status);
+  assert.strictEqual(response.status, 401, 'Unauthorized POST should return 401');
+  
+  console.log('✓ Test passed: Unauthorized POST fails');
 }
 
-async function teardown() {
-  console.log('\nTearing down test environment...');
-
-  if (io) {
-    io.close();
-  }
-
-  if (server) {
-    await new Promise((resolve) => server.close(resolve));
-    console.log('  Server stopped');
-  }
-
-  if (mongoClient) {
-    await mongoClient.close();
-  }
-
-  if (mongoServer) {
-    await mongoServer.stop();
-    console.log('  MongoDB stopped');
-  }
-
-  console.log('Teardown complete!');
+/**
+ * Test: DELETE room
+ */
+async function testDeleteRoom() {
+  console.log('\n--- Test: DELETE room ---');
+  
+  const roomName = `${TEST_ROOM}-delete`;
+  const secret = 'delete-secret';
+  
+  // Create the room
+  await request('POST', `/r/${roomName}`, {
+    message: 'to be deleted',
+    size: { rows: 24, cols: 80 },
+  }, {
+    'Authorization': secret,
+  });
+  
+  // Delete the room
+  const response = await request('DELETE', `/r/${roomName}`, null, {
+    'Authorization': secret,
+  });
+  
+  console.log('DELETE response status:', response.status);
+  assert.strictEqual(response.status, 202, 'DELETE should return 202');
+  
+  console.log('✓ Test passed: DELETE room');
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
-async function testHappyPath() {
-  console.log('=== TEST: Happy Path - Create Room, Stream, Broadcast ===\n');
-
-  const testMessage = 'Hello, shellshare!';
-  const encodedMessage = encodeMessage(testMessage);
-  const terminalSize = { cols: 80, rows: 24 };
-
-  // Step 1: Connect a viewer via Socket.io
-  console.log('1. Connecting viewer via Socket.io...');
-  const viewer = socketIoClient(BASE_URL);
-
+/**
+ * Test: New viewer receives existing room content
+ */
+async function testViewerReceivesExistingContent() {
+  console.log('\n--- Test: Viewer receives existing content ---');
+  
+  const roomName = `${TEST_ROOM}-existing`;
+  const testMessage = 'Existing content';
+  const testSize = { rows: 30, cols: 100 };
+  
+  // First, POST content to the room
+  await request('POST', `/r/${roomName}`, {
+    message: testMessage,
+    size: testSize,
+  }, {
+    'Authorization': 'existing-secret',
+  });
+  
+  // Now connect a viewer
+  const client = socketIoClient(BASE_URL, {
+    forceNew: true,
+    transports: ['websocket'],
+  });
+  
+  await new Promise((resolve) => client.on('connect', resolve));
+  
+  // Set up listeners before joining
   const receivedMessages = [];
-  let receivedSize = null;
-  let userCount = 0;
-
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Viewer connection timeout')), 5000);
-
-    viewer.on('connect', () => {
-      console.log('   Viewer connected');
-      clearTimeout(timeout);
-      resolve();
-    });
-
-    viewer.on('error', reject);
-  });
-
-  // Setup message listeners
-  viewer.on('message', (msg) => {
-    console.log(`   Viewer received message: ${decodeMessage(msg).substring(0, 50)}...`);
-    receivedMessages.push(msg);
-  });
-
-  viewer.on('size', (size) => {
-    console.log(`   Viewer received size: ${size.cols}x${size.rows}`);
-    receivedSize = size;
-  });
-
-  viewer.on('usersCount', (count) => {
-    console.log(`   User count updated: ${count}`);
-    userCount = count;
-  });
-
+  const receivedSizes = [];
+  
+  client.on('message', (msg) => receivedMessages.push(msg));
+  client.on('size', (size) => receivedSizes.push(size));
+  
   // Join the room
-  console.log(`   Joining room: ${TEST_ROOM}`);
-  viewer.emit('join', `/r/${TEST_ROOM}`);
-
-  // Give it a moment to join
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
-  // Step 2: Post a message to the room (simulating broadcaster)
-  console.log('\n2. Broadcasting message to room...');
-  const postResponse = await makeRequest(
-    'POST',
-    `/r/${TEST_ROOM}`,
-    { message: encodedMessage, size: terminalSize },
-    { 'Authorization': TEST_SECRET }
-  );
-
-  console.log(`   POST response status: ${postResponse.status}`);
-  assert.strictEqual(postResponse.status, 200, 'POST should return 200');
-
-  // Wait for message to be broadcast
-  await new Promise((resolve) => setTimeout(resolve, 200));
-
-  // Step 3: Verify viewer received the message
-  console.log('\n3. Verifying viewer received broadcast...');
-
-  assert.ok(receivedMessages.length > 0, 'Viewer should have received at least one message');
-  const decodedReceived = decodeMessage(receivedMessages[0]);
-  assert.strictEqual(decodedReceived, testMessage, 'Received message should match sent message');
-  console.log('   ✓ Message received correctly');
-
-  assert.ok(receivedSize, 'Viewer should have received size');
-  assert.strictEqual(receivedSize.cols, terminalSize.cols, 'Cols should match');
-  assert.strictEqual(receivedSize.rows, terminalSize.rows, 'Rows should match');
-  console.log('   ✓ Terminal size received correctly');
-
-  // Step 4: Test authorization (different secret should fail)
-  console.log('\n4. Testing authorization...');
-  const unauthorizedResponse = await makeRequest(
-    'POST',
-    `/r/${TEST_ROOM}`,
-    { message: encodedMessage, size: terminalSize },
-    { 'Authorization': 'wrong-secret' }
-  );
-
-  assert.strictEqual(unauthorizedResponse.status, 401, 'Wrong secret should return 401');
-  console.log('   ✓ Unauthorized request correctly rejected');
-
-  // Step 5: Clean up - delete the room
-  console.log('\n5. Cleaning up room...');
-  const deleteResponse = await makeRequest(
-    'DELETE',
-    `/r/${TEST_ROOM}`,
-    null,
-    { 'Authorization': TEST_SECRET }
-  );
-
-  assert.strictEqual(deleteResponse.status, 202, 'DELETE should return 202');
-  console.log('   ✓ Room deleted successfully');
-
-  // Disconnect viewer
-  viewer.disconnect();
-  console.log('   ✓ Viewer disconnected');
-
-  console.log('\n=== TEST PASSED ===\n');
+  client.emit('join', `/r/${roomName}`);
+  
+  // Wait for room data
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  
+  console.log('Received messages:', receivedMessages);
+  console.log('Received sizes:', receivedSizes);
+  
+  // Viewer should receive the existing content
+  assert.ok(receivedMessages.includes(testMessage), 'Viewer should receive existing message');
+  assert.ok(receivedSizes.some(s => s.rows === 30 && s.cols === 100), 'Viewer should receive existing size');
+  
+  client.disconnect();
+  console.log('✓ Test passed: Viewer receives existing content');
 }
 
-async function testMultipleMessages() {
-  console.log('=== TEST: Multiple Messages Streaming ===\n');
-
-  const room = 'multi-msg-' + Date.now();
-  const messages = ['First line\n', 'Second line\n', 'Third line\n'];
-
-  // Connect viewer
-  const viewer = socketIoClient(BASE_URL);
-  const receivedMessages = [];
-
-  await new Promise((resolve) => {
-    viewer.on('connect', resolve);
-  });
-
-  viewer.on('message', (msg) => {
-    receivedMessages.push(decodeMessage(msg));
-  });
-
-  viewer.emit('join', `/r/${room}`);
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
-  // Send multiple messages
-  console.log('1. Sending multiple messages...');
-  for (const msg of messages) {
-    await makeRequest(
-      'POST',
-      `/r/${room}`,
-      { message: encodeMessage(msg), size: { cols: 80, rows: 24 } },
-      { 'Authorization': TEST_SECRET }
-    );
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 200));
-
-  // Verify
-  console.log('2. Verifying all messages received...');
-  assert.strictEqual(receivedMessages.length, messages.length, 'Should receive all messages');
-  for (let i = 0; i < messages.length; i++) {
-    assert.strictEqual(receivedMessages[i], messages[i], `Message ${i} should match`);
-  }
-  console.log('   ✓ All messages received in order');
-
-  // Cleanup
-  await makeRequest('DELETE', `/r/${room}`, null, { 'Authorization': TEST_SECRET });
-  viewer.disconnect();
-
-  console.log('\n=== TEST PASSED ===\n');
-}
-
-async function testLateJoiner() {
-  console.log('=== TEST: Late Joiner Receives History ===\n');
-
-  const room = 'late-join-' + Date.now();
-  const message = 'Message before viewer joins';
-
-  // Send message first (before viewer connects)
-  console.log('1. Sending message before viewer joins...');
-  await makeRequest(
-    'POST',
-    `/r/${room}`,
-    { message: encodeMessage(message), size: { cols: 80, rows: 24 } },
-    { 'Authorization': TEST_SECRET }
-  );
-
-  // Now connect viewer
-  console.log('2. Connecting late viewer...');
-  const viewer = socketIoClient(BASE_URL);
-  const receivedMessages = [];
-
-  await new Promise((resolve) => {
-    viewer.on('connect', resolve);
-  });
-
-  viewer.on('message', (msg) => {
-    receivedMessages.push(decodeMessage(msg));
-  });
-
-  viewer.emit('join', `/r/${room}`);
-  await new Promise((resolve) => setTimeout(resolve, 200));
-
-  // Verify late joiner received the message
-  console.log('3. Verifying late joiner received history...');
-  assert.ok(receivedMessages.length > 0, 'Late joiner should receive message history');
-  assert.ok(receivedMessages[0].includes(message), 'History should contain the message');
-  console.log('   ✓ Late joiner received message history');
-
-  // Cleanup
-  await makeRequest('DELETE', `/r/${room}`, null, { 'Authorization': TEST_SECRET });
-  viewer.disconnect();
-
-  console.log('\n=== TEST PASSED ===\n');
-}
-
-// ============================================================================
-// Main
-// ============================================================================
-
+/**
+ * Run all tests
+ */
 async function runTests() {
   try {
     await setup();
-
-    await testHappyPath();
-    await testMultipleMessages();
-    await testLateJoiner();
-
-    console.log('\n✅ All tests passed!\n');
+    
+    await testPostBroadcastsToViewers();
+    await testUnauthorizedPostFails();
+    await testDeleteRoom();
+    await testViewerReceivesExistingContent();
+    
+    console.log('\n========================================');
+    console.log('All tests passed! ✓');
+    console.log('========================================\n');
+    
+    await teardown();
+    process.exit(0);
   } catch (error) {
     console.error('\n❌ Test failed:', error.message);
-    console.error(error.stack);
-    process.exitCode = 1;
-  } finally {
+    console.error(error);
     await teardown();
+    process.exit(1);
   }
 }
 
