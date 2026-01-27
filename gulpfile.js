@@ -34,10 +34,10 @@ function minifyCss() {
 gulp.task(minifyCss);
 
 function _minifyJs() {
-  var uglify = require('gulp-uglify');
+  var terser = require('gulp-terser');
 
   return gulp.src(['!./**/*.min.js', './public/javascript/*.js'])
-             .pipe(uglify())
+             .pipe(terser())
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('./public/javascript/'));
 }
