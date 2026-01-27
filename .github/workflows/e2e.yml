@@ -21,7 +21,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      # Use Node 14 for the app (its requirement)
+      - name: Setup Node.js 14 for app
         uses: actions/setup-node@v4
         with:
           node-version: '14.15'
@@ -33,6 +34,18 @@ jobs:
       - name: Build assets
         run: npm run postinstall
 
+      - name: Start server
+        run: npm start &
+        env:
+          MONGODB_URI: mongodb://localhost:27017/shellshare_test
+          PORT: 3000
+
+      # Switch to Node 18 for Playwright
+      - name: Setup Node.js 18 for Playwright
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
       - name: Install Playwright
         run: |
           cd e2e
@@ -40,12 +53,6 @@ jobs:
           npm install @playwright/test
           npx playwright install chromium
           npx playwright install-deps chromium
-
-      - name: Start server
-        run: npm start &
-        env:
-          MONGODB_URI: mongodb://localhost:27017/shellshare_test
-          PORT: 3000
 
       - name: Wait for server
         run: |
