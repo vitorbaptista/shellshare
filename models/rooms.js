@@ -19,7 +19,11 @@ function _collection(room, callback) {
       cache.set(room, collection);
       callback(collection);
     }).catch(function(err) {
-      // Collection might already exist, just get it
+      // Sometimes we have non-cached collections in the DB. If that happens,
+      // we simply get the collection in the DB and update the cache. We log
+      // the error so we can refer back to it in case there's something else
+      // going on.
+      console.error(err);
       var collection = db.get().collection(collectionName);
       cache.set(room, collection);
       callback(collection);
