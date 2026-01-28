@@ -2,5 +2,10 @@ node_modules
 public/javascript/*.bundle.js
 public/javascript/*.min.js
 public/stylesheet/*.min.css
+public/stylesheet/**/*.min.css
 ecosystem.json5
 *.swp
+__pycache__/
+*.pyc
+e2e/.venv/
+e2e/.pytest_cache/

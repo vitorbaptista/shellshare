@@ -1,19 +1,24 @@
 'use strict';
 
-var MongoClient = require('mongodb').MongoClient;
+var { MongoClient } = require('mongodb');
 
 var state = {
   db: null,
+  client: null,
 };
 
 exports.connect = function(url, done) {
   if (state.db) return done();
 
-  MongoClient.connect(url, { useUnifiedTopology: true }, function(err, client) {
-    if (err) return done(err);
-    state.db = client.db();
-    done();
-  });
+  MongoClient.connect(url)
+    .then(function(client) {
+      state.client = client;
+      state.db = client.db();
+      done();
+    })
+    .catch(function(err) {
+      done(err);
+    });
 };
 
 exports.get = function() {
@@ -21,11 +26,15 @@ exports.get = function() {
 };
 
 exports.close = function(done) {
-  if (state.db) {
-    state.db.close(function(err, result) {
-      state.db = null;
-      state.mode = null;
-      done(err);
-    });
+  if (state.client) {
+    state.client.close()
+      .then(function() {
+        state.db = null;
+        state.client = null;
+        done();
+      })
+      .catch(done);
+  } else {
+    done();
   }
 };
