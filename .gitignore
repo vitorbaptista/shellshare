@@ -8,5 +8,4 @@ ecosystem.json5
 __pycache__/
 *.pyc
 e2e/.venv/
-e2e/uv.lock
 e2e/.pytest_cache/
