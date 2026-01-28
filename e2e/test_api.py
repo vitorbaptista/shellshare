@@ -187,6 +187,9 @@ class TestBroadcast:
         )
         assert status1 == 200, f"First request failed: {status1}"
         
+        # Wait for authorization to be persisted (async operation)
+        time.sleep(0.5)
+        
         # Second request with different password should fail
         status2, _, _ = make_request(
             'POST', f'/r/{room_id}',
@@ -384,6 +387,9 @@ class TestAuthorization:
         )
         assert status == 200, "Failed to claim room"
         
+        # Wait for authorization to be persisted
+        time.sleep(0.5)
+        
         # Try with wrong password
         status, _, _ = make_request(
             'POST', f'/r/{room_id}',
@@ -420,6 +426,9 @@ class TestAuthorization:
             body=body
         )
         assert status2 == 200, "Failed to claim room 2"
+        
+        # Wait for authorizations to be persisted
+        time.sleep(0.5)
         
         # Password 1 should not work on room 2
         status3, _, _ = make_request(
