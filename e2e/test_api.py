@@ -310,6 +310,9 @@ class TestDeleteRoom:
             body=body
         )
         
+        # Wait for authorization to be persisted (async operation)
+        time.sleep(0.5)
+        
         # Try to delete with wrong password
         status, _, _ = make_request(
             'DELETE', f'/r/{room_id}',
