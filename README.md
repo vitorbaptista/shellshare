@@ -1,7 +1,6 @@
 # shellshare
 
 [![E2E Tests](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e.yml/badge.svg)](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e.yml)
-[![E2E Tests (Docker)](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e-docker.yml/badge.svg)](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e-docker.yml)
 
 Live broadcast of terminal sessions.
 

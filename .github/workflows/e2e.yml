@@ -2,43 +2,23 @@ name: E2E Tests
 
 on:
   push:
-    branches: [master, upgrade-node-lts]
+    branches:
+      - master
   pull_request:
-    branches: [master, upgrade-node-lts]
+    branches:
+      - master
 
 jobs:
-  e2e:
+  e2e-docker:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    services:
-      mongodb:
-        image: mongo:5.0
-        ports:
-          - 27017:27017
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Setup Node.js 14 for the app
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install app dependencies
-        run: npm install --ignore-scripts
-
-      - name: Build assets
-        run: npm run postinstall
-
-      - name: Start server
-        run: npm start &
-        env:
-          MONGODB_URI: mongodb://localhost:27017/shellshare_test
-          PORT: 3000
+      - name: Build and start services
+        run: docker compose up -d --build
 
       - name: Wait for server
         run: |
@@ -54,10 +34,10 @@ jobs:
           done
           if [ "$server_up" = false ]; then
             echo "Server did not become ready after 30 attempts."
+            docker compose logs
             exit 1
           fi
 
-      # Setup Python with UV
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -78,3 +58,11 @@ jobs:
           uv run pytest -v
         env:
           CI: true
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop services
+        if: always()
+        run: docker compose down
