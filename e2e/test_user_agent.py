@@ -1,107 +1,81 @@
 """
 Test for User-Agent header requirement.
 
-This test verifies that the server requires a User-Agent header for certain
-endpoints. This reproduces the issue described in:
+This test verifies that Cloudflare (in front of shellshare.net) blocks
+Python's default User-Agent. This reproduces the issue described in:
 - Issue #65: Installing dependencies failing (403 Forbidden on Windows)
 - PR #64 and #66: Adding User-Agent to fix the 403 error
 
-The shellshare CLI on Windows tries to download script.exe without a User-Agent
-header, which causes a 403 Forbidden error from the server.
+The shellshare CLI on Windows uses Python's urlretrieve to download script.exe.
+Python sends "User-Agent: Python-urllib/3.x" which Cloudflare blocks with 403.
 """
 
 import http.client
-import time
-import urllib.request
-from urllib.parse import urlparse
+import ssl
 
-SERVER_URL = "http://localhost:3000"
+# Production server (behind Cloudflare)
+PRODUCTION_HOST = "shellshare.net"
+SCRIPT_PATH = "/bin/script.exe"
 
-
-def wait_for_server(url, timeout_seconds=30):
-    """Wait for server to be ready."""
-    start = time.time()
-    while time.time() - start < timeout_seconds:
-        try:
-            urllib.request.urlopen(url, timeout=1)
-            return True
-        except Exception:
-            time.sleep(0.5)
-    raise TimeoutError(f"Server not ready after {timeout_seconds}s")
+# Python's default User-Agent that gets blocked
+PYTHON_USER_AGENT = "Python-urllib/3.9"
 
 
-def make_request_without_user_agent(url):
-    """
-    Make an HTTP request without a User-Agent header.
+def make_https_request(host, path, user_agent=None):
+    """Make an HTTPS request with optional User-Agent header."""
+    context = ssl.create_default_context()
+    conn = http.client.HTTPSConnection(host, context=context)
     
-    This simulates what Python's urlretrieve does by default on Windows,
-    which is the root cause of issue #65.
-    """
-    parsed = urlparse(url)
-    conn = http.client.HTTPConnection(parsed.netloc)
+    headers = {}
+    if user_agent:
+        headers["User-Agent"] = user_agent
     
-    # Make request with minimal headers (no User-Agent)
-    conn.request("GET", parsed.path, headers={})
+    conn.request("GET", path, headers=headers)
     response = conn.getresponse()
     status = response.status
     conn.close()
     return status
 
 
-def make_request_with_user_agent(url):
+def test_cloudflare_blocks_python_user_agent():
     """
-    Make an HTTP request with a User-Agent header.
-    
-    This simulates the fix proposed in PR #64 and #66.
-    """
-    parsed = urlparse(url)
-    conn = http.client.HTTPConnection(parsed.netloc)
-    
-    # Make request with User-Agent header
-    conn.request("GET", parsed.path, headers={"User-Agent": "shellshare"})
-    response = conn.getresponse()
-    status = response.status
-    conn.close()
-    return status
-
-
-def test_server_rejects_requests_without_user_agent():
-    """
-    Test that the server rejects requests without a User-Agent header.
+    Test that Cloudflare blocks Python's default User-Agent.
     
     This reproduces the 403 error that Windows users experience when
-    the shellshare CLI tries to download script.exe.
+    the shellshare CLI tries to download script.exe using urlretrieve.
     
     Expected behavior:
-    - Request without User-Agent: 403 Forbidden
-    - Request with User-Agent: Not 403 (could be 200 or 404)
+    - Python-urllib User-Agent: 403 Forbidden (blocked by Cloudflare)
+    - Custom User-Agent: 200 OK
     """
-    wait_for_server(SERVER_URL)
+    # Test 1: Python's default User-Agent should get 403
+    status_python_ua = make_https_request(
+        PRODUCTION_HOST, SCRIPT_PATH, 
+        user_agent=PYTHON_USER_AGENT
+    )
+    print(f"Request with '{PYTHON_USER_AGENT}': {status_python_ua}")
     
-    # The endpoint that the Windows CLI tries to download
-    script_url = f"{SERVER_URL}/bin/script.exe"
-    
-    # Test 1: Request without User-Agent should get 403
-    status_without_ua = make_request_without_user_agent(script_url)
-    print(f"Request without User-Agent: {status_without_ua}")
-    
-    # Test 2: Request with User-Agent should NOT get 403
-    status_with_ua = make_request_with_user_agent(script_url)
-    print(f"Request with User-Agent: {status_with_ua}")
+    # Test 2: Custom User-Agent should get 200
+    status_custom_ua = make_https_request(
+        PRODUCTION_HOST, SCRIPT_PATH,
+        user_agent="shellshare"
+    )
+    print(f"Request with 'shellshare': {status_custom_ua}")
     
     # Assert the expected behavior
-    assert status_without_ua == 403, (
-        f"Expected 403 without User-Agent, got {status_without_ua}. "
-        "The server may have been updated to not require User-Agent."
+    assert status_python_ua == 403, (
+        f"Expected 403 with Python User-Agent, got {status_python_ua}. "
+        "Cloudflare may have changed its bot protection rules."
     )
     
-    assert status_with_ua != 403, (
-        f"Expected non-403 with User-Agent, got {status_with_ua}. "
-        "The User-Agent header should fix the 403 error."
+    assert status_custom_ua == 200, (
+        f"Expected 200 with custom User-Agent, got {status_custom_ua}. "
+        "The script.exe file may not exist on the server."
     )
     
-    print("✓ Confirmed: Server requires User-Agent header for /bin/script.exe")
+    print("✓ Confirmed: Cloudflare blocks Python-urllib User-Agent")
+    print("✓ PRs #64 and #66 are needed to fix this issue")
 
 
 if __name__ == "__main__":
-    test_server_rejects_requests_without_user_agent()
+    test_cloudflare_blocks_python_user_agent()
