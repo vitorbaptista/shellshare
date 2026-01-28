@@ -2,9 +2,9 @@ name: E2E Tests
 
 on:
   push:
-    branches: [master]
+    branches: [master, upgrade-node-lts]
   pull_request:
-    branches: [master]
+    branches: [master, upgrade-node-lts]
 
 jobs:
   e2e:
