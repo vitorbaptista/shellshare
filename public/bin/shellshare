@@ -52,12 +52,17 @@ def id_generator(size=18, chars=string.ascii_letters + string.digits):
     return ''.join(random.choice(chars) for x in range(size))
 
 
-def terminal_size():
-    cols = subprocess.Popen('tput cols', shell=True, stdout=subprocess.PIPE)
-    rows = subprocess.Popen('tput lines', shell=True, stdout=subprocess.PIPE)
-    cols = int(cols.stdout.read().strip())
-    rows = int(rows.stdout.read().strip())
-    return {'cols': cols, 'rows': rows}
+def terminal_size(default_cols=80, default_rows=24):
+    try:
+        cols = subprocess.Popen('tput cols', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        rows = subprocess.Popen('tput lines', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cols_out = cols.stdout.read().strip()
+        rows_out = rows.stdout.read().strip()
+        if cols_out and rows_out:
+            return {'cols': int(cols_out), 'rows': int(rows_out)}
+    except Exception:
+        pass
+    return {'cols': default_cols, 'rows': default_rows}
 
 
 def post(conn, url, message, room, password):
@@ -150,6 +155,8 @@ def parse_args():
     parser.add_argument('-p', '--password', dest='password',
                         help='room\'s broadcasting password (default: network card\'s MAC address)',
                         default=uuid.getnode())
+    parser.add_argument('--stdin', action='store_true',
+                        help='read from stdin instead of spawning a shell (for testing)')
     args = parser.parse_args()
 
     if not urlparse(args.server).scheme:
@@ -159,46 +166,82 @@ def parse_args():
     return args
 
 
+def stream_stdin(url, room, password):
+    """Stream from stdin to the server (for testing)."""
+    retries = 3
+    try:
+        conn = create_connection(url)
+        while True:
+            data = sys.stdin.read(4096)
+            if not data:
+                break
+            urlencoded = urllib_quote(data).encode('utf-8')
+            encoded_str = base64.b64encode(urlencoded).decode('utf-8')
+            for _ in range(retries):
+                success = post(conn, url, encoded_str, room, password)
+                if success:
+                    break
+                else:
+                    time.sleep(0.5)
+                    conn = create_connection(url)
+            if not success:
+                error('There was an error connecting to the server.')
+                return
+    except NotAuthorizedException:
+        error('You\'re not authorized to share on %s/%s.' % (url, room))
+    except RequestTooLargeException:
+        error('You\'ve wrote too much too fast. Please, slow down.')
+
+
 args = parse_args()
 room = 'r/%s' % args.room
 
-if platform.system() == 'Darwin':
-    shell_args = '-qt 0'
-else:
-    shell_args = '-qf'
-
-if platform.system() == 'Windows':
-    # Download and install MSYS2 version of script
-    bindir = os.path.join(os.path.expanduser('~'), '.shellshare')
-    if not os.path.exists(bindir):
-        os.mkdir(bindir)
-    script_path = os.path.join(bindir, 'script.exe')
-    if not os.path.exists(script_path):
-        script_url = '{0}/bin/script.exe'.format(args.server)
-        should_download = input_func(
-            'Confirm download of dependency from {} into {}? (Y/n) '.format(
-                script_url,
-                script_path
-            )
-        )
-        if should_download.lower() not in {'', 'y', 'yes'}:
-            exit(0)
-        url_req.urlretrieve(script_url, script_path)
-else:
-    # Use OS version of script
-    script_path = 'script'
-
-size = terminal_size()
-if (size['rows'] > 30 or size['cols'] > 160):
-    print('Current terminal size is %dx%d.' % (size['rows'], size['cols']))
-    print('It\'s too big to be viewed on smaller screens.')
-    print('You can resize it anytime.')
-
-print('Sharing terminal in %s/%s' % (args.server, room))
-sys.stdout.flush()
-with tempfile.NamedTemporaryFile(mode='r+b') as tmp:
-    thread.start_new_thread(stream_file,
-                            (tmp, args.server, room, args.password))
-    subprocess.call('%s %s %s' % (script_path, shell_args, tmp.name), shell=True)
+if args.stdin:
+    # Stdin mode for testing - read from stdin and stream to server
+    print('Sharing terminal in %s/%s' % (args.server, room), file=sys.stderr)
+    sys.stderr.flush()
+    stream_stdin(args.server, room, args.password)
     delete(args.server, room, args.password)
-    print('End of transmission.')
+    print('End of transmission.', file=sys.stderr)
+else:
+    # Normal mode - use script command
+    if platform.system() == 'Darwin':
+        shell_args = '-qt 0'
+    else:
+        shell_args = '-qf'
+
+    if platform.system() == 'Windows':
+        # Download and install MSYS2 version of script
+        bindir = os.path.join(os.path.expanduser('~'), '.shellshare')
+        if not os.path.exists(bindir):
+            os.mkdir(bindir)
+        script_path = os.path.join(bindir, 'script.exe')
+        if not os.path.exists(script_path):
+            script_url = '{0}/bin/script.exe'.format(args.server)
+            should_download = input_func(
+                'Confirm download of dependency from {} into {}? (Y/n) '.format(
+                    script_url,
+                    script_path
+                )
+            )
+            if should_download.lower() not in {'', 'y', 'yes'}:
+                exit(0)
+            url_req.urlretrieve(script_url, script_path)
+    else:
+        # Use OS version of script
+        script_path = 'script'
+
+    size = terminal_size()
+    if (size['rows'] > 30 or size['cols'] > 160):
+        print('Current terminal size is %dx%d.' % (size['rows'], size['cols']))
+        print('It\'s too big to be viewed on smaller screens.')
+        print('You can resize it anytime.')
+
+    print('Sharing terminal in %s/%s' % (args.server, room))
+    sys.stdout.flush()
+    with tempfile.NamedTemporaryFile(mode='r+b') as tmp:
+        thread.start_new_thread(stream_file,
+                                (tmp, args.server, room, args.password))
+        subprocess.call('%s %s %s' % (script_path, shell_args, tmp.name), shell=True)
+        delete(args.server, room, args.password)
+        print('End of transmission.')
