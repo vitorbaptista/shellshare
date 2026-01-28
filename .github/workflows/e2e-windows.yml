@@ -63,15 +63,17 @@ jobs:
       - name: Start server
         shell: pwsh
         run: |
-          # Create a batch file to start the server with environment variables
-          @"
-          @echo off
-          set MONGO_URL=mongodb://localhost:27017/shellshare_test
-          set PORT=3000
-          node app.js
-          "@ | Out-File -FilePath "start-server.bat" -Encoding ASCII
-          # Run the batch file in a new process
-          Start-Process cmd.exe -ArgumentList "/c", "start-server.bat" -WindowStyle Hidden
+          # Create a PowerShell script to start the server
+          @'
+          $env:MONGO_URL = "mongodb://localhost:27017/shellshare_test"
+          $env:PORT = "3000"
+          node app.js 2>&1 | Tee-Object -FilePath "server.log"
+          '@ | Out-File -FilePath "start-server.ps1" -Encoding UTF8
+
+          # Start the server in a new PowerShell process that stays alive
+          Start-Process pwsh.exe -ArgumentList "-ExecutionPolicy", "Bypass", "-File", "start-server.ps1" -WorkingDirectory $PWD
+          Start-Sleep -Seconds 3
+          Write-Host "Server process started"
 
       - name: Wait for server
         shell: pwsh
@@ -92,6 +94,8 @@ jobs:
             $elapsed += 2
           }
           Write-Host "Server did not start within $timeout seconds"
+          Write-Host "=== Server log ==="
+          if (Test-Path "server.log") { Get-Content "server.log" } else { Write-Host "No server.log found" }
           exit 1
 
       - name: Install uv
