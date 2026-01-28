@@ -26,7 +26,7 @@ gulp.task(browserify);
 function minifyCss() {
   var cleanCss = require('gulp-clean-css');
 
-  return gulp.src(['!./**/*.min.css', 'public/stylesheet/**/*.css'])
+  return gulp.src('public/stylesheet/**/*.css', { base: 'public/stylesheet', ignore: ['**/*.min.css'] })
              .pipe(cleanCss({compatibility: 'ie8'}))
              .pipe(rename({suffix: '.min'}))
              .pipe(gulp.dest('public/stylesheet'));
@@ -36,10 +36,10 @@ gulp.task(minifyCss);
 function _minifyJs() {
   var terser = require('gulp-terser');
 
-  return gulp.src(['!./**/*.min.js', './public/javascript/*.js'])
+  return gulp.src('public/javascript/*.js', { base: 'public/javascript', ignore: ['**/*.min.js'] })
              .pipe(terser())
              .pipe(rename({suffix: '.min'}))
-             .pipe(gulp.dest('./public/javascript/'));
+             .pipe(gulp.dest('public/javascript'));
 }
 gulp.task('minifyJs', gulp.series(browserify, _minifyJs));
 
