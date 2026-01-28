@@ -1,0 +1,83 @@
+name: E2E Tests (Windows)
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  e2e-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start MongoDB
+        uses: supercharge/mongodb-github-action@1.11.0
+        with:
+          mongodb-version: '7.0'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build assets
+        run: npx gulp build:production
+
+      - name: Start server
+        shell: pwsh
+        run: |
+          $env:MONGO_URL = "mongodb://localhost:27017/shellshare_test"
+          $env:PORT = "3000"
+          Start-Process -FilePath "node" -ArgumentList "app.js" -NoNewWindow
+
+      - name: Wait for server
+        shell: pwsh
+        run: |
+          $timeout = 60
+          $elapsed = 0
+          while ($elapsed -lt $timeout) {
+            try {
+              $response = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 2
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Server is up after $elapsed seconds"
+                exit 0
+              }
+            } catch {
+              Write-Host "Waiting for server... ($elapsed s)"
+            }
+            Start-Sleep -Seconds 2
+            $elapsed += 2
+          }
+          Write-Host "Server did not start within $timeout seconds"
+          exit 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies
+        run: |
+          cd e2e
+          uv sync
+
+      - name: Install Playwright browsers
+        run: |
+          cd e2e
+          uv run playwright install chromium
+
+      - name: Run E2E tests
+        run: |
+          cd e2e
+          uv run pytest -v
+        env:
+          CI: true
