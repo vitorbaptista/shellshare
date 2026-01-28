@@ -57,14 +57,18 @@ function setupSockets() {
 
     socket.on('join', function (room) {
       room = stripPrefix(room);
-      socket.join(room);
-      rooms.push(room);
-      updateUsersCount(io, room);
-      roomsModel.all(room, function(err, data) {
-        if (!err && data) {
-          socket.emit('size', data.size);
-          socket.emit('message', data.message);
-        }
+      socket.join(room).then(function () {
+        rooms.push(room);
+        updateUsersCount(io, room);
+        roomsModel.all(room, function(err, data) {
+          if (!err && data) {
+            socket.emit('size', data.size);
+            socket.emit('message', data.message);
+          }
+        });
+      }).catch(function (err) {
+        // Log the error to avoid unhandled Promise rejections when join fails
+        console.error('Failed to join room:', room, err);
       });
     });
 
