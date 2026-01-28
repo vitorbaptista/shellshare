@@ -52,12 +52,17 @@ def id_generator(size=18, chars=string.ascii_letters + string.digits):
     return ''.join(random.choice(chars) for x in range(size))
 
 
-def terminal_size():
-    cols = subprocess.Popen('tput cols', shell=True, stdout=subprocess.PIPE)
-    rows = subprocess.Popen('tput lines', shell=True, stdout=subprocess.PIPE)
-    cols = int(cols.stdout.read().strip())
-    rows = int(rows.stdout.read().strip())
-    return {'cols': cols, 'rows': rows}
+def terminal_size(default_cols=80, default_rows=24):
+    try:
+        cols = subprocess.Popen('tput cols', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        rows = subprocess.Popen('tput lines', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cols_out = cols.stdout.read().strip()
+        rows_out = rows.stdout.read().strip()
+        if cols_out and rows_out:
+            return {'cols': int(cols_out), 'rows': int(rows_out)}
+    except Exception:
+        pass
+    return {'cols': default_cols, 'rows': default_rows}
 
 
 def post(conn, url, message, room, password):
