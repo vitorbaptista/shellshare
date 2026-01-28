@@ -17,10 +17,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Start MongoDB
-        uses: supercharge/mongodb-github-action@1.11.0
-        with:
-          mongodb-version: '7.0'
+      - name: Install and Start MongoDB
+        shell: pwsh
+        run: |
+          # Download MongoDB
+          $mongoUrl = "https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-7.0.28-signed.msi"
+          $msiPath = "$env:TEMP\mongodb.msi"
+          Write-Host "Downloading MongoDB..."
+          Invoke-WebRequest -Uri $mongoUrl -OutFile $msiPath
+
+          # Install MongoDB
+          Write-Host "Installing MongoDB..."
+          Start-Process msiexec.exe -ArgumentList "/i", $msiPath, "/quiet", "/qn", "INSTALLLOCATION=C:\MongoDB", "ADDLOCAL=all" -Wait
+
+          # Create data directory
+          New-Item -ItemType Directory -Force -Path "C:\data\db"
+
+          # Start MongoDB
+          Write-Host "Starting MongoDB..."
+          Start-Process -FilePath "C:\MongoDB\bin\mongod.exe" -ArgumentList "--dbpath", "C:\data\db" -NoNewWindow
+
+          # Wait for MongoDB to be ready
+          Start-Sleep -Seconds 5
+          Write-Host "MongoDB started"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -37,9 +56,15 @@ jobs:
       - name: Start server
         shell: pwsh
         run: |
-          $env:MONGO_URL = "mongodb://localhost:27017/shellshare_test"
-          $env:PORT = "3000"
-          Start-Process -FilePath "node" -ArgumentList "app.js" -NoNewWindow
+          # Create a batch file to start the server with environment variables
+          @"
+          @echo off
+          set MONGO_URL=mongodb://localhost:27017/shellshare_test
+          set PORT=3000
+          node app.js
+          "@ | Out-File -FilePath "start-server.bat" -Encoding ASCII
+          # Run the batch file in a new process
+          Start-Process cmd.exe -ArgumentList "/c", "start-server.bat" -WindowStyle Hidden
 
       - name: Wait for server
         shell: pwsh
