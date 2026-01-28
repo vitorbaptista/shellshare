@@ -30,23 +30,46 @@ jobs:
           Write-Host "Installing MongoDB..."
           Start-Process msiexec.exe -ArgumentList "/i", $msiPath, "/quiet", "/qn", "ADDLOCAL=all" -Wait
 
-          # Define MongoDB path
-          $mongoPath = "C:\Program Files\MongoDB\Server\7.0\bin"
+          # Find MongoDB path dynamically
+          Write-Host "Looking for mongod.exe..."
+          $mongodPath = Get-ChildItem "C:\Program Files\MongoDB" -Recurse -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Name -eq "mongod.exe" } | 
+            Select-Object -First 1 -ExpandProperty FullName
+          
+          if (-not $mongodPath) {
+            Write-Host "ERROR: mongod.exe not found!"
+            exit 1
+          }
+          Write-Host "Found mongod at: $mongodPath"
 
-          # Verify installation
-          Write-Host "Checking MongoDB installation..."
-          Get-ChildItem "C:\Program Files\MongoDB" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "mongod.exe" } | ForEach-Object { Write-Host "Found: $($_.FullName)" }
-
-          # Create data directory
+          # Create data and log directories
           New-Item -ItemType Directory -Force -Path "C:\data\db"
+          New-Item -ItemType Directory -Force -Path "C:\data\log"
 
-          # Start MongoDB
+          # Start MongoDB with logging
           Write-Host "Starting MongoDB..."
-          Start-Process -FilePath "$mongoPath\mongod.exe" -ArgumentList "--dbpath", "C:\data\db" -NoNewWindow
+          Start-Process -FilePath $mongodPath -ArgumentList "--dbpath", "C:\data\db", "--logpath", "C:\data\log\mongod.log" -WindowStyle Hidden
 
-          # Wait for MongoDB to be ready
-          Start-Sleep -Seconds 10
-          Write-Host "MongoDB started"
+          # Wait and verify MongoDB is running
+          Start-Sleep -Seconds 5
+          $timeout = 30
+          $elapsed = 0
+          while ($elapsed -lt $timeout) {
+            try {
+              $tcp = New-Object System.Net.Sockets.TcpClient
+              $tcp.Connect("localhost", 27017)
+              $tcp.Close()
+              Write-Host "MongoDB is accepting connections after $elapsed seconds"
+              exit 0
+            } catch {
+              Write-Host "Waiting for MongoDB... ($elapsed s)"
+              Start-Sleep -Seconds 2
+              $elapsed += 2
+            }
+          }
+          Write-Host "MongoDB failed to start. Log contents:"
+          if (Test-Path "C:\data\log\mongod.log") { Get-Content "C:\data\log\mongod.log" -Tail 50 }
+          exit 1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
