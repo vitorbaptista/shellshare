@@ -17,9 +17,8 @@ jobs:
 
       - name: Build and start services
         run: |
-          docker compose build
-          docker compose run --rm node ls -la /shellshare/public/stylesheet/
-          docker compose run --rm node ls -la /shellshare/public/javascript/
+          docker compose build --no-cache
+          docker compose run --rm node sh -c "ls -la /shellshare/public/stylesheet/ && ls -la /shellshare/public/stylesheet/vendor/ && ls -la /shellshare/public/javascript/"
           docker compose up -d
 
       - name: Wait for server
