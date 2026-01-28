@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 from __future__ import print_function
 
+VERSION = '1.2.0'
+
 import argparse
 import base64
 import errno
@@ -38,8 +40,11 @@ except NameError:
 if platform.system() == 'Windows':
     try:
         import urllib.request as url_req  # for Python 3
+        opener = url_req.URLopener()
+        opener.addheader('User-Agent', 'shellshare/%s' % VERSION)
     except ImportError:
         import urllib as url_req  # for Python 2
+        opener = None
 
 class NotAuthorizedException(Exception):
     pass
@@ -144,7 +149,7 @@ def parse_args():
     description = 'Transmits the current shell to shellshare'
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('-v', '--version', action='version',
-                        version='%(prog)s 1.2.0')
+                        version='%%(prog)s %s' % VERSION)
     parser.add_argument('-s', '--server', dest='server',
                         help=('shellshare instance URL'
                               ' (default: https://shellshare.net)'),
@@ -226,7 +231,10 @@ else:
             )
             if should_download.lower() not in {'', 'y', 'yes'}:
                 exit(0)
-            url_req.urlretrieve(script_url, script_path)
+            if opener:
+                opener.retrieve(script_url, script_path)
+            else:
+                url_req.urlretrieve(script_url, script_path)
     else:
         # Use OS version of script
         script_path = 'script'
