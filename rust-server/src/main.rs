@@ -254,8 +254,8 @@ fn setup_socket_handlers(io: &SocketIo) {
             // Update user counts for each room
             let io_guard = state.io.read().await;
             if let Some(ref io) = *io_guard {
-                if let Some(ns) = io.of("/") {
-                    for room in rooms {
+                for room in rooms {
+                    if let Some(ns) = io.of("/") {
                         // Count remaining users in room (this socket is already removed)
                         let user_count = ns
                             .within(room.clone())
