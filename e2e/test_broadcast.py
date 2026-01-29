@@ -81,6 +81,10 @@ def test_happy_path_broadcast_appears_in_browser():
         page.wait_for_function("document.getElementById('online-counter').textContent !== '0'", timeout=10000)
         print("Socket.IO connected (user count updated)")
         
+        # Check if Terminal is defined (term.js loaded)
+        terminal_defined = page.evaluate("typeof Terminal !== 'undefined'")
+        print(f"Terminal defined: {terminal_defined}")
+        
         # Broadcast using CLI
         print(f"Broadcasting via CLI: {test_message}")
         returncode, stdout, stderr = broadcast_with_cli(room_id, test_message, password, SERVER_URL)
@@ -89,6 +93,15 @@ def test_happy_path_broadcast_appears_in_browser():
         
         # Wait for Socket.io to deliver the message
         page.wait_for_timeout(2000)
+        
+        # Debug: Check browser state
+        term_exists = page.evaluate("typeof term !== 'undefined' && term !== null")
+        print(f"term variable exists: {term_exists}")
+        
+        # Debug: Check DOM structure
+        terminal_html = page.locator("#terminal").inner_html()
+        print(f"#terminal innerHTML length: {len(terminal_html)}")
+        print(f"#terminal innerHTML (first 500): {terminal_html[:500]}")
         
         # Get terminal content
         terminal = page.locator("#terminal")
