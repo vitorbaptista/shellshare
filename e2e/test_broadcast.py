@@ -95,13 +95,16 @@ def test_happy_path_broadcast_appears_in_browser():
         page.wait_for_timeout(2000)
         
         # Debug: Check browser state
-        term_exists = page.evaluate("typeof term !== 'undefined' && term !== null")
-        print(f"term variable exists: {term_exists}")
+        debug_info = page.evaluate("window.shellshareDebug || {}")
+        print(f"Debug info: {debug_info}")
         
         # Debug: Check DOM structure
         terminal_html = page.locator("#terminal").inner_html()
         print(f"#terminal innerHTML length: {len(terminal_html)}")
-        print(f"#terminal innerHTML (first 500): {terminal_html[:500]}")
+        if len(terminal_html) < 1000:
+            print(f"#terminal innerHTML: {terminal_html}")
+        else:
+            print(f"#terminal innerHTML (first 500): {terminal_html[:500]}")
         
         # Get terminal content
         terminal = page.locator("#terminal")
