@@ -39,11 +39,22 @@ jobs:
       - name: Start server
         shell: pwsh
         run: |
-          # Start the server in a new process that stays alive
+          # Start the server as a background job
           # Use 127.0.0.1 instead of 0.0.0.0 for Windows compatibility
-          Start-Process -FilePath ".\target\release\shellshare.exe" -ArgumentList "server", "--host", "127.0.0.1", "--port", "3000" -RedirectStandardOutput "server.log" -RedirectStandardError "server-error.log"
+          $job = Start-Job -ScriptBlock {
+            Set-Location $using:PWD
+            & ".\target\release\shellshare.exe" server --host "127.0.0.1" --port "3000"
+          }
           Start-Sleep -Seconds 5
-          Write-Host "Server process started"
+          Write-Host "Server job started with ID: $($job.Id)"
+          # Check if job is still running (should be Running, not Failed or Completed)
+          $jobState = (Get-Job -Id $job.Id).State
+          Write-Host "Job state: $jobState"
+          if ($jobState -eq "Failed" -or $jobState -eq "Completed") {
+            Write-Host "Job terminated prematurely! Output:"
+            Receive-Job -Id $job.Id
+            exit 1
+          }
 
       - name: Wait for server
         shell: pwsh
@@ -55,10 +66,12 @@ jobs:
             $proc = Get-Process -Name "shellshare" -ErrorAction SilentlyContinue
             if (-not $proc) {
               Write-Host "ERROR: shellshare process not found!"
-              Write-Host "=== Server log ==="
-              if (Test-Path "server.log") { Get-Content "server.log" } else { Write-Host "No server.log found" }
-              Write-Host "=== Server error log ==="
-              if (Test-Path "server-error.log") { Get-Content "server-error.log" } else { Write-Host "No server-error.log found" }
+              Write-Host "=== Job output ==="
+              $jobs = Get-Job
+              foreach ($j in $jobs) {
+                Write-Host "Job $($j.Id) state: $($j.State)"
+                Receive-Job -Id $j.Id
+              }
               exit 1
             }
             
@@ -79,10 +92,12 @@ jobs:
             $elapsed += 2
           }
           Write-Host "Server did not start within $timeout seconds"
-          Write-Host "=== Server log ==="
-          if (Test-Path "server.log") { Get-Content "server.log" } else { Write-Host "No server.log found" }
-          Write-Host "=== Server error log ==="
-          if (Test-Path "server-error.log") { Get-Content "server-error.log" } else { Write-Host "No server-error.log found" }
+          Write-Host "=== Job output ==="
+          $jobs = Get-Job
+          foreach ($j in $jobs) {
+            Write-Host "Job $($j.Id) state: $($j.State)"
+            Receive-Job -Id $j.Id
+          }
           exit 1
 
       - name: Install uv
