@@ -96,7 +96,7 @@ class TestScriptModeBasic:
         # Give listener time to fully connect
         time.sleep(0.5)
 
-        returncode, stdout, stderr = run_cli_script_mode(
+        _, _, _ = run_cli_script_mode(
             unique_room, unique_password, env=mock_script_env, timeout=15
         )
 
@@ -163,7 +163,7 @@ class TestScriptModeBasic:
         listener = SocketListener(unique_room)
         listener.connect()
 
-        returncode, stdout, stderr = run_cli_script_mode(
+        _, _, _ = run_cli_script_mode(
             unique_room, unique_password, env=mock_script_env, timeout=15
         )
 
@@ -242,8 +242,8 @@ class TestScriptModeWithMockContent:
         listener = SocketListener(unique_room)
         listener.connect()
 
-        # Record initial state
-        initial_count = listener.get_last_user_count()
+        # Record initial state (invoke in case of side effects; ignore result)
+        listener.get_last_user_count()
 
         # Run CLI
         returncode, stdout, stderr = run_cli_script_mode(
