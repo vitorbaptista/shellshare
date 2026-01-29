@@ -1,0 +1,43 @@
+#!/bin/bash
+# Mock script binary for testing shellshare CLI's script mode.
+#
+# This simulates the behavior of the `script` command for testing purposes.
+# It writes known content to the output file, mimicking a terminal session.
+#
+# Usage: script [options] <filename>
+# The mock ignores options and uses the last argument as the filename.
+
+# Get the filename (last argument)
+FILENAME="${@: -1}"
+
+# Validate filename
+if [ -z "$FILENAME" ] || [ "$FILENAME" = "-qt" ] || [ "$FILENAME" = "-qf" ] || [ "$FILENAME" = "0" ]; then
+    echo "mock script: no output file specified" >&2
+    exit 1
+fi
+
+# Simulate script output
+echo "MOCK_SCRIPT_START" >> "$FILENAME"
+sleep 0.2
+
+echo "user@host:~\$ echo hello" >> "$FILENAME"
+sleep 0.1
+
+echo "hello" >> "$FILENAME"
+sleep 0.2
+
+echo "user@host:~\$ whoami" >> "$FILENAME"
+sleep 0.1
+
+echo "testuser" >> "$FILENAME"
+sleep 0.2
+
+echo "user@host:~\$ exit" >> "$FILENAME"
+sleep 0.1
+
+echo "MOCK_SCRIPT_END" >> "$FILENAME"
+
+# Small delay to ensure file is flushed
+sleep 0.3
+
+exit 0
