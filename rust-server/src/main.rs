@@ -101,12 +101,8 @@ struct AppState {
     io: Option<SocketIo>,
 }
 
-/// Request body for POST /r/:room
-#[derive(Debug, Deserialize)]
-struct BroadcastRequest {
-    message: Option<serde_json::Value>,
-    size: Option<serde_json::Value>,
-}
+/// Request body for POST /r/:room - using Value to preserve null vs missing distinction
+type BroadcastRequest = serde_json::Value;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -232,14 +228,16 @@ fn setup_socket_handlers(io: &SocketIo) {
             info!("Client disconnected: {}", socket.id);
 
             // Get all rooms this socket was in and update user counts
+            // The socket is still in rooms at this point but will be removed after this handler
             if let Ok(rooms) = socket.rooms() {
                 for room in rooms {
-                    // Note: after disconnect, this socket won't be counted
-                    let user_count = socket
+                    // Subtract 1 because this socket is still counted but will be removed
+                    let total = socket
                         .within(room.clone())
                         .sockets()
                         .map(|s| s.len())
                         .unwrap_or(0);
+                    let user_count = if total > 0 { total - 1 } else { 0 };
                     let _ = socket.within(room).emit("usersCount", &user_count);
                 }
             }
@@ -353,9 +351,12 @@ async fn broadcast_handler(
         let mut rooms = state.rooms.write().await;
         let room_data = rooms.entry(room_name.clone()).or_default();
 
-        // Handle message
-        if let Some(msg) = &body.message {
-            if let Some(msg_str) = msg.as_str() {
+        // Extract message and size from body (preserving null vs missing)
+        let body_obj = body.as_object();
+        
+        // Handle message (only if it's a non-null string)
+        if let Some(message) = body_obj.and_then(|o| o.get("message")) {
+            if let Some(msg_str) = message.as_str() {
                 room_data.messages.push(msg_str.to_string());
 
                 // Emit accumulated message to all clients in room
@@ -369,14 +370,17 @@ async fn broadcast_handler(
             }
         }
 
-        // Handle size
-        if let Some(ref size) = body.size {
-            room_data.size = Some(size.clone());
-
-            // Emit size to all clients in room
-            if let Some(ref io) = state.io {
-                if let Some(ns) = io.of("/") {
-                    let _ = ns.within(room_name.clone()).emit("size", size);
+        // Handle size - emit if the key exists in the JSON (even if null)
+        if let Some(obj) = body_obj {
+            if obj.contains_key("size") {
+                let size = obj.get("size").unwrap();
+                room_data.size = Some(size.clone());
+                
+                // Emit size to all clients in room
+                if let Some(ref io) = state.io {
+                    if let Some(ns) = io.of("/") {
+                        let _ = ns.within(room_name.clone()).emit("size", size);
+                    }
                 }
             }
         }
