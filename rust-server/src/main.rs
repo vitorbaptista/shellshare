@@ -97,8 +97,8 @@ struct AppState {
     auth_cache: Arc<RwLock<HashMap<String, String>>>,
     /// Room data cache: room -> data
     rooms: Arc<RwLock<HashMap<String, RoomData>>>,
-    /// Socket.IO instance
-    io: Option<SocketIo>,
+    /// Socket.IO instance - wrapped in Arc<RwLock> so handlers see updates
+    io: Arc<RwLock<Option<SocketIo>>>,
 }
 
 /// Request body for POST /r/:room - using Value to preserve null vs missing distinction
@@ -137,7 +137,11 @@ async fn run_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Err
     // Setup Socket.IO event handlers
     setup_socket_handlers(&io);
 
-    app_state.io = Some(io);
+    // Store io in shared state (handlers will see this via Arc)
+    {
+        let mut io_lock = app_state.io.write().await;
+        *io_lock = Some(io);
+    }
 
     // Build router
     let app = Router::new()
@@ -239,7 +243,8 @@ fn setup_socket_handlers(io: &SocketIo) {
                     let user_count = if total > 0 { total - 1 } else { 0 };
                     
                     // Use io instance to broadcast (socket.within may not work during disconnect)
-                    if let Some(ref io) = state.io {
+                    let io_guard = state.io.read().await;
+                    if let Some(ref io) = *io_guard {
                         if let Some(ns) = io.of("/") {
                             let _ = ns.within(room).emit("usersCount", &user_count);
                         }
@@ -366,7 +371,8 @@ async fn broadcast_handler(
 
                 // Emit accumulated message to all clients in room
                 if let Some(accumulated) = room_data.get_accumulated_message() {
-                    if let Some(ref io) = state.io {
+                    let io_guard = state.io.read().await;
+                    if let Some(ref io) = *io_guard {
                         if let Some(ns) = io.of("/") {
                             let _ = ns.within(room_name.clone()).emit("message", &accumulated);
                         }
@@ -382,7 +388,8 @@ async fn broadcast_handler(
                 room_data.size = Some(size.clone());
                 
                 // Emit size to all clients in room
-                if let Some(ref io) = state.io {
+                let io_guard = state.io.read().await;
+                if let Some(ref io) = *io_guard {
                     if let Some(ns) = io.of("/") {
                         let _ = ns.within(room_name.clone()).emit("size", size);
                     }
