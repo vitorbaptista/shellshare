@@ -1,15 +1,28 @@
 //! Shellshare - Live terminal broadcasting
 //!
-//! A Rust implementation of the shellshare server using actix-web.
+//! A Rust implementation of the shellshare server using axum + socketioxide.
 
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, middleware};
+use axum::{
+    body::Body,
+    extract::{Path, State},
+    http::{header, HeaderMap, Request, StatusCode},
+    response::{Html, IntoResponse, Response},
+    routing::{delete, get, post},
+    Json, Router,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use socketioxide::{
+    extract::{Data, SocketRef, State as SioState},
+    SocketIo,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, Level};
+use tower_http::trace::TraceLayer;
+use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 /// Shellshare - Live terminal broadcasting
@@ -32,44 +45,60 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value = "3000")]
         port: u16,
-
-        /// MongoDB connection URI (not used yet - using in-memory storage)
-        #[arg(long, env = "MONGODB_URI", default_value = "mongodb://localhost:27017/shellshare")]
-        mongodb_uri: String,
     },
 }
 
 /// Embedded static files from the public directory
-#[derive(Embed)]
+#[derive(Embed, Clone)]
 #[folder = "../public/"]
 struct StaticAssets;
 
 /// Embedded view templates
-#[derive(Embed)]
+#[derive(Embed, Clone)]
 #[folder = "templates/"]
 struct Templates;
 
-/// Application state
-struct AppState {
-    /// Authorization cache: room -> password
-    auth_cache: RwLock<HashMap<String, String>>,
-    /// Room data cache: room -> messages
-    rooms_cache: RwLock<HashMap<String, RoomData>>,
-}
-
-#[derive(Default, Clone)]
+/// Room data stored in memory
+#[derive(Default, Clone, Debug)]
 struct RoomData {
+    /// Accumulated messages (each is base64 encoded)
     messages: Vec<String>,
+    /// Terminal size
     size: Option<serde_json::Value>,
 }
 
-impl AppState {
-    fn new() -> Self {
-        Self {
-            auth_cache: RwLock::new(HashMap::new()),
-            rooms_cache: RwLock::new(HashMap::new()),
+impl RoomData {
+    /// Get accumulated message: decode all base64 messages, join, re-encode
+    fn get_accumulated_message(&self) -> Option<String> {
+        if self.messages.is_empty() {
+            return None;
+        }
+
+        // Decode all messages and concatenate
+        let mut accumulated = Vec::new();
+        for msg in &self.messages {
+            if let Ok(decoded) = BASE64.decode(msg) {
+                accumulated.extend(decoded);
+            }
+        }
+
+        if accumulated.is_empty() {
+            None
+        } else {
+            Some(BASE64.encode(&accumulated))
         }
     }
+}
+
+/// Shared application state
+#[derive(Default, Clone)]
+struct AppState {
+    /// Authorization cache: room -> secret
+    auth_cache: Arc<RwLock<HashMap<String, String>>>,
+    /// Room data cache: room -> data
+    rooms: Arc<RwLock<HashMap<String, RoomData>>>,
+    /// Socket.IO instance
+    io: Option<SocketIo>,
 }
 
 /// Request body for POST /r/:room
@@ -79,176 +108,301 @@ struct BroadcastRequest {
     size: Option<serde_json::Value>,
 }
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set tracing subscriber");
+    tracing::subscriber::set_global_default(subscriber)?;
 
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Server { host, port, mongodb_uri } => {
-            run_server(&host, port, &mongodb_uri).await
+        Commands::Server { host, port } => {
+            run_server(&host, port).await?;
         }
+    }
+
+    Ok(())
+}
+
+async fn run_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Starting shellshare server on {}:{}", host, port);
+
+    // Shared state
+    let mut app_state = AppState::default();
+
+    // Socket.IO setup
+    let (sio_layer, io) = SocketIo::builder()
+        .with_state(app_state.clone())
+        .build_layer();
+
+    // Setup Socket.IO event handlers
+    setup_socket_handlers(&io);
+
+    app_state.io = Some(io);
+
+    // Build router
+    let app = Router::new()
+        // API routes
+        .route("/", get(index_handler))
+        .route("/r/{*room}", get(room_page_handler))
+        .route("/r/{*room}", post(broadcast_handler))
+        .route("/r/{*room}", delete(delete_room_handler))
+        // Static files - fallback
+        .fallback(serve_static)
+        // State and middleware
+        .with_state(app_state)
+        .layer(sio_layer)
+        .layer(TraceLayer::new_for_http());
+
+    // Run server
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await?;
+    info!("Listening on {}:{}", host, port);
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+/// Setup Socket.IO event handlers
+fn setup_socket_handlers(io: &SocketIo) {
+    io.ns("/", |socket: SocketRef, state: SioState<AppState>| async move {
+        info!("Client connected: {}", socket.id);
+
+        // Handle join event
+        socket.on(
+            "join",
+            |socket: SocketRef, Data::<String>(room), state: SioState<AppState>| async move {
+                // Normalize room name - strip /r/ prefix if present
+                let room_name = normalize_room_name(&room);
+
+                info!(
+                    "Client {} joining room: {} (normalized: {})",
+                    socket.id, room, room_name
+                );
+
+                // Join the socket to the room
+                if let Err(e) = socket.join(room_name.clone()) {
+                    warn!("Failed to join room {}: {:?}", room_name, e);
+                }
+
+                // Get room data
+                let rooms = state.rooms.read().await;
+                let room_data = rooms.get(&room_name).cloned();
+                drop(rooms);
+
+                // Count users in room
+                let user_count = socket
+                    .within(room_name.clone())
+                    .sockets()
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+
+                // Send user count to this client
+                if let Err(e) = socket.emit("usersCount", user_count) {
+                    warn!("Failed to emit usersCount: {:?}", e);
+                }
+
+                // Send existing room data if any
+                if let Some(data) = room_data {
+                    // Send accumulated message
+                    if let Some(msg) = data.get_accumulated_message() {
+                        if let Err(e) = socket.emit("message", msg) {
+                            warn!("Failed to emit message: {:?}", e);
+                        }
+                    }
+
+                    // Send size if set
+                    if let Some(size) = &data.size {
+                        if let Err(e) = socket.emit("size", size.clone()) {
+                            warn!("Failed to emit size: {:?}", e);
+                        }
+                    }
+                }
+
+                // Broadcast updated user count to all in room (including this client)
+                let _ = socket.within(room_name).emit("usersCount", user_count);
+            },
+        );
+
+        // Handle disconnect
+        socket.on_disconnect(|socket: SocketRef| async move {
+            info!("Client disconnected: {}", socket.id);
+
+            // Get all rooms this socket was in and update user counts
+            if let Ok(rooms) = socket.rooms() {
+                for room in rooms {
+                    // Note: after disconnect, this socket won't be counted
+                    let user_count = socket
+                        .within(room.clone())
+                        .sockets()
+                        .map(|s| s.len())
+                        .unwrap_or(0);
+                    let _ = socket.within(room).emit("usersCount", user_count);
+                }
+            }
+        });
+    });
+}
+
+/// Normalize room name by stripping /r/ prefix
+fn normalize_room_name(room: &str) -> String {
+    let room = room.trim_start_matches('/');
+    if room.starts_with("r/") {
+        room[2..].to_string()
+    } else {
+        room.to_string()
     }
 }
 
-async fn run_server(host: &str, port: u16, mongodb_uri: &str) -> std::io::Result<()> {
-    info!("Starting shellshare server on {}:{}", host, port);
-    info!("MongoDB URI: {} (not connected - using in-memory storage)", mongodb_uri);
-
-    let app_state = web::Data::new(AppState::new());
-
-    HttpServer::new(move || {
-        App::new()
-            .app_data(app_state.clone())
-            // API routes
-            .route("/", web::get().to(index_handler))
-            .route("/r/{room}", web::get().to(room_page_handler))
-            .route("/r/{room}", web::post().to(broadcast_handler))
-            .route("/r/{room}", web::delete().to(delete_room_handler))
-            // Static files (embedded) - must be last
-            .route("/{filename:.*}", web::get().to(serve_static))
-            .wrap(middleware::Logger::default())
-    })
-    .bind((host, port))?
-    .run()
-    .await
-}
-
 /// GET / - Home page
-async fn index_handler(req: HttpRequest) -> HttpResponse {
-    let user_agent = req
-        .headers()
-        .get("user-agent")
+async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
+    let user_agent = headers
+        .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    
+
     let is_linux = user_agent.to_lowercase().contains("linux");
-    
+
     match Templates::get("index.html") {
         Some(content) => {
             let html = String::from_utf8_lossy(&content.data);
             // Simple template replacement for isLinux
             let html = if is_linux {
-                html.replace("class=\"instructions-macos\"", "class=\"instructions-linux\"")
-                    .replace("id=\"os-macos\" name=\"os\" value=\"macos\" checked", 
-                             "id=\"os-macos\" name=\"os\" value=\"macos\"")
-                    .replace("id=\"os-linux\" name=\"os\" value=\"linux\"",
-                             "id=\"os-linux\" name=\"os\" value=\"linux\" checked")
+                html.replace(
+                    "class=\"instructions-macos\"",
+                    "class=\"instructions-linux\"",
+                )
+                .replace(
+                    "id=\"os-macos\" name=\"os\" value=\"macos\" checked",
+                    "id=\"os-macos\" name=\"os\" value=\"macos\"",
+                )
+                .replace(
+                    "id=\"os-linux\" name=\"os\" value=\"linux\"",
+                    "id=\"os-linux\" name=\"os\" value=\"linux\" checked",
+                )
             } else {
                 html.to_string()
             };
-            
-            HttpResponse::Ok()
-                .content_type("text/html; charset=utf-8")
-                .body(html)
+
+            Html(html)
         }
-        None => {
-            HttpResponse::InternalServerError().body("Template not found")
-        }
+        None => Html("Template not found".to_string()),
     }
 }
 
 /// GET /r/:room - Room page
-async fn room_page_handler(_path: web::Path<String>) -> HttpResponse {
+async fn room_page_handler(Path(_room): Path<String>) -> impl IntoResponse {
     match Templates::get("room.html") {
-        Some(content) => {
-            HttpResponse::Ok()
-                .content_type("text/html; charset=utf-8")
-                .body(content.data.into_owned())
-        }
-        None => {
-            HttpResponse::InternalServerError().body("Template not found")
-        }
+        Some(content) => Html(String::from_utf8_lossy(&content.data).to_string()),
+        None => Html("Template not found".to_string()),
     }
 }
 
 /// POST /r/:room - Broadcast message to room
 async fn broadcast_handler(
-    path: web::Path<String>,
-    req: HttpRequest,
-    body: web::Json<BroadcastRequest>,
-    state: web::Data<AppState>,
-) -> HttpResponse {
-    let room = format!("/{}", path.into_inner());
-    let auth_header = req
-        .headers()
-        .get("Authorization")
+    Path(room_path): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(body): Json<BroadcastRequest>,
+) -> impl IntoResponse {
+    let room_name = normalize_room_name(&room_path);
+
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    
-    info!("Broadcast to room: {}, auth present: {}", room, !auth_header.is_empty());
-    
+
+    info!(
+        "Broadcast to room: {}, auth present: {}",
+        room_name,
+        !auth_header.is_empty()
+    );
+
     // Check authorization
-    if !check_authorization(&state, &room, auth_header).await {
-        return HttpResponse::Unauthorized().body("Unauthorized");
+    if !check_authorization(&state, &room_name, auth_header).await {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
-    
-    // Store message
+
+    // Store message and emit to Socket.IO clients
     {
-        let mut rooms = state.rooms_cache.write().await;
-        let room_data = rooms.entry(room.clone()).or_default();
-        
+        let mut rooms = state.rooms.write().await;
+        let room_data = rooms.entry(room_name.clone()).or_default();
+
+        // Handle message
         if let Some(msg) = &body.message {
             if let Some(msg_str) = msg.as_str() {
                 room_data.messages.push(msg_str.to_string());
-            } else {
-                // Store JSON value as string
-                room_data.messages.push(msg.to_string());
+
+                // Emit accumulated message to all clients in room
+                if let Some(accumulated) = room_data.get_accumulated_message() {
+                    if let Some(io) = &state.io {
+                        if let Some(ns) = io.of("/").ok() {
+                            let _ = ns.within(room_name.clone()).emit("message", accumulated);
+                        }
+                    }
+                }
             }
         }
-        if body.size.is_some() {
-            room_data.size = body.size.clone();
+
+        // Handle size
+        if let Some(size) = &body.size {
+            room_data.size = Some(size.clone());
+
+            // Emit size to all clients in room
+            if let Some(io) = &state.io {
+                if let Some(ns) = io.of("/").ok() {
+                    let _ = ns.within(room_name.clone()).emit("size", size.clone());
+                }
+            }
         }
     }
-    
-    // TODO: Emit to Socket.IO clients
-    
-    HttpResponse::Ok().body("OK")
+
+    "OK".into_response()
 }
 
 /// DELETE /r/:room - Delete room
 async fn delete_room_handler(
-    path: web::Path<String>,
-    req: HttpRequest,
-    state: web::Data<AppState>,
-) -> HttpResponse {
-    let room = format!("/{}", path.into_inner());
-    let auth_header = req
-        .headers()
-        .get("Authorization")
+    Path(room_path): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let room_name = normalize_room_name(&room_path);
+
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    
-    info!("Delete room: {}, auth present: {}", room, !auth_header.is_empty());
-    
+
+    info!(
+        "Delete room: {}, auth present: {}",
+        room_name,
+        !auth_header.is_empty()
+    );
+
     // Check authorization
-    if !check_authorization(&state, &room, auth_header).await {
-        return HttpResponse::Unauthorized().body("Unauthorized");
+    if !check_authorization(&state, &room_name, auth_header).await {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
-    
+
     // Remove room data
     {
-        let mut rooms = state.rooms_cache.write().await;
-        rooms.remove(&room);
+        let mut rooms = state.rooms.write().await;
+        rooms.remove(&room_name);
     }
     {
         let mut auth = state.auth_cache.write().await;
-        auth.remove(&room);
+        auth.remove(&room_name);
     }
-    
-    HttpResponse::Accepted().body("Accepted")
+
+    StatusCode::ACCEPTED.into_response()
 }
 
 /// Check if the given authorization is valid for the room
 async fn check_authorization(state: &AppState, room: &str, secret: &str) -> bool {
     let auth_cache = state.auth_cache.read().await;
-    
+
     if let Some(existing_secret) = auth_cache.get(room) {
         // Room exists, check if secret matches
         existing_secret == secret
@@ -266,17 +420,21 @@ async fn check_authorization(state: &AppState, room: &str, secret: &str) -> bool
 }
 
 /// Serve embedded static files
-async fn serve_static(path: web::Path<String>) -> HttpResponse {
-    let path = path.into_inner();
-    
-    match StaticAssets::get(&path) {
+async fn serve_static(req: Request<Body>) -> impl IntoResponse {
+    let path = req.uri().path().trim_start_matches('/');
+
+    match StaticAssets::get(path) {
         Some(content) => {
-            let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            HttpResponse::Ok()
-                .content_type(mime.as_ref())
-                .insert_header(("Cache-Control", "public, max-age=2678400"))
-                .body(content.data.into_owned())
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            Response::builder()
+                .header(header::CONTENT_TYPE, mime.as_ref())
+                .header(header::CACHE_CONTROL, "public, max-age=2678400")
+                .body(Body::from(content.data.into_owned()))
+                .unwrap()
         }
-        None => HttpResponse::NotFound().body("Not Found"),
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("Not Found"))
+            .unwrap(),
     }
 }

@@ -10,16 +10,16 @@ name = "shellshare"
 path = "src/main.rs"
 
 [dependencies]
-# Web framework
-actix-web = "4"
-actix-files = "0.6"
-actix-rt = "2"
+# Web framework (axum has better socketioxide integration)
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full", "sync"] }
 
 # Static file embedding
-rust-embed = { version = "8", features = ["mime-guess"] }
+rust-embed = { version = "8", features = ["mime-guess", "axum"] }
 mime_guess = "2"
 
 # CLI
@@ -33,11 +33,11 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Socket.IO (simplified - we'll implement basic WebSocket first)
-# socketioxide = { version = "0.15", features = ["state"] }
+# Socket.IO
+socketioxide = { version = "0.15", features = ["state"] }
 
-# For now, skip MongoDB and use in-memory storage
-# mongodb = "3"
+# Base64 encoding for message accumulation
+base64 = "0.22"
 
 [profile.release]
 lto = true
