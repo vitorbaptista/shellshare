@@ -223,22 +223,27 @@ fn setup_socket_handlers(io: &SocketIo) {
             },
         );
 
-        // Handle disconnect
-        socket.on_disconnect(|socket: SocketRef| async move {
+        // Handle disconnect - need state to access io for proper broadcast
+        socket.on_disconnect(|socket: SocketRef, state: SioState<AppState>| async move {
             info!("Client disconnected: {}", socket.id);
 
             // Get all rooms this socket was in and update user counts
-            // The socket is still in rooms at this point but will be removed after this handler
             if let Ok(rooms) = socket.rooms() {
                 for room in rooms {
-                    // Subtract 1 because this socket is still counted but will be removed
+                    // Count remaining users (subtract 1 for this disconnecting socket)
                     let total = socket
                         .within(room.clone())
                         .sockets()
                         .map(|s| s.len())
                         .unwrap_or(0);
                     let user_count = if total > 0 { total - 1 } else { 0 };
-                    let _ = socket.within(room).emit("usersCount", &user_count);
+                    
+                    // Use io instance to broadcast (socket.within may not work during disconnect)
+                    if let Some(ref io) = state.io {
+                        if let Some(ns) = io.of("/") {
+                            let _ = ns.within(room).emit("usersCount", &user_count);
+                        }
+                    }
                 }
             }
         });
