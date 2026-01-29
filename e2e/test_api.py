@@ -55,6 +55,18 @@ def wait_for_server(url, timeout_seconds=30):
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
+class CaseInsensitiveDict(dict):
+    """A dict with case-insensitive key lookup."""
+    def __getitem__(self, key):
+        return super().__getitem__(key.lower())
+    
+    def get(self, key, default=None):
+        return super().get(key.lower(), default)
+    
+    def __contains__(self, key):
+        return super().__contains__(key.lower())
+
+
 def make_request(method, path, headers=None, body=None):
     """Make an HTTP request and return (status, headers, body)."""
     parsed = urllib.parse.urlparse(SERVER_URL)
@@ -69,7 +81,8 @@ def make_request(method, path, headers=None, body=None):
     response = conn.getresponse()
     
     status = response.status
-    resp_headers = dict(response.getheaders())
+    # Use case-insensitive dict for headers (HTTP headers are case-insensitive)
+    resp_headers = CaseInsensitiveDict({k.lower(): v for k, v in response.getheaders()})
     resp_body = response.read().decode('utf-8', errors='replace')
     
     conn.close()
@@ -92,7 +105,8 @@ def make_raw_request(method, path, headers=None, body=None):
     response = conn.getresponse()
     
     status = response.status
-    resp_headers = dict(response.getheaders())
+    # Use case-insensitive dict for headers (HTTP headers are case-insensitive)
+    resp_headers = CaseInsensitiveDict({k.lower(): v for k, v in response.getheaders()})
     resp_body = response.read().decode('utf-8', errors='replace')
     
     conn.close()
