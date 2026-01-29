@@ -51,7 +51,7 @@ def wait_for_server(url, timeout_seconds=30):
             urllib.request.urlopen(url, timeout=1)
             return True
         except Exception:
-            time.sleep(0.5)
+            time.sleep(1.0)
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
@@ -263,7 +263,7 @@ class TestBroadcast:
         assert status1 == 200, f"First request failed: {status1}"
         
         # Wait for authorization to be persisted (async operation)
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Second request with different password should fail
         status2, _, _ = make_request(
@@ -389,7 +389,7 @@ class TestDeleteRoom:
         )
         
         # Wait for authorization to be persisted (async operation)
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Try to delete with wrong password
         status, _, _ = make_request(
@@ -463,7 +463,7 @@ class TestAuthorization:
         assert status == 200, "Failed to claim room"
         
         # Wait for authorization to be persisted
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Try with wrong password
         status, _, _ = make_request(
@@ -503,7 +503,7 @@ class TestAuthorization:
         assert status2 == 200, "Failed to claim room 2"
         
         # Wait for authorizations to be persisted
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Password 1 should not work on room 2
         status3, _, _ = make_request(
@@ -690,7 +690,7 @@ class TestMissingAuthorizationHeader:
         assert status1 == 200, f"Failed to claim room: {status1}"
         
         # Wait for auth to persist
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Now try without Authorization header
         status2, _, _ = make_request(
@@ -1202,7 +1202,7 @@ class TestResponseBodyFormat:
             headers={"Authorization": password1},
             body=body
         )
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Try wrong password
         status, headers, resp_body = make_request(
@@ -1318,7 +1318,7 @@ class TestDeleteEdgeCases:
         assert status2 == 202, f"Failed to delete room: {status2}"
         
         # Wait for deletion to complete
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Reclaim with different password
         status3, _, _ = make_request(
@@ -1435,7 +1435,7 @@ class TestResponseHeaders:
             headers={"Authorization": password1},
             body=body
         )
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Wrong password
         status, headers, resp_body = make_request(
