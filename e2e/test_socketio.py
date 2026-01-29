@@ -61,12 +61,21 @@ def decode_message(encoded):
     return urllib.parse.unquote(decoded_b64)
 
 
-def broadcast_message(room_id, message, password, size=None):
-    """Broadcast a message via HTTP POST."""
+_DEFAULT_SIZE = {"rows": 24, "cols": 80}
+_UNSET = object()  # Sentinel for distinguishing None from unset
+
+
+def broadcast_message(room_id, message, password, size=_UNSET):
+    """Broadcast a message via HTTP POST.
+    
+    Args:
+        size: If not provided, defaults to {"rows": 24, "cols": 80}.
+              Pass None explicitly to send null in JSON.
+    """
     import http.client
     
-    if size is None:
-        size = {"rows": 24, "cols": 80}
+    if size is _UNSET:
+        size = _DEFAULT_SIZE
     
     parsed = urllib.parse.urlparse(SERVER_URL)
     conn = http.client.HTTPConnection(parsed.netloc)
