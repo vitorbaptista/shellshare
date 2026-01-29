@@ -200,7 +200,7 @@ fn setup_socket_handlers(io: &SocketIo) {
                     .unwrap_or(0);
 
                 // Send user count to this client
-                if let Err(e) = socket.emit("usersCount", user_count) {
+                if let Err(e) = socket.emit("usersCount", &user_count) {
                     warn!("Failed to emit usersCount: {:?}", e);
                 }
 
@@ -208,21 +208,21 @@ fn setup_socket_handlers(io: &SocketIo) {
                 if let Some(data) = room_data {
                     // Send accumulated message
                     if let Some(msg) = data.get_accumulated_message() {
-                        if let Err(e) = socket.emit("message", msg) {
+                        if let Err(e) = socket.emit("message", &msg) {
                             warn!("Failed to emit message: {:?}", e);
                         }
                     }
 
                     // Send size if set
-                    if let Some(size) = &data.size {
-                        if let Err(e) = socket.emit("size", size.clone()) {
+                    if let Some(ref size) = data.size {
+                        if let Err(e) = socket.emit("size", size) {
                             warn!("Failed to emit size: {:?}", e);
                         }
                     }
                 }
 
                 // Broadcast updated user count to all in room (including this client)
-                let _ = socket.within(room_name).emit("usersCount", user_count);
+                let _ = socket.within(room_name).emit("usersCount", &user_count);
             },
         );
 
@@ -239,7 +239,7 @@ fn setup_socket_handlers(io: &SocketIo) {
                         .sockets()
                         .map(|s| s.len())
                         .unwrap_or(0);
-                    let _ = socket.within(room).emit("usersCount", user_count);
+                    let _ = socket.within(room).emit("usersCount", &user_count);
                 }
             }
         });
@@ -337,9 +337,10 @@ async fn broadcast_handler(
 
                 // Emit accumulated message to all clients in room
                 if let Some(accumulated) = room_data.get_accumulated_message() {
-                    if let Some(io) = &state.io {
-                        if let Some(ns) = io.of("/").ok() {
-                            let _ = ns.within(room_name.clone()).emit("message", accumulated);
+                    if let Some(ref io) = state.io {
+                        let ns = io.of("/");
+                        if let Ok(ns) = ns {
+                            let _ = ns.within(room_name.clone()).emit("message", &accumulated);
                         }
                     }
                 }
@@ -347,13 +348,14 @@ async fn broadcast_handler(
         }
 
         // Handle size
-        if let Some(size) = &body.size {
+        if let Some(ref size) = body.size {
             room_data.size = Some(size.clone());
 
             // Emit size to all clients in room
-            if let Some(io) = &state.io {
-                if let Some(ns) = io.of("/").ok() {
-                    let _ = ns.within(room_name.clone()).emit("size", size.clone());
+            if let Some(ref io) = state.io {
+                let ns = io.of("/");
+                if let Ok(ns) = ns {
+                    let _ = ns.within(room_name.clone()).emit("size", size);
                 }
             }
         }
