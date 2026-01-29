@@ -4,10 +4,10 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
-    http::{header, HeaderMap, Request, StatusCode},
+    extract::{Path, State, DefaultBodyLimit},
+    http::{header, HeaderMap, Request, StatusCode, Method},
     response::{Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post, delete},
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -155,6 +155,7 @@ async fn run_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Err
         // State and middleware
         .with_state(app_state)
         .layer(sio_layer)
+        .layer(DefaultBodyLimit::max(300 * 1024)) // 300KB limit
         .layer(TraceLayer::new_for_http());
 
     // Run server
@@ -286,17 +287,35 @@ async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
                 html.to_string()
             };
 
-            Html(html)
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(html))
+                .unwrap()
         }
-        None => Html("Template not found".to_string()),
+        None => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Template not found"))
+            .unwrap(),
     }
 }
 
 /// GET /r/:room - Room page
 async fn room_page_handler(Path(_room): Path<String>) -> impl IntoResponse {
     match Templates::get("room.html") {
-        Some(content) => Html(String::from_utf8_lossy(&content.data).to_string()),
-        None => Html("Template not found".to_string()),
+        Some(content) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(content.data.into_owned()))
+                .unwrap()
+        }
+        None => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Template not found"))
+            .unwrap(),
     }
 }
 
@@ -322,7 +341,11 @@ async fn broadcast_handler(
 
     // Check authorization
     if !check_authorization(&state, &room_name, auth_header).await {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Unauthorized"))
+            .unwrap();
     }
 
     // Store message and emit to Socket.IO clients
@@ -359,7 +382,11 @@ async fn broadcast_handler(
         }
     }
 
-    "OK".into_response()
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from("OK"))
+        .unwrap()
 }
 
 /// DELETE /r/:room - Delete room
@@ -383,7 +410,11 @@ async fn delete_room_handler(
 
     // Check authorization
     if !check_authorization(&state, &room_name, auth_header).await {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Unauthorized"))
+            .unwrap();
     }
 
     // Remove room data
@@ -396,7 +427,11 @@ async fn delete_room_handler(
         auth.remove(&room_name);
     }
 
-    StatusCode::ACCEPTED.into_response()
+    Response::builder()
+        .status(StatusCode::ACCEPTED)
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from("Accepted"))
+        .unwrap()
 }
 
 /// Check if the given authorization is valid for the room
@@ -422,11 +457,22 @@ async fn check_authorization(state: &AppState, room: &str, secret: &str) -> bool
 /// Serve embedded static files
 async fn serve_static(req: Request<Body>) -> impl IntoResponse {
     let path = req.uri().path().trim_start_matches('/');
+    let method = req.method();
+
+    // Only allow GET and HEAD for static files
+    if method != Method::GET && method != Method::HEAD {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Not Found"))
+            .unwrap();
+    }
 
     match StaticAssets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
             Response::builder()
+                .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
                 .header(header::CACHE_CONTROL, "public, max-age=2678400")
                 .body(Body::from(content.data.into_owned()))
@@ -434,6 +480,7 @@ async fn serve_static(req: Request<Body>) -> impl IntoResponse {
         }
         None => Response::builder()
             .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
             .body(Body::from("Not Found"))
             .unwrap(),
     }
