@@ -203,7 +203,83 @@ def test_terminal_size_updates_in_browser():
         browser.close()
 
 
+def test_multiple_broadcasts_no_duplication():
+    """
+    Test that multiple broadcasts don't cause message duplication.
+
+    Bug scenario (before fix):
+    - POST 1: "AAA" → server broadcasts "AAA"
+    - POST 2: "BBB" → server broadcasts "AAABBB" (entire history!)
+    - Browser sees: "AAA" + "AAABBB" = "AAA" duplicated
+
+    This test should FAIL with the current Rust server bug.
+    """
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+
+    # Use unique markers that are easy to count
+    marker_a = f"MARKER_ALPHA_{random_id(6)}"
+    marker_b = f"MARKER_BETA_{random_id(6)}"
+
+    print(f"Waiting for server at {SERVER_URL}...")
+    wait_for_server(SERVER_URL)
+    print("Server is ready!")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+
+        # Navigate to room
+        room_url = f"{SERVER_URL}/r/{room_id}"
+        print(f"Opening room: {room_url}")
+        page.goto(room_url)
+
+        # Wait for terminal and socket connection
+        page.wait_for_selector("#terminal", timeout=10000)
+        page.wait_for_function(
+            "document.getElementById('online-counter').textContent !== '0'",
+            timeout=10000
+        )
+        print("Terminal ready and Socket.IO connected")
+
+        # First broadcast
+        print(f"Broadcasting first message: {marker_a}")
+        returncode, _, stderr = broadcast_with_cli(room_id, marker_a, password, SERVER_URL)
+        assert returncode == 0, f"First broadcast failed: {stderr}"
+
+        # Wait for message to arrive
+        page.wait_for_timeout(1000)
+
+        # Second broadcast
+        print(f"Broadcasting second message: {marker_b}")
+        returncode, _, stderr = broadcast_with_cli(room_id, marker_b, password, SERVER_URL)
+        assert returncode == 0, f"Second broadcast failed: {stderr}"
+
+        # Wait for message to arrive
+        page.wait_for_timeout(1000)
+
+        # Get terminal content
+        terminal = page.locator("#terminal")
+        content = terminal.text_content()
+        print(f"Terminal content: {content[:200]}...")
+
+        # Count occurrences of each marker
+        count_a = content.count(marker_a)
+        count_b = content.count(marker_b)
+
+        print(f"Marker A count: {count_a} (expected: 1)")
+        print(f"Marker B count: {count_b} (expected: 1)")
+
+        # Each marker should appear exactly once
+        assert count_a == 1, f"Marker A appeared {count_a} times, expected 1 (duplication bug!)"
+        assert count_b == 1, f"Marker B appeared {count_b} times, expected 1 (duplication bug!)"
+
+        print("✓ PASSED: No message duplication!")
+        browser.close()
+
+
 if __name__ == "__main__":
     test_happy_path_broadcast_appears_in_browser()
     test_user_counter_shows_in_browser()
     test_terminal_size_updates_in_browser()
+    test_multiple_broadcasts_no_duplication()

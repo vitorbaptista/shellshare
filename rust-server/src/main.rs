@@ -418,13 +418,12 @@ async fn broadcast_handler(
             if let Some(msg_str) = message.as_str() {
                 room_data.messages.push(msg_str.to_string());
 
-                // Emit accumulated message to all clients in room
-                if let Some(accumulated) = room_data.get_accumulated_message() {
-                    let io_guard = state.io.read().await;
-                    if let Some(ref io) = *io_guard {
-                        if let Some(ns) = io.of("/") {
-                            let _ = ns.within(room_name.clone()).emit("message", &accumulated);
-                        }
+                // Emit ONLY the new message to all clients in room
+                // (accumulated message is only sent when a new client joins)
+                let io_guard = state.io.read().await;
+                if let Some(ref io) = *io_guard {
+                    if let Some(ns) = io.of("/") {
+                        let _ = ns.within(room_name.clone()).emit("message", msg_str);
                     }
                 }
             }
