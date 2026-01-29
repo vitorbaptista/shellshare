@@ -11,9 +11,15 @@ Test categories:
 - Script mode streaming
 - Terminal size handling
 - Session lifecycle
+
+Note: These tests are skipped on Windows because:
+1. Windows CLI prompts for script.exe download confirmation
+2. Tests run without TTY, causing EOFError
+3. Mock script is a bash script, not Windows executable
 """
 
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -27,6 +33,12 @@ from conftest import (
     SERVER_URL,
     SocketListener,
     random_id,
+)
+
+# Skip all tests in this module on Windows
+pytestmark = pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason="Script mode tests require Unix (mock script is bash, Windows prompts for download)"
 )
 
 
