@@ -40,8 +40,9 @@ jobs:
         shell: pwsh
         run: |
           # Start the server in a new process that stays alive
-          Start-Process -FilePath ".\target\release\shellshare.exe" -ArgumentList "server", "--port", "3000" -RedirectStandardOutput "server.log" -RedirectStandardError "server-error.log"
-          Start-Sleep -Seconds 3
+          # Use 127.0.0.1 instead of 0.0.0.0 for Windows compatibility
+          Start-Process -FilePath ".\target\release\shellshare.exe" -ArgumentList "server", "--host", "127.0.0.1", "--port", "3000" -RedirectStandardOutput "server.log" -RedirectStandardError "server-error.log"
+          Start-Sleep -Seconds 5
           Write-Host "Server process started"
 
       - name: Wait for server
