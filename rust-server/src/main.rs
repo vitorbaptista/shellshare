@@ -338,8 +338,7 @@ async fn broadcast_handler(
                 // Emit accumulated message to all clients in room
                 if let Some(accumulated) = room_data.get_accumulated_message() {
                     if let Some(ref io) = state.io {
-                        let ns = io.of("/");
-                        if let Ok(ns) = ns {
+                        if let Some(ns) = io.of("/") {
                             let _ = ns.within(room_name.clone()).emit("message", &accumulated);
                         }
                     }
@@ -353,8 +352,7 @@ async fn broadcast_handler(
 
             // Emit size to all clients in room
             if let Some(ref io) = state.io {
-                let ns = io.of("/");
-                if let Ok(ns) = ns {
+                if let Some(ns) = io.of("/") {
                     let _ = ns.within(room_name.clone()).emit("size", size);
                 }
             }
