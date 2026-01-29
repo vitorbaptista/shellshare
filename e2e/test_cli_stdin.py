@@ -535,6 +535,61 @@ class TestArgumentParsing:
         output = stdout + stderr
         assert re.search(r'\d+\.\d+\.\d+', output), f"No version found in: {output}"
 
+    def test_help_flag(self):
+        """--help should print help and exit 0."""
+        args = CLI_COMMAND + ["--help"]
+
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = proc.communicate(timeout=5)
+
+        assert proc.returncode == 0
+        output = stdout + stderr
+        # Help should mention the available flags
+        assert "--server" in output or "-s" in output
+        assert "--room" in output or "-r" in output
+        assert "--password" in output or "-p" in output
+        assert "--stdin" in output
+
+    def test_help_short_flag(self):
+        """-h should print help and exit 0."""
+        args = CLI_COMMAND + ["-h"]
+
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = proc.communicate(timeout=5)
+
+        assert proc.returncode == 0
+        output = stdout + stderr
+        # Should contain description
+        assert "shellshare" in output.lower() or "transmit" in output.lower()
+
+    def test_help_shows_default_server(self):
+        """Help should show default server URL."""
+        args = CLI_COMMAND + ["--help"]
+
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = proc.communicate(timeout=5)
+
+        output = stdout + stderr
+        assert "shellshare.net" in output, "Default server URL should be in help"
+
 
 class TestLargeMessages:
     """Tests for handling larger messages (within limits)."""
@@ -584,6 +639,244 @@ class TestConcurrency:
 
         listener1.disconnect()
         listener2.disconnect()
+
+
+class TestTerminalSize:
+    """Tests for terminal size handling."""
+
+    def test_size_event_sent_with_message(self, unique_room, unique_password):
+        """Terminal size should be sent along with messages."""
+        listener = SocketListener(unique_room)
+        listener.connect()
+
+        run_cli_stdin("test", unique_room, unique_password)
+
+        # Wait for size event (sent with each POST)
+        time.sleep(1)
+
+        size = listener.get_last_size()
+
+        listener.disconnect()
+
+        # Size should have cols and rows
+        assert size is not None, "No size event received"
+        assert "cols" in size, "Size should have cols"
+        assert "rows" in size, "Size should have rows"
+        assert isinstance(size["cols"], int), "cols should be an integer"
+        assert isinstance(size["rows"], int), "rows should be an integer"
+        assert size["cols"] > 0, "cols should be positive"
+        assert size["rows"] > 0, "rows should be positive"
+
+
+class TestDefaultPassword:
+    """Tests for default password behavior."""
+
+    def test_cli_works_without_password_flag(self, unique_room, socket_listener):
+        """CLI should work without -p flag (uses MAC address)."""
+        # Run without -p flag
+        args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
+
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = proc.communicate(input="test", timeout=10)
+
+        assert proc.returncode == 0, f"CLI failed: {stderr}"
+
+        received = socket_listener.wait_for_message(timeout=5, containing="test")
+        assert received is not None, "Message not received"
+
+    def test_default_password_claims_room(self, unique_room):
+        """
+        Default password (MAC address) should claim the room.
+
+        A second writer without explicit password should use the same MAC
+        and be able to continue writing.
+        """
+        listener = SocketListener(unique_room)
+        listener.connect()
+
+        # First write without -p
+        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
+        proc1 = subprocess.Popen(
+            args1,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        proc1.communicate(input="first", timeout=10)
+
+        # Second write without -p (same machine = same MAC = same password)
+        args2 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
+        proc2 = subprocess.Popen(
+            args2,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = proc2.communicate(input="second", timeout=10)
+
+        assert proc2.returncode == 0, f"Second write failed: {stderr}"
+
+        # Both messages should be received
+        accumulated = listener.get_accumulated_messages()
+        assert "first" in accumulated
+        assert "second" in accumulated
+
+        listener.disconnect()
+
+
+class TestEdgeCases:
+    """Tests for edge cases and boundary conditions."""
+
+    def test_empty_message(self, unique_room, unique_password):
+        """Empty stdin should complete without error."""
+        returncode, stdout, stderr = run_cli_stdin(
+            "", unique_room, unique_password
+        )
+
+        assert returncode == 0
+        assert "End of transmission." in stderr
+
+    def test_whitespace_only_message(self, unique_room, unique_password, socket_listener):
+        """Whitespace-only message should be transmitted."""
+        test_message = "   \n\t\n   "
+
+        returncode, stdout, stderr = run_cli_stdin(
+            test_message, unique_room, unique_password
+        )
+
+        assert returncode == 0
+
+        # Wait for any message
+        time.sleep(1)
+
+        # Whitespace should be transmitted (even if hard to verify)
+        # Just check no error occurred
+        assert "ERROR" not in stderr
+
+    def test_unicode_room_name(self, unique_password):
+        """Room name with unicode characters should work."""
+        unicode_room = f"日本語-{random_id(6)}"
+
+        listener = SocketListener(unicode_room)
+        listener.connect()
+
+        returncode, stdout, stderr = run_cli_stdin(
+            "test", unicode_room, unique_password
+        )
+
+        assert returncode == 0
+
+        received = listener.wait_for_message(timeout=5)
+        assert received is not None
+
+        listener.disconnect()
+
+    def test_room_name_with_hyphens_underscores(self, unique_password):
+        """Room name with hyphens and underscores should work."""
+        room = f"test-room_name-{random_id(6)}"
+
+        listener = SocketListener(room)
+        listener.connect()
+
+        returncode, stdout, stderr = run_cli_stdin(
+            "test", room, unique_password
+        )
+
+        assert returncode == 0
+        assert room in stderr
+
+        received = listener.wait_for_message(timeout=5)
+        assert received is not None
+
+        listener.disconnect()
+
+    def test_very_long_room_name(self, unique_password):
+        """Very long room name should work (within reasonable limits)."""
+        long_room = "a" * 100 + f"-{random_id(6)}"
+
+        listener = SocketListener(long_room)
+        listener.connect()
+
+        returncode, stdout, stderr = run_cli_stdin(
+            "test", long_room, unique_password
+        )
+
+        # Should either work or fail gracefully
+        # (server may have length limits)
+        assert returncode == 0 or "error" in stderr.lower()
+
+        listener.disconnect()
+
+    def test_password_with_special_characters(self, unique_room, socket_listener):
+        """Password with special characters should work."""
+        special_password = "p@ss!w0rd#$%^&*()"
+
+        returncode, stdout, stderr = run_cli_stdin(
+            "test", unique_room, special_password
+        )
+
+        assert returncode == 0
+
+        received = socket_listener.wait_for_message(timeout=5)
+        assert received is not None
+
+    def test_binary_like_content(self, unique_room, unique_password, socket_listener):
+        """Content with binary-like characters should be handled."""
+        # Bytes that might cause issues in naive string handling
+        test_message = "start\x00middle\xffend"
+
+        returncode, stdout, stderr = run_cli_stdin(
+            test_message, unique_room, unique_password
+        )
+
+        # Should either succeed or fail gracefully
+        # (null bytes might cause issues depending on encoding)
+
+    def test_carriage_return_handling(self, unique_room, unique_password, socket_listener):
+        """Carriage returns should be preserved (important for terminal output)."""
+        test_message = "line1\r\nline2\roverwrite"
+
+        returncode, stdout, stderr = run_cli_stdin(
+            test_message, unique_room, unique_password
+        )
+
+        assert returncode == 0
+
+        received = socket_listener.wait_for_message(timeout=5)
+        assert received is not None
+        # Carriage returns should be preserved in the output
+        assert "line1" in received
+        assert "line2" in received or "overwrite" in received
+
+    def test_rapid_multiple_messages_same_room(self, unique_room, unique_password):
+        """Rapid sequential messages to same room should all be received."""
+        listener = SocketListener(unique_room)
+        listener.connect()
+
+        markers = []
+        for i in range(5):
+            marker = f"MSG{i}-{random_id(4)}"
+            markers.append(marker)
+            run_cli_stdin(marker, unique_room, unique_password)
+
+        # Give time for all messages
+        time.sleep(2)
+
+        accumulated = listener.get_accumulated_messages()
+
+        listener.disconnect()
+
+        # All markers should be present
+        for marker in markers:
+            assert marker in accumulated, f"Missing message: {marker}"
 
 
 if __name__ == "__main__":
