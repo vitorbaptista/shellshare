@@ -67,14 +67,8 @@
         }
       });
       socket.on('message', function (message) {
-        // Debug: track received messages
-        window.shellshareDebug = window.shellshareDebug || {messages: [], termState: null};
-        window.shellshareDebug.messages.push(message);
-        window.shellshareDebug.termState = term ? 'defined' : 'undefined';
-        
         if (term && message) {
           var decoded_message = decodeURIComponent(atob(message));
-          window.shellshareDebug.lastDecoded = decoded_message;
           term.write(decoded_message);
         }
       });

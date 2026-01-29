@@ -387,6 +387,23 @@ async fn broadcast_handler(
         // Extract message and size from body (preserving null vs missing)
         let body_obj = body.as_object();
         
+        // Handle size FIRST - emit if the key exists in the JSON (even if null)
+        // This must come before message so the terminal is resized before content arrives
+        if let Some(obj) = body_obj {
+            if obj.contains_key("size") {
+                let size = obj.get("size").unwrap();
+                room_data.size = Some(size.clone());
+                
+                // Emit size to all clients in room
+                let io_guard = state.io.read().await;
+                if let Some(ref io) = *io_guard {
+                    if let Some(ns) = io.of("/") {
+                        let _ = ns.within(room_name.clone()).emit("size", size);
+                    }
+                }
+            }
+        }
+
         // Handle message (only if it's a non-null string)
         if let Some(message) = body_obj.and_then(|o| o.get("message")) {
             if let Some(msg_str) = message.as_str() {
@@ -399,22 +416,6 @@ async fn broadcast_handler(
                         if let Some(ns) = io.of("/") {
                             let _ = ns.within(room_name.clone()).emit("message", &accumulated);
                         }
-                    }
-                }
-            }
-        }
-
-        // Handle size - emit if the key exists in the JSON (even if null)
-        if let Some(obj) = body_obj {
-            if obj.contains_key("size") {
-                let size = obj.get("size").unwrap();
-                room_data.size = Some(size.clone());
-                
-                // Emit size to all clients in room
-                let io_guard = state.io.read().await;
-                if let Some(ref io) = *io_guard {
-                    if let Some(ns) = io.of("/") {
-                        let _ = ns.within(room_name.clone()).emit("size", size);
                     }
                 }
             }
