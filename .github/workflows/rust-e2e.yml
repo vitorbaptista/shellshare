@@ -33,7 +33,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             rust-server/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-server/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-server/Cargo.toml', 'rust-server/Cargo.lock') }}
 
       - name: Build Rust server
         working-directory: rust-server

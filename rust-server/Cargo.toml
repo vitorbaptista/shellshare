@@ -10,7 +10,7 @@ name = "shellshare"
 path = "src/main.rs"
 
 [dependencies]
-# Web framework (axum has better socketioxide integration)
+# Web framework
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }

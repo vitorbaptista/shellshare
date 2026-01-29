@@ -283,9 +283,14 @@ fn normalize_room_name(room: &str) -> String {
     };
     // URL-decode to handle encoded characters from Socket.IO
     // (Axum auto-decodes HTTP paths, but Socket.IO sends raw strings)
-    percent_decode_str(room)
-        .decode_utf8_lossy()
-        .into_owned()
+    // Use strict UTF-8 decoding to avoid conflating invalid UTF-8 with
+    // valid inputs that contain the replacement character.
+    match percent_decode_str(room).decode_utf8() {
+        Ok(decoded) => decoded.into_owned(),
+        // On invalid UTF-8, fall back to the original (prefix-stripped)
+        // room name to avoid silent collisions.
+        Err(_) => room.to_string(),
+    }
 }
 
 /// GET / - Home page
@@ -387,18 +392,23 @@ async fn broadcast_handler(
         // Extract message and size from body (preserving null vs missing)
         let body_obj = body.as_object();
         
-        // Handle size FIRST - emit if the key exists in the JSON (even if null)
+        // Handle size FIRST - only if it has valid cols/rows fields
         // This must come before message so the terminal is resized before content arrives
         if let Some(obj) = body_obj {
-            if obj.contains_key("size") {
-                let size = obj.get("size").unwrap();
-                room_data.size = Some(size.clone());
-                
-                // Emit size to all clients in room
-                let io_guard = state.io.read().await;
-                if let Some(ref io) = *io_guard {
-                    if let Some(ns) = io.of("/") {
-                        let _ = ns.within(room_name.clone()).emit("size", size);
+            if let Some(size) = obj.get("size") {
+                // Only store and emit size if it has the expected cols/rows fields
+                // (client ignores size without these fields anyway)
+                if let Some(size_obj) = size.as_object() {
+                    if size_obj.contains_key("cols") && size_obj.contains_key("rows") {
+                        room_data.size = Some(size.clone());
+                        
+                        // Emit size to all clients in room
+                        let io_guard = state.io.read().await;
+                        if let Some(ref io) = *io_guard {
+                            if let Some(ns) = io.of("/") {
+                                let _ = ns.within(room_name.clone()).emit("size", size);
+                            }
+                        }
                     }
                 }
             }
@@ -499,17 +509,17 @@ async fn serve_static(req: Request<Body>) -> impl IntoResponse {
     let path = req.uri().path().trim_start_matches('/');
     let method = req.method();
 
-    // Only allow GET and HEAD for static files
-    if method != Method::GET && method != Method::HEAD {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Not Found"))
-            .unwrap();
-    }
-
     match StaticAssets::get(path) {
         Some(content) => {
+            // Only allow GET and HEAD for existing static files
+            if method != Method::GET && method != Method::HEAD {
+                return Response::builder()
+                    .status(StatusCode::METHOD_NOT_ALLOWED)
+                    .header(header::ALLOW, "GET, HEAD")
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .body(Body::from("Method Not Allowed"))
+                    .unwrap();
+            }
             let mime = mime_guess::from_path(path).first_or_octet_stream();
             Response::builder()
                 .status(StatusCode::OK)
