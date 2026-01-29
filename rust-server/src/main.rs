@@ -405,7 +405,7 @@ async fn broadcast_handler(
                 if let Some(size_obj) = size.as_object() {
                     if size_obj.contains_key("cols") && size_obj.contains_key("rows") {
                         room_data.size = Some(size.clone());
-                        
+
                         // Emit size to all clients in room
                         let io_guard = state.io.read().await;
                         if let Some(ref io) = *io_guard {

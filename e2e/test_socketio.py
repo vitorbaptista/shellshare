@@ -1194,36 +1194,35 @@ class TestSocketIOSizePassthrough:
         
         sio.disconnect()
     
-    def test_size_null_value(self):
-        """Null size should be passed through."""
+    def test_size_null_value_not_emitted(self):
+        """Null size should not be emitted (only valid sizes with cols/rows are emitted)."""
         wait_for_server(SERVER_URL)
-        
+
         room_id = f"test-{random_id()}"
         password = f"secret-{random_id()}"
-        
+
         sio = socketio.Client()
         sizes = []
         size_received = threading.Event()
-        
+
         @sio.on('size')
         def on_size(data):
             sizes.append(data)
             size_received.set()
-        
+
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
-        
+
         time.sleep(1.0)
-        
-        # Broadcast with null size
+
+        # Broadcast with null size - should succeed but not emit size event
         status = broadcast_message(room_id, "test", password, size=None)
         assert status == 200, f"Broadcast failed: {status}"
-        
-        assert size_received.wait(timeout=5), "Size not received"
-        
-        # Size should be null
-        assert sizes[-1] is None, f"Expected None, got {sizes[-1]}"
-        
+
+        # Size event should NOT be received for null size
+        assert not size_received.wait(timeout=2), "Size should not be emitted for null value"
+        assert len(sizes) == 0, f"Expected no sizes, got {sizes}"
+
         sio.disconnect()
 
 

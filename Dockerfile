@@ -1,17 +1,23 @@
-FROM node:22-slim
+# Stage 1: Build the Rust binary
+FROM rust:1.83-slim AS builder
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-RUN npm install -g gulp-cli
+WORKDIR /build
 
-WORKDIR /shellshare
-
-# Copy package files and install deps (skip postinstall since gulpfile isn't there yet)
-COPY package*.json ./
-RUN npm install --ignore-scripts
-
-# Copy source files and build assets
+# Copy entire project (rust-embed needs ../public/ relative to rust-server/)
 COPY . .
-RUN gulp build:production
+
+# Build release binary
+WORKDIR /build/rust-server
+RUN cargo build --release
+
+# Stage 2: Runtime image
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Copy the compiled binary
+COPY --from=builder /build/rust-server/target/release/shellshare .
 
 EXPOSE 3000
-CMD ["npm", "start"]
+
+CMD ["./shellshare", "server", "--host", "0.0.0.0"]
