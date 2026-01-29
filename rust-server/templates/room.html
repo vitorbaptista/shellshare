@@ -9,8 +9,8 @@
   <meta property="og:site_name" content="shellshare">
   <meta property="og:description" content="Shellshare allows you to broadcast your terminal live with a single command.">
   <meta property="og:image" content="/shellshare-og-image.png">
-  <link rel="stylesheet" href="/stylesheet/vendor/ansi2html.min.css">
-  <link rel="stylesheet" href="/stylesheet/room.min.css">
+  <link rel="stylesheet" href="/stylesheet/vendor/ansi2html.css">
+  <link rel="stylesheet" href="/stylesheet/room.css">
   <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Inconsolata">
   <link rel="icon" type="image/gif" href="/favicon.gif">
 </head>
@@ -32,6 +32,73 @@
       <p>Made by <a href="http://vitorbaptista.com">Vitor Baptista</a>.</p>
     </footer>
   </div>
-  <script src="/javascript/room.bundle.min.js" async defer></script>
+  <!-- Load socket.io client from CDN -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <!-- Load term.js from local vendor -->
+  <script src="/javascript/vendor/term.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      var socket = io();
+      var room = window.location.pathname;
+      var term;
+      var currentSize = {};
+      var onlineCounter = document.getElementById('online-counter');
+      var onlineCounterPlural = document.getElementById('online-counter-plural');
+      var terminalContainer = document.getElementById('terminal');
+
+      if (typeof Terminal !== 'undefined') {
+        Terminal.bindKeys = function() {
+          // Disable key capture - read-only terminal
+        };
+      }
+
+      // Init terminal with a default size.
+      onSize({cols: 80, rows: 30});
+
+      socket.emit('join', room);
+      socket.on('usersCount', function (onlineUsers) {
+        onlineCounter.innerHTML = onlineUsers;
+        if (onlineUsers == 1) {
+          onlineCounterPlural.innerHTML = '';
+        } else {
+          onlineCounterPlural.innerHTML = 's';
+        }
+      });
+      socket.on('message', function (message) {
+        if (term && message) {
+          var decoded_message = decodeURIComponent(atob(message));
+          term.write(decoded_message);
+        }
+      });
+      socket.on('size', onSize);
+
+      function onSize(size) {
+        var sizeChanged;
+        if (!size || !size.cols || !size.rows) {
+          return;
+        }
+
+        sizeChanged = (currentSize.cols != size.cols ||
+                       currentSize.rows != size.rows);
+
+        if (term && sizeChanged) {
+          term.destroy();
+        }
+
+        if (typeof Terminal !== 'undefined' && (!term || sizeChanged)) {
+          term = new Terminal({
+            cols: size.cols,
+            rows: size.rows,
+            body: terminalContainer,
+          });
+          term.open();
+        }
+
+        currentSize = size;
+      }
+    })();
+  </script>
 </body>
 </html>
