@@ -12,14 +12,14 @@ Test categories:
 - Terminal size handling
 - Session lifecycle
 
-Note: These tests are skipped on Windows because:
-1. Windows CLI prompts for script.exe download confirmation
-2. Tests run without TTY, causing EOFError
-3. Mock script is a bash script, not Windows executable
+Cross-platform support:
+- Linux/Mac: Mock script is injected via PATH
+- Windows: Mock script.exe is placed in ~/.shellshare/ (where CLI expects it)
 """
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -35,12 +35,6 @@ from conftest import (
     random_id,
 )
 
-# Skip all tests in this module on Windows
-pytestmark = pytest.mark.skipif(
-    platform.system() == "Windows",
-    reason="Script mode tests require Unix (mock script is bash, Windows prompts for download)"
-)
-
 
 # Path to mock script directory
 MOCK_SCRIPT_DIR = Path(__file__).parent / "mock_script"
@@ -49,14 +43,53 @@ MOCK_SCRIPT_DIR = Path(__file__).parent / "mock_script"
 @pytest.fixture
 def mock_script_env():
     """
-    Create an environment with mock_script/ prepended to PATH.
+    Create an environment for running the mock script.
 
-    This allows the CLI to find our mock script binary instead of the system one.
+    On Unix: Prepends mock_script/ to PATH so CLI finds our mock 'script' binary.
+    On Windows: Places mock script.exe in ~/.shellshare/ where CLI expects it,
+                using a batch file wrapper to call Python.
     """
     env = os.environ.copy()
-    old_path = env.get("PATH", "")
-    env["PATH"] = f"{MOCK_SCRIPT_DIR}:{old_path}"
-    return env
+    cleanup_files = []
+    
+    if platform.system() == "Windows":
+        # Windows CLI looks for script.exe in ~/.shellshare/, not in PATH
+        # The CLI calls: subprocess.call('%s %s %s' % (script_path, shell_args, tmp.name), shell=True)
+        # With shell=True, we can trick it by creating script.exe as a batch file
+        # that Python can still execute (Windows ignores .exe extension with shell=True in some cases)
+        
+        shellshare_dir = Path.home() / ".shellshare"
+        shellshare_dir.mkdir(exist_ok=True)
+        
+        mock_script_py = MOCK_SCRIPT_DIR / "script.py"
+        
+        # Create script.exe as a Python script (shell=True on Windows may handle this)
+        script_exe_path = shellshare_dir / "script.exe"
+        shutil.copy(mock_script_py, script_exe_path)
+        cleanup_files.append(script_exe_path)
+        
+        # Also create script.cmd as backup (Windows shell may prefer .cmd)
+        script_cmd_path = shellshare_dir / "script.cmd"
+        script_cmd_path.write_text(f'@echo off\npython "{mock_script_py}" %*\n')
+        cleanup_files.append(script_cmd_path)
+        
+        # Add shellshare_dir to PATH
+        old_path = env.get("PATH", "")
+        env["PATH"] = f"{shellshare_dir};{old_path}"
+    else:
+        # Unix: prepend mock_script/ to PATH
+        old_path = env.get("PATH", "")
+        env["PATH"] = f"{MOCK_SCRIPT_DIR}:{old_path}"
+    
+    yield env
+    
+    # Cleanup
+    for path in cleanup_files:
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
 
 
 def run_cli_script_mode(room, password, server=SERVER_URL, env=None, timeout=30):
