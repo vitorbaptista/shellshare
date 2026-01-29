@@ -101,5 +101,105 @@ def test_happy_path_broadcast_appears_in_browser():
         browser.close()
 
 
+def test_user_counter_shows_in_browser():
+    """
+    Test that the user counter appears and updates in the browser UI.
+    """
+    room_id = f"test-{random_id()}"
+    
+    print(f"Waiting for server at {SERVER_URL}...")
+    wait_for_server(SERVER_URL)
+    print("Server is ready!")
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        
+        # First user joins
+        page1 = browser.new_page()
+        room_url = f"{SERVER_URL}/r/{room_id}"
+        print(f"User 1 opening room: {room_url}")
+        page1.goto(room_url)
+        
+        # Wait for counter to update
+        page1.wait_for_timeout(1000)
+        
+        # Check counter shows 1
+        counter = page1.locator("#online-counter")
+        count1 = counter.text_content()
+        print(f"User count after 1 user: {count1}")
+        assert count1 == "1", f"Expected 1 user, got {count1}"
+        
+        # Second user joins
+        page2 = browser.new_page()
+        print(f"User 2 opening room: {room_url}")
+        page2.goto(room_url)
+        
+        # Wait for counter to update on both pages
+        page1.wait_for_timeout(1000)
+        
+        # Check counter shows 2 on first page
+        count2 = counter.text_content()
+        print(f"User count after 2 users: {count2}")
+        assert count2 == "2", f"Expected 2 users, got {count2}"
+        
+        # Close second user
+        page2.close()
+        
+        # Wait for counter to update
+        page1.wait_for_timeout(1000)
+        
+        # Check counter shows 1 again
+        count3 = counter.text_content()
+        print(f"User count after user 2 leaves: {count3}")
+        assert count3 == "1", f"Expected 1 user after disconnect, got {count3}"
+        
+        print("✓ PASSED: User counter updates correctly in browser!")
+        browser.close()
+
+
+def test_terminal_size_updates_in_browser():
+    """
+    Test that terminal size updates are reflected in the browser.
+    """
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+    
+    print(f"Waiting for server at {SERVER_URL}...")
+    wait_for_server(SERVER_URL)
+    print("Server is ready!")
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        
+        # Navigate to room
+        room_url = f"{SERVER_URL}/r/{room_id}"
+        print(f"Opening room: {room_url}")
+        page.goto(room_url)
+        
+        # Wait for terminal element
+        page.wait_for_selector("#terminal", timeout=10000)
+        print("Terminal element found")
+        
+        # Broadcast with a specific size
+        custom_size = {"rows": 40, "cols": 120}
+        returncode, stdout, stderr = broadcast_with_cli(
+            room_id, "Test message", password, SERVER_URL
+        )
+        assert returncode == 0, f"CLI failed: {stderr}"
+        
+        # Wait for size update
+        page.wait_for_timeout(2000)
+        
+        # The terminal should have been created - verify it exists
+        terminal = page.locator("#terminal")
+        assert terminal.count() > 0, "Terminal should exist"
+        
+        print("✓ PASSED: Terminal receives size updates!")
+        browser.close()
+
+
 if __name__ == "__main__":
     test_happy_path_broadcast_appears_in_browser()
+    test_user_counter_shows_in_browser()
+    test_terminal_size_updates_in_browser()

@@ -439,6 +439,56 @@ class TestAuthorization:
         assert status3 == 401, "Password 1 should not work on room 2"
 
 
+class TestRequestLimits:
+    """Tests for request size limits."""
+    
+    def test_request_over_300kb_is_rejected(self):
+        """Requests over 300KB should be rejected."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        # Create a message over 300KB (config.express.request_limit = '300kb')
+        # The encoded message will be even larger due to base64 + URL encoding
+        large_message = "X" * 250000  # 250KB of raw text, will be larger encoded
+        
+        body = {
+            "message": encode_message(large_message),
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        status, headers, resp_body = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        # Should get 413 Payload Too Large
+        assert status == 413, f"Expected 413, got {status}"
+    
+    def test_request_under_300kb_is_accepted(self):
+        """Requests under 300KB should be accepted."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        # Create a message under 300KB
+        moderate_message = "X" * 50000  # 50KB
+        
+        body = {
+            "message": encode_message(moderate_message),
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        status, headers, resp_body = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        assert status == 200, f"Expected 200, got {status}"
+
+
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
     
