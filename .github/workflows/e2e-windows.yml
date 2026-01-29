@@ -47,11 +47,11 @@ jobs:
           }
           Start-Sleep -Seconds 5
           Write-Host "Server job started with ID: $($job.Id)"
-          # Check if job is still running
+          # Check if job is still running (should be Running, not Failed or Completed)
           $jobState = (Get-Job -Id $job.Id).State
           Write-Host "Job state: $jobState"
-          if ($jobState -eq "Failed") {
-            Write-Host "Job failed! Output:"
+          if ($jobState -eq "Failed" -or $jobState -eq "Completed") {
+            Write-Host "Job terminated prematurely! Output:"
             Receive-Job -Id $job.Id
             exit 1
           }
@@ -68,9 +68,9 @@ jobs:
               Write-Host "ERROR: shellshare process not found!"
               Write-Host "=== Job output ==="
               $jobs = Get-Job
-              foreach ($job in $jobs) {
-                Write-Host "Job $($job.Id) state: $($job.State)"
-                Receive-Job -Id $job.Id
+              foreach ($j in $jobs) {
+                Write-Host "Job $($j.Id) state: $($j.State)"
+                Receive-Job -Id $j.Id
               }
               exit 1
             }
@@ -94,9 +94,9 @@ jobs:
           Write-Host "Server did not start within $timeout seconds"
           Write-Host "=== Job output ==="
           $jobs = Get-Job
-          foreach ($job in $jobs) {
-            Write-Host "Job $($job.Id) state: $($job.State)"
-            Receive-Job -Id $job.Id
+          foreach ($j in $jobs) {
+            Write-Host "Job $($j.Id) state: $($j.State)"
+            Receive-Job -Id $j.Id
           }
           exit 1
 
