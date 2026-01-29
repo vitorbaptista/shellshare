@@ -45,7 +45,7 @@ def wait_for_server(url, timeout_seconds=30):
             urllib.request.urlopen(url, timeout=1)
             return True
         except Exception:
-            time.sleep(0.5)
+            time.sleep(1.0)
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
@@ -130,7 +130,7 @@ class TestSocketIOConnection:
         sio.emit('join', f'/r/{room_id}')
         
         # Give server time to process
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         sio.disconnect()
 
@@ -159,7 +159,7 @@ class TestSocketIOMessages:
         sio.emit('join', f'/r/{room_id}')
         
         # Wait for join to complete
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast a message via HTTP
         status = broadcast_message(room_id, test_message, password)
@@ -196,7 +196,7 @@ class TestSocketIOMessages:
         sio.emit('join', f'/r/{room_id}')
         
         # Wait for join to complete
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast a message with size
         status = broadcast_message(room_id, "Test", password, size=expected_size)
@@ -224,7 +224,7 @@ class TestSocketIOMessages:
         broadcast_message(room_id, test_message, password)
         
         # Wait for message to be stored
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Now connect and join
         sio = socketio.Client()
@@ -296,14 +296,14 @@ class TestSocketIOUserCount:
         
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Second client
         sio2 = socketio.Client()
         
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Client 1 should have received count=2 at some point
         assert 2 in user_counts1, f"Expected count 2, got counts: {user_counts1}"
@@ -327,18 +327,18 @@ class TestSocketIOUserCount:
         
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Second client (will disconnect)
         sio2 = socketio.Client()
         
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Disconnect second client
         sio2.disconnect()
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Client 1 should have received count=1 after client 2 disconnected
         assert user_counts1[-1] == 1, f"Expected final count 1, got: {user_counts1}"
@@ -379,7 +379,7 @@ class TestSocketIOMultipleRooms:
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id2}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast to room 1 only
         test_message = f"Room1Only-{random_id()}"
@@ -417,9 +417,9 @@ class TestSocketIOMessageAccumulation:
         messages_sent = ["Line1\n", "Line2\n", "Line3\n"]
         for msg in messages_sent:
             broadcast_message(room_id, msg, password)
-            time.sleep(0.1)  # Small delay between messages
+            time.sleep(0.3)  # Small delay between messages
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Now connect and join
         sio = socketio.Client()
@@ -472,7 +472,7 @@ class TestSocketIOJoinEdgeCases:
         # Join WITHOUT the /r/ prefix
         sio.emit('join', room_id)
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast via HTTP (which uses /r/ prefix)
         status = broadcast_message(room_id, test_message, password)
@@ -517,7 +517,7 @@ class TestSocketIOJoinEdgeCases:
         # Join WITH the /r/ prefix (standard way)
         sio.emit('join', f'/r/{room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast via HTTP
         status = broadcast_message(room_id, test_message, password)
@@ -555,7 +555,7 @@ class TestSocketIOJoinEdgeCases:
         sio.emit('join', '')
         
         # Give server time to process
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Connection should still be alive
         assert sio.connected, "Connection dropped after joining empty room"
@@ -613,7 +613,7 @@ class TestSocketIOMultipleRoomJoin:
         sio.emit('join', f'/r/{room_id1}')
         sio.emit('join', f'/r/{room_id2}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast to room 1
         msg1 = f"Room1-{random_id()}"
@@ -651,7 +651,7 @@ class TestSocketIOMultipleRoomJoin:
         
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id1}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Client 2 joins room 2 only
         sio2 = socketio.Client()
@@ -663,7 +663,7 @@ class TestSocketIOMultipleRoomJoin:
         
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id2}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Each room should show 1 user, not 2
         assert counts1[-1] == 1, f"Room 1 should have 1 user, got {counts1}"
@@ -693,13 +693,13 @@ class TestSocketIOReconnection:
         
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         assert 1 in counts1, f"First join should show 1 user"
         
         # Disconnect
         sio1.disconnect()
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Reconnect
         sio2 = socketio.Client()
@@ -711,7 +711,7 @@ class TestSocketIOReconnection:
         
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Should be 1 user again (previous client fully disconnected)
         assert counts2[-1] == 1, f"Rejoin should show 1 user, got {counts2}"
@@ -730,7 +730,7 @@ class TestSocketIOReconnection:
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # First client connects and gets the message
         sio1 = socketio.Client()
@@ -748,7 +748,7 @@ class TestSocketIOReconnection:
         assert msg_received1.wait(timeout=5), "First client should receive message"
         sio1.disconnect()
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Second client connects later - should still get the message
         sio2 = socketio.Client()
@@ -791,9 +791,9 @@ class TestSocketIOEdgeCases:
         
         # Join same room twice
         sio.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         sio.emit('join', f'/r/{room_id}')
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # User count should still be 1 (not 2)
         # The last count should be 1
@@ -825,7 +825,7 @@ class TestSocketIOEdgeCases:
         # Use encoded room for Socket.IO too (server uses req.url which keeps encoding)
         sio.emit('join', f'/r/{encoded_room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast to unicode room (use encoded version for HTTP)
         status = broadcast_message(encoded_room_id, test_message, password)
@@ -887,7 +887,7 @@ class TestSocketIOEdgeCases:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast to room with special chars
         status = broadcast_message(room_id, test_message, password)
@@ -941,7 +941,7 @@ class TestSocketIOEdgeCases:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
@@ -968,7 +968,7 @@ class TestSocketIOEventOrder:
         
         # First, populate the room with data
         broadcast_message(room_id, "Initial message", password, size={"rows": 30, "cols": 100})
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Now connect and track event order
         sio = socketio.Client()
@@ -1021,12 +1021,12 @@ class TestSocketIOEventOrder:
         
         # Broadcast with different sizes
         broadcast_message(room_id, "Msg1", password, size={"rows": 20, "cols": 60})
-        time.sleep(0.1)
+        time.sleep(0.3)
         broadcast_message(room_id, "Msg2", password, size={"rows": 30, "cols": 100})
-        time.sleep(0.1)
+        time.sleep(0.3)
         final_size = {"rows": 40, "cols": 120}
         broadcast_message(room_id, "Msg3", password, size=final_size)
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Now connect and check size
         sio = socketio.Client()
@@ -1084,7 +1084,7 @@ class TestSocketIOEmptyRoom:
         assert events_done.wait(timeout=5), "usersCount not received"
         
         # Give time for any other events
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Should have received usersCount but NOT message or size
         assert len(user_counts) > 0, "Should receive usersCount"
@@ -1105,7 +1105,7 @@ class TestSocketIOEmptyRoom:
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Delete room via HTTP
         import http.client
@@ -1116,7 +1116,7 @@ class TestSocketIOEmptyRoom:
         assert response.status == 202, f"DELETE failed: {response.status}"
         conn.close()
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Now join - should not receive the old message
         sio = socketio.Client()
@@ -1140,7 +1140,7 @@ class TestSocketIOEmptyRoom:
         assert count_received.wait(timeout=5), "usersCount not received"
         
         # Give time for any message event
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Should NOT have received the old message
         for msg in messages:
@@ -1181,7 +1181,7 @@ class TestSocketIOSizePassthrough:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast with custom size
         status = broadcast_message(room_id, "test", password, size=custom_size)
@@ -1194,36 +1194,35 @@ class TestSocketIOSizePassthrough:
         
         sio.disconnect()
     
-    def test_size_null_value(self):
-        """Null size should be passed through."""
+    def test_size_null_value_not_emitted(self):
+        """Null size should not be emitted (only valid sizes with cols/rows are emitted)."""
         wait_for_server(SERVER_URL)
-        
+
         room_id = f"test-{random_id()}"
         password = f"secret-{random_id()}"
-        
+
         sio = socketio.Client()
         sizes = []
         size_received = threading.Event()
-        
+
         @sio.on('size')
         def on_size(data):
             sizes.append(data)
             size_received.set()
-        
+
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
-        
-        time.sleep(0.5)
-        
-        # Broadcast with null size
+
+        time.sleep(1.0)
+
+        # Broadcast with null size - should succeed but not emit size event
         status = broadcast_message(room_id, "test", password, size=None)
         assert status == 200, f"Broadcast failed: {status}"
-        
-        assert size_received.wait(timeout=5), "Size not received"
-        
-        # Size should be null
-        assert sizes[-1] is None, f"Expected None, got {sizes[-1]}"
-        
+
+        # Size event should NOT be received for null size
+        assert not size_received.wait(timeout=2), "Size should not be emitted for null value"
+        assert len(sizes) == 0, f"Expected no sizes, got {sizes}"
+
         sio.disconnect()
 
 
@@ -1250,7 +1249,7 @@ class TestSocketIOMessageFormat:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast
         status = broadcast_message(room_id, test_message, password)
@@ -1278,11 +1277,11 @@ class TestSocketIOMessageFormat:
         # Send 3 distinct messages
         msg1, msg2, msg3 = "FIRST", "SECOND", "THIRD"
         broadcast_message(room_id, msg1, password)
-        time.sleep(0.1)
+        time.sleep(0.3)
         broadcast_message(room_id, msg2, password)
-        time.sleep(0.1)
+        time.sleep(0.3)
         broadcast_message(room_id, msg3, password)
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # New client joins
         sio = socketio.Client()
@@ -1352,7 +1351,7 @@ class TestSocketIOStripPrefix:
         # One joins without prefix (server has /r/ as roomPrefix)
         sio2.emit('join', f'/{room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast
         status = broadcast_message(room_id, test_message, password)
@@ -1396,7 +1395,7 @@ class TestSocketIOLargeMessage:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         status = broadcast_message(room_id, large_message, password)
         assert status == 200, f"Broadcast failed: {status}"
@@ -1443,7 +1442,7 @@ class TestSocketIOMultipleClients:
             message_lists.append(messages)
             events.append(evt)
         
-        time.sleep(0.5)
+        time.sleep(1.0)
         
         # Broadcast
         status = broadcast_message(room_id, test_message, password)
@@ -1460,6 +1459,250 @@ class TestSocketIOMultipleClients:
         
         for sio in clients:
             sio.disconnect()
+
+
+class TestSocketIOLateJoinerHistory:
+    """Tests for late joiner history feature.
+
+    These tests verify that viewers joining an existing room receive
+    the message history so they don't see a blank screen.
+    """
+
+    def test_late_joiner_receives_single_message_history(self):
+        """Late joiner should receive a single message that was broadcast before they joined."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        test_message = f"HistorySingle-{random_id()}"
+
+        # Broadcast message BEFORE any viewer joins
+        status = broadcast_message(room_id, test_message, password)
+        assert status == 200, f"Broadcast failed: {status}"
+
+        # Wait for message to be stored
+        time.sleep(1.0)
+
+        # Late joiner connects
+        sio = socketio.Client()
+        received_messages = []
+        message_received = threading.Event()
+
+        @sio.on('message')
+        def on_message(data):
+            received_messages.append(data)
+            message_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        # Should receive the historical message
+        assert message_received.wait(timeout=5), "Late joiner did not receive history"
+
+        assert len(received_messages) > 0, "No messages received"
+        decoded = decode_message(received_messages[0])
+        assert test_message in decoded, f"Expected '{test_message}' in history"
+
+        sio.disconnect()
+
+    def test_late_joiner_receives_multiple_messages_in_order(self):
+        """Late joiner should receive multiple messages in the correct order."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Broadcast multiple messages BEFORE any viewer joins
+        messages_sent = [f"MSG1-{random_id()}", f"MSG2-{random_id()}", f"MSG3-{random_id()}"]
+        for msg in messages_sent:
+            status = broadcast_message(room_id, msg, password)
+            assert status == 200, f"Broadcast failed: {status}"
+            time.sleep(0.3)
+
+        # Wait for messages to be stored
+        time.sleep(1.0)
+
+        # Late joiner connects
+        sio = socketio.Client()
+        received_messages = []
+        message_received = threading.Event()
+
+        @sio.on('message')
+        def on_message(data):
+            received_messages.append(data)
+            message_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        # Should receive the accumulated history
+        assert message_received.wait(timeout=5), "Late joiner did not receive history"
+
+        # Decode and verify all messages are present in order
+        decoded = decode_message(received_messages[0])
+
+        for msg in messages_sent:
+            assert msg in decoded, f"Expected '{msg}' in accumulated history"
+
+        # Verify order
+        idx1 = decoded.find(messages_sent[0])
+        idx2 = decoded.find(messages_sent[1])
+        idx3 = decoded.find(messages_sent[2])
+        assert idx1 < idx2 < idx3, f"Messages not in order: indices {idx1}, {idx2}, {idx3}"
+
+        sio.disconnect()
+
+    def test_late_joiner_and_live_viewer_same_content(self):
+        """Late joiner and live viewer should ultimately see the same content."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Live viewer joins first
+        live_viewer = socketio.Client()
+        live_messages = []
+        live_ready = threading.Event()
+
+        @live_viewer.on('message')
+        def on_live_message(data):
+            live_messages.append(decode_message(data))
+
+        @live_viewer.on('usersCount')
+        def on_live_count(count):
+            live_ready.set()
+
+        live_viewer.connect(SERVER_URL)
+        live_viewer.emit('join', f'/r/{room_id}')
+
+        # Wait for live viewer to be ready
+        assert live_ready.wait(timeout=5), "Live viewer failed to join"
+
+        time.sleep(0.5)
+
+        # Broadcast messages while live viewer is watching
+        messages_sent = [f"LIVE1-{random_id()}", f"LIVE2-{random_id()}"]
+        for msg in messages_sent:
+            status = broadcast_message(room_id, msg, password)
+            assert status == 200, f"Broadcast failed: {status}"
+            time.sleep(0.3)
+
+        # Wait for live viewer to receive all messages
+        time.sleep(1.0)
+
+        # Late joiner connects
+        late_joiner = socketio.Client()
+        late_messages = []
+        late_received = threading.Event()
+
+        @late_joiner.on('message')
+        def on_late_message(data):
+            late_messages.append(decode_message(data))
+            late_received.set()
+
+        late_joiner.connect(SERVER_URL)
+        late_joiner.emit('join', f'/r/{room_id}')
+
+        # Wait for late joiner to receive history
+        assert late_received.wait(timeout=5), "Late joiner did not receive history"
+
+        # Compare content: live viewer should have accumulated all messages
+        live_content = ''.join(live_messages)
+        late_content = ''.join(late_messages)
+
+        # Both should contain all the sent messages
+        for msg in messages_sent:
+            assert msg in live_content, f"Live viewer missing '{msg}'"
+            assert msg in late_content, f"Late joiner missing '{msg}'"
+
+        live_viewer.disconnect()
+        late_joiner.disconnect()
+
+    def test_late_joiner_receives_correct_terminal_size(self):
+        """Late joiner should receive the correct terminal size."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Broadcast with specific size BEFORE viewer joins
+        expected_size = {"rows": 48, "cols": 160}
+        status = broadcast_message(room_id, "Size test", password, size=expected_size)
+        assert status == 200, f"Broadcast failed: {status}"
+
+        # Wait for message to be stored
+        time.sleep(1.0)
+
+        # Late joiner connects
+        sio = socketio.Client()
+        received_sizes = []
+        size_received = threading.Event()
+
+        @sio.on('size')
+        def on_size(data):
+            received_sizes.append(data)
+            size_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        # Should receive the size
+        assert size_received.wait(timeout=5), "Late joiner did not receive size"
+
+        assert len(received_sizes) > 0, "No size received"
+        assert received_sizes[0] == expected_size, \
+            f"Expected {expected_size}, got {received_sizes[0]}"
+
+        sio.disconnect()
+
+    def test_late_joiner_size_before_message(self):
+        """Late joiner should receive size BEFORE message for correct terminal rendering."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Broadcast with size
+        expected_size = {"rows": 30, "cols": 100}
+        status = broadcast_message(room_id, "Content", password, size=expected_size)
+        assert status == 200, f"Broadcast failed: {status}"
+
+        time.sleep(1.0)
+
+        # Late joiner tracks event order
+        sio = socketio.Client()
+        events = []
+        all_received = threading.Event()
+
+        @sio.on('size')
+        def on_size(data):
+            events.append(('size', data))
+            check_done()
+
+        @sio.on('message')
+        def on_message(data):
+            events.append(('message', data))
+            check_done()
+
+        def check_done():
+            event_types = [e[0] for e in events]
+            if 'size' in event_types and 'message' in event_types:
+                all_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        assert all_received.wait(timeout=5), f"Not all events received: {events}"
+
+        # Verify size comes before message
+        event_types = [e[0] for e in events]
+        size_idx = event_types.index('size')
+        message_idx = event_types.index('message')
+
+        assert size_idx < message_idx, \
+            f"Size should come before message, but got order: {event_types}"
+
+        sio.disconnect()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+# Rust build artifacts
+/target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
