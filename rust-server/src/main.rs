@@ -99,6 +99,8 @@ struct AppState {
     rooms: Arc<RwLock<HashMap<String, RoomData>>>,
     /// Socket.IO instance - wrapped in Arc<RwLock> so handlers see updates
     io: Arc<RwLock<Option<SocketIo>>>,
+    /// Track which rooms each socket is in (for disconnect handling)
+    socket_rooms: Arc<RwLock<HashMap<String, Vec<String>>>>,
 }
 
 /// Request body for POST /r/:room - using Value to preserve null vs missing distinction
@@ -187,6 +189,15 @@ fn setup_socket_handlers(io: &SocketIo) {
                 if let Err(e) = socket.join(room_name.clone()) {
                     warn!("Failed to join room {}: {:?}", room_name, e);
                 }
+                
+                // Track this socket's rooms for disconnect handling
+                {
+                    let mut socket_rooms = state.socket_rooms.write().await;
+                    socket_rooms
+                        .entry(socket.id.to_string())
+                        .or_default()
+                        .push(room_name.clone());
+                }
 
                 // Get room data
                 let rooms = state.rooms.read().await;
@@ -229,25 +240,30 @@ fn setup_socket_handlers(io: &SocketIo) {
 
         // Handle disconnect - need state to access io for proper broadcast
         socket.on_disconnect(|socket: SocketRef, state: SioState<AppState>| async move {
-            info!("Client disconnected: {}", socket.id);
+            let socket_id = socket.id.to_string();
+            info!("Client disconnected: {}", socket_id);
 
-            // Get all rooms this socket was in and update user counts
-            if let Ok(rooms) = socket.rooms() {
-                for room in rooms {
-                    // Count remaining users (subtract 1 for this disconnecting socket)
-                    let total = socket
-                        .within(room.clone())
-                        .sockets()
-                        .map(|s| s.len())
-                        .unwrap_or(0);
-                    let user_count = if total > 0 { total - 1 } else { 0 };
-                    
-                    // Use io instance to broadcast (socket.within may not work during disconnect)
-                    let io_guard = state.io.read().await;
-                    if let Some(ref io) = *io_guard {
-                        if let Some(ns) = io.of("/") {
-                            let _ = ns.within(room).emit("usersCount", &user_count);
-                        }
+            // Get rooms from our tracking (socket.rooms() may be empty at disconnect time)
+            let rooms = {
+                let mut socket_rooms = state.socket_rooms.write().await;
+                socket_rooms.remove(&socket_id).unwrap_or_default()
+            };
+            
+            info!("Socket {} was in rooms: {:?}", socket_id, rooms);
+
+            // Update user counts for each room
+            let io_guard = state.io.read().await;
+            if let Some(ref io) = *io_guard {
+                if let Some(ns) = io.of("/") {
+                    for room in rooms {
+                        // Count remaining users in room (this socket is already removed)
+                        let user_count = ns
+                            .within(room.clone())
+                            .sockets()
+                            .map(|s| s.len())
+                            .unwrap_or(0);
+                        info!("Room {} now has {} users", room, user_count);
+                        let _ = ns.within(room).emit("usersCount", &user_count);
                     }
                 }
             }
