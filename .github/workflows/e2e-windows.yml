@@ -17,66 +17,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install and Start MongoDB
-        shell: pwsh
-        run: |
-          # Install MongoDB via Chocolatey (pre-installed on Windows runners)
-          Write-Host "Installing MongoDB via Chocolatey..."
-          choco install mongodb --version=7.0.14 -y --no-progress
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
 
-          # Create data and log directories
-          New-Item -ItemType Directory -Force -Path "C:\data\db"
-          New-Item -ItemType Directory -Force -Path "C:\data\log"
-
-          # Start MongoDB
-          Write-Host "Starting MongoDB..."
-          Start-Process mongod -ArgumentList "--dbpath", "C:\data\db", "--logpath", "C:\data\log\mongod.log" -WindowStyle Hidden
-
-          # Wait and verify MongoDB is running
-          Start-Sleep -Seconds 5
-          $timeout = 30
-          $elapsed = 0
-          while ($elapsed -lt $timeout) {
-            try {
-              $tcp = New-Object System.Net.Sockets.TcpClient
-              $tcp.Connect("localhost", 27017)
-              $tcp.Close()
-              Write-Host "MongoDB is accepting connections after $elapsed seconds"
-              exit 0
-            } catch {
-              Write-Host "Waiting for MongoDB... ($elapsed s)"
-              Start-Sleep -Seconds 2
-              $elapsed += 2
-            }
-          }
-          Write-Host "MongoDB failed to start. Log contents:"
-          if (Test-Path "C:\data\log\mongod.log") { Get-Content "C:\data\log\mongod.log" -Tail 50 }
-          exit 1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-      - name: Install dependencies
-        run: npm install --ignore-scripts
-
-      - name: Build assets
-        run: npx gulp build:production
+      - name: Build Rust server
+        run: cargo build --release
 
       - name: Start server
         shell: pwsh
         run: |
-          # Create a PowerShell script to start the server
-          @'
-          $env:MONGO_URL = "mongodb://localhost:27017/shellshare_test"
-          $env:PORT = "3000"
-          node app.js 2>&1 | Tee-Object -FilePath "server.log"
-          '@ | Out-File -FilePath "start-server.ps1" -Encoding UTF8
-
-          # Start the server in a new PowerShell process that stays alive
-          Start-Process pwsh.exe -ArgumentList "-ExecutionPolicy", "Bypass", "-File", "start-server.ps1" -WorkingDirectory $PWD
+          # Start the server in a new process that stays alive
+          Start-Process -FilePath ".\target\release\shellshare.exe" -ArgumentList "server", "--port", "3000" -RedirectStandardOutput "server.log" -RedirectStandardError "server-error.log"
           Start-Sleep -Seconds 3
           Write-Host "Server process started"
 
@@ -101,6 +65,8 @@ jobs:
           Write-Host "Server did not start within $timeout seconds"
           Write-Host "=== Server log ==="
           if (Test-Path "server.log") { Get-Content "server.log" } else { Write-Host "No server.log found" }
+          Write-Host "=== Server error log ==="
+          if (Test-Path "server-error.log") { Get-Content "server-error.log" } else { Write-Host "No server-error.log found" }
           exit 1
 
       - name: Install uv

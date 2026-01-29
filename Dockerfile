@@ -3,11 +3,10 @@ FROM rust:1.83-slim AS builder
 
 WORKDIR /build
 
-# Copy entire project (rust-embed needs ../public/ relative to rust-server/)
+# Copy entire project
 COPY . .
 
 # Build release binary
-WORKDIR /build/rust-server
 RUN cargo build --release
 
 # Stage 2: Runtime image
@@ -16,7 +15,7 @@ FROM debian:bookworm-slim
 WORKDIR /app
 
 # Copy the compiled binary
-COPY --from=builder /build/rust-server/target/release/shellshare .
+COPY --from=builder /build/target/release/shellshare .
 
 EXPOSE 3000
 
