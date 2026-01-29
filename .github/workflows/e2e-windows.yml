@@ -51,14 +51,29 @@ jobs:
           $timeout = 60
           $elapsed = 0
           while ($elapsed -lt $timeout) {
+            # Check if process is still running
+            $proc = Get-Process -Name "shellshare" -ErrorAction SilentlyContinue
+            if (-not $proc) {
+              Write-Host "ERROR: shellshare process not found!"
+              Write-Host "=== Server log ==="
+              if (Test-Path "server.log") { Get-Content "server.log" } else { Write-Host "No server.log found" }
+              Write-Host "=== Server error log ==="
+              if (Test-Path "server-error.log") { Get-Content "server-error.log" } else { Write-Host "No server-error.log found" }
+              exit 1
+            }
+            
+            # Check if port is listening
+            $netstat = netstat -an | Select-String ":3000"
+            Write-Host "Port 3000 status: $netstat"
+            
             try {
-              $response = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 2
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:3000" -UseBasicParsing -TimeoutSec 2
               if ($response.StatusCode -eq 200) {
                 Write-Host "Server is up after $elapsed seconds"
                 exit 0
               }
             } catch {
-              Write-Host "Waiting for server... ($elapsed s)"
+              Write-Host "Waiting for server... ($elapsed s) - Error: $($_.Exception.Message)"
             }
             Start-Sleep -Seconds 2
             $elapsed += 2
