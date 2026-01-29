@@ -74,23 +74,7 @@ jobs:
       - name: Run E2E tests
         working-directory: e2e
         run: |
-          # Run tests, allowing failures (we expect many to fail initially)
-          uv run pytest -v --tb=short 2>&1 | tee test-output.txt || true
-          
-          # Show summary
-          echo ""
-          echo "=== TEST SUMMARY ==="
-          grep -E "^(PASSED|FAILED|ERROR)" test-output.txt | sort | uniq -c || true
-          echo ""
-          
-          # Extract pass/fail counts
-          PASSED=$(grep -c "PASSED" test-output.txt || echo "0")
-          FAILED=$(grep -c "FAILED" test-output.txt || echo "0")
-          echo "Passed: $PASSED"
-          echo "Failed: $FAILED"
-          
-          # For now, don't fail the job - we expect failures
-          # Once all tests pass, change this to fail on any test failure
+          uv run pytest -v --tb=short
 
       - name: Stop server
         if: always()
