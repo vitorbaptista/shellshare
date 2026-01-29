@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en" prefix="og: http://ogp.me/ns#">
+<head>
+  <title>shellshare - live terminal broadcast</title>
+  <meta charset="utf-8">
+  <meta name="description" content="Shellshare allows you to broadcast your terminal live with a single command.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="shellshare: live terminal broadcast">
+  <meta property="og:site_name" content="shellshare">
+  <meta property="og:description" content="Shellshare allows you to broadcast your terminal live with a single command.">
+  <meta property="og:image" content="/shellshare-og-image.png">
+  <link rel="stylesheet" href="/stylesheet/vendor/ansi2html.min.css">
+  <link rel="stylesheet" href="/stylesheet/room.min.css">
+  <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Inconsolata">
+  <link rel="icon" type="image/gif" href="/favicon.gif">
+</head>
+<body>
+  <div class="wrapper">
+    <header>
+      <div class="online">
+        <span id="online-counter">0</span> user<span id="online-counter-plural">s</span> online
+      </div>
+      <h1 class="title">
+        <a href="/"><span class="title-shell">shell</span><span class="title-share">share</span></a>
+      </h1>
+    </header>
+    <div class="main">
+      <div id="terminal"></div>
+    </div>
+    <footer>
+      <p>shellshare is a free software (Apache License). Source code on <a href="https://github.com/vitorbaptista/shellshare">GitHub</a>.</p>
+      <p>Made by <a href="http://vitorbaptista.com">Vitor Baptista</a>.</p>
+    </footer>
+  </div>
+  <script src="/javascript/room.bundle.min.js" async defer></script>
+</body>
+</html>
