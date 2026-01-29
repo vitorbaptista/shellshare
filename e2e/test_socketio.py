@@ -1040,6 +1040,419 @@ class TestSocketIOEventOrder:
         sio.disconnect()
 
 
+class TestSocketIOEmptyRoom:
+    """Tests for joining empty rooms."""
+    
+    def test_join_empty_room_no_message(self):
+        """Joining an empty room should not receive message event."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-empty-{random_id()}"
+        
+        sio = socketio.Client()
+        messages = []
+        sizes = []
+        user_counts = []
+        events_done = threading.Event()
+        
+        @sio.on('message')
+        def on_message(data):
+            messages.append(data)
+        
+        @sio.on('size')
+        def on_size(data):
+            sizes.append(data)
+        
+        @sio.on('usersCount')
+        def on_count(count):
+            user_counts.append(count)
+            events_done.set()  # usersCount is always sent
+        
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+        
+        # Wait for usersCount (always sent)
+        assert events_done.wait(timeout=5), "usersCount not received"
+        
+        # Give time for any other events
+        time.sleep(0.5)
+        
+        # Should have received usersCount but NOT message or size
+        assert len(user_counts) > 0, "Should receive usersCount"
+        assert len(messages) == 0, f"Should NOT receive message for empty room, got {messages}"
+        assert len(sizes) == 0, f"Should NOT receive size for empty room, got {sizes}"
+        
+        sio.disconnect()
+    
+    def test_join_after_delete_no_old_messages(self):
+        """After DELETE, joining should not receive old messages."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        test_message = "This will be deleted"
+        
+        # Create room with message
+        status = broadcast_message(room_id, test_message, password)
+        assert status == 200, f"Broadcast failed: {status}"
+        
+        time.sleep(0.5)
+        
+        # Delete room via HTTP
+        import http.client
+        parsed = urllib.parse.urlparse(SERVER_URL)
+        conn = http.client.HTTPConnection(parsed.netloc)
+        conn.request('DELETE', f'/r/{room_id}', headers={"Authorization": password})
+        response = conn.getresponse()
+        assert response.status == 202, f"DELETE failed: {response.status}"
+        conn.close()
+        
+        time.sleep(0.5)
+        
+        # Now join - should not receive the old message
+        sio = socketio.Client()
+        messages = []
+        user_counts = []
+        count_received = threading.Event()
+        
+        @sio.on('message')
+        def on_message(data):
+            messages.append(data)
+        
+        @sio.on('usersCount')
+        def on_count(count):
+            user_counts.append(count)
+            count_received.set()
+        
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+        
+        # Wait for usersCount
+        assert count_received.wait(timeout=5), "usersCount not received"
+        
+        # Give time for any message event
+        time.sleep(0.5)
+        
+        # Should NOT have received the old message
+        for msg in messages:
+            decoded = decode_message(msg)
+            assert test_message not in decoded, \
+                f"Should NOT receive deleted message, but got: {decoded}"
+        
+        sio.disconnect()
+
+
+class TestSocketIOSizePassthrough:
+    """Tests for size object passthrough behavior."""
+    
+    def test_size_object_exact_passthrough(self):
+        """Size object should be passed through exactly as sent."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        # Custom size with extra fields
+        custom_size = {
+            "rows": 42,
+            "cols": 132,
+            "extra": "data",
+            "nested": {"foo": "bar"}
+        }
+        
+        sio = socketio.Client()
+        sizes = []
+        size_received = threading.Event()
+        
+        @sio.on('size')
+        def on_size(data):
+            sizes.append(data)
+            size_received.set()
+        
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+        
+        time.sleep(0.5)
+        
+        # Broadcast with custom size
+        status = broadcast_message(room_id, "test", password, size=custom_size)
+        assert status == 200, f"Broadcast failed: {status}"
+        
+        assert size_received.wait(timeout=5), "Size not received"
+        
+        # Size should match exactly
+        assert sizes[-1] == custom_size, f"Expected {custom_size}, got {sizes[-1]}"
+        
+        sio.disconnect()
+    
+    def test_size_null_value(self):
+        """Null size should be passed through."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        sio = socketio.Client()
+        sizes = []
+        size_received = threading.Event()
+        
+        @sio.on('size')
+        def on_size(data):
+            sizes.append(data)
+            size_received.set()
+        
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+        
+        time.sleep(0.5)
+        
+        # Broadcast with null size
+        status = broadcast_message(room_id, "test", password, size=None)
+        assert status == 200, f"Broadcast failed: {status}"
+        
+        assert size_received.wait(timeout=5), "Size not received"
+        
+        # Size should be null
+        assert sizes[-1] is None, f"Expected None, got {sizes[-1]}"
+        
+        sio.disconnect()
+
+
+class TestSocketIOMessageFormat:
+    """Tests for message format and encoding."""
+    
+    def test_message_exact_base64_format(self):
+        """Message should be in base64(url_encode(text)) format."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        test_message = "Hello World!"
+        
+        sio = socketio.Client()
+        raw_messages = []
+        message_received = threading.Event()
+        
+        @sio.on('message')
+        def on_message(data):
+            raw_messages.append(data)
+            message_received.set()
+        
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+        
+        time.sleep(0.5)
+        
+        # Broadcast
+        status = broadcast_message(room_id, test_message, password)
+        assert status == 200, f"Broadcast failed: {status}"
+        
+        assert message_received.wait(timeout=5), "Message not received"
+        
+        # Verify raw message is base64
+        raw = raw_messages[-1]
+        assert isinstance(raw, str), f"Message should be string, got {type(raw)}"
+        
+        # Decode and verify
+        decoded = decode_message(raw)
+        assert test_message in decoded, f"Expected '{test_message}' in '{decoded}'"
+        
+        sio.disconnect()
+    
+    def test_accumulated_messages_format(self):
+        """Accumulated messages should be concatenated correctly."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        # Send 3 distinct messages
+        msg1, msg2, msg3 = "FIRST", "SECOND", "THIRD"
+        broadcast_message(room_id, msg1, password)
+        time.sleep(0.1)
+        broadcast_message(room_id, msg2, password)
+        time.sleep(0.1)
+        broadcast_message(room_id, msg3, password)
+        time.sleep(0.5)
+        
+        # New client joins
+        sio = socketio.Client()
+        messages = []
+        message_received = threading.Event()
+        
+        @sio.on('message')
+        def on_message(data):
+            messages.append(data)
+            message_received.set()
+        
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+        
+        assert message_received.wait(timeout=5), "Message not received"
+        
+        # Decode the accumulated message
+        decoded = decode_message(messages[0])
+        
+        # All three should be present and in order
+        idx1 = decoded.find(msg1)
+        idx2 = decoded.find(msg2)
+        idx3 = decoded.find(msg3)
+        
+        assert idx1 != -1, f"'{msg1}' not found in '{decoded}'"
+        assert idx2 != -1, f"'{msg2}' not found in '{decoded}'"
+        assert idx3 != -1, f"'{msg3}' not found in '{decoded}'"
+        assert idx1 < idx2 < idx3, f"Messages not in order: {idx1}, {idx2}, {idx3}"
+        
+        sio.disconnect()
+
+
+class TestSocketIOStripPrefix:
+    """Tests for stripPrefix behavior."""
+    
+    def test_strip_prefix_removes_r_prefix(self):
+        """stripPrefix should remove /r/ prefix."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        test_message = f"Prefix-{random_id()}"
+        
+        # Two clients: one joins with prefix, one without
+        sio1 = socketio.Client()
+        sio2 = socketio.Client()
+        messages1 = []
+        messages2 = []
+        msg1_received = threading.Event()
+        msg2_received = threading.Event()
+        
+        @sio1.on('message')
+        def on_msg1(data):
+            messages1.append(data)
+            msg1_received.set()
+        
+        @sio2.on('message')
+        def on_msg2(data):
+            messages2.append(data)
+            msg2_received.set()
+        
+        sio1.connect(SERVER_URL)
+        sio2.connect(SERVER_URL)
+        
+        # One joins with /r/ prefix
+        sio1.emit('join', f'/r/{room_id}')
+        # One joins without prefix (server has /r/ as roomPrefix)
+        sio2.emit('join', f'/{room_id}')
+        
+        time.sleep(0.5)
+        
+        # Broadcast
+        status = broadcast_message(room_id, test_message, password)
+        assert status == 200, f"Broadcast failed: {status}"
+        
+        msg1_received.wait(timeout=5)
+        msg2_received.wait(timeout=2)
+        
+        # Client with /r/ prefix should definitely receive
+        assert len(messages1) > 0, "Client with /r/ prefix should receive message"
+        
+        # Document whether client without /r/ prefix receives
+        # (depends on exact stripPrefix implementation)
+        
+        sio1.disconnect()
+        sio2.disconnect()
+
+
+class TestSocketIOLargeMessage:
+    """Tests for large message handling."""
+    
+    def test_large_message_delivery(self):
+        """Large messages should be delivered correctly."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        # 50KB message (under 300KB limit)
+        large_message = "X" * 50000
+        
+        sio = socketio.Client()
+        messages = []
+        message_received = threading.Event()
+        
+        @sio.on('message')
+        def on_message(data):
+            messages.append(data)
+            message_received.set()
+        
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+        
+        time.sleep(0.5)
+        
+        status = broadcast_message(room_id, large_message, password)
+        assert status == 200, f"Broadcast failed: {status}"
+        
+        assert message_received.wait(timeout=10), "Large message not received"
+        
+        decoded = decode_message(messages[-1])
+        assert large_message in decoded, "Large message content should match"
+        
+        sio.disconnect()
+
+
+class TestSocketIOMultipleClients:
+    """Tests for multiple client scenarios."""
+    
+    def test_three_clients_same_room(self):
+        """Three clients in same room should all receive messages."""
+        wait_for_server(SERVER_URL)
+        
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        test_message = f"Broadcast-{random_id()}"
+        
+        clients = []
+        message_lists = []
+        events = []
+        
+        for i in range(3):
+            sio = socketio.Client()
+            messages = []
+            evt = threading.Event()
+            
+            def make_handler(msgs, event):
+                def handler(data):
+                    msgs.append(data)
+                    event.set()
+                return handler
+            
+            sio.on('message', make_handler(messages, evt))
+            sio.connect(SERVER_URL)
+            sio.emit('join', f'/r/{room_id}')
+            
+            clients.append(sio)
+            message_lists.append(messages)
+            events.append(evt)
+        
+        time.sleep(0.5)
+        
+        # Broadcast
+        status = broadcast_message(room_id, test_message, password)
+        assert status == 200, f"Broadcast failed: {status}"
+        
+        # All clients should receive
+        for i, evt in enumerate(events):
+            assert evt.wait(timeout=5), f"Client {i} did not receive message"
+        
+        for i, messages in enumerate(message_lists):
+            assert len(messages) > 0, f"Client {i} has no messages"
+            decoded = decode_message(messages[-1])
+            assert test_message in decoded, f"Client {i} missing test message"
+        
+        for sio in clients:
+            sio.disconnect()
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

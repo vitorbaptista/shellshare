@@ -1376,6 +1376,351 @@ class TestConcurrentRequests:
         assert status2 in [200, 401], f"Got unexpected status {status2}"
 
 
+class TestResponseHeaders:
+    """Tests for response headers and content types."""
+    
+    def test_200_response_content_type(self):
+        """POST 200 response should have text/plain content type."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": encode_message("Hello"),
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        status, headers, resp_body = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        assert status == 200, f"Expected 200, got {status}"
+        content_type = headers.get('Content-Type', '')
+        # Express sendStatus sends text/plain
+        assert 'text/plain' in content_type or 'text/html' in content_type, \
+            f"Expected text content type, got: {content_type}"
+    
+    def test_401_response_content_type(self):
+        """401 response should have text/plain content type."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password1 = f"secret-{random_id()}"
+        password2 = f"different-{random_id()}"
+        
+        body = {
+            "message": encode_message("Hello"),
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        # Claim room
+        make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password1},
+            body=body
+        )
+        time.sleep(0.5)
+        
+        # Wrong password
+        status, headers, resp_body = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password2},
+            body=body
+        )
+        
+        assert status == 401, f"Expected 401, got {status}"
+        content_type = headers.get('Content-Type', '')
+        assert 'text/plain' in content_type or 'text/html' in content_type, \
+            f"Expected text content type, got: {content_type}"
+    
+    def test_room_page_content_type(self):
+        """Room page should return HTML content type."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        
+        status, headers, body = make_request('GET', f'/r/{room_id}')
+        
+        assert status == 200, f"Expected 200, got {status}"
+        content_type = headers.get('Content-Type', '')
+        assert 'text/html' in content_type, f"Expected HTML, got: {content_type}"
+
+
+class TestMessageAccumulation:
+    """Tests for message accumulation behavior."""
+    
+    def test_messages_concatenate_correctly(self):
+        """Multiple POSTs should concatenate messages in base64."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        # Send multiple distinct messages
+        messages = ["AAA", "BBB", "CCC"]
+        for msg in messages:
+            body = {
+                "message": encode_message(msg),
+                "size": {"rows": 24, "cols": 80}
+            }
+            status, _, _ = make_request(
+                'POST', f'/r/{room_id}',
+                headers={"Authorization": password},
+                body=body
+            )
+            assert status == 200, f"POST failed: {status}"
+        
+        # This test verifies POSTs succeed - Socket.IO tests verify accumulation
+
+
+class TestDeleteBehavior:
+    """Tests for DELETE behavior and side effects."""
+    
+    def test_delete_clears_room_messages(self):
+        """After DELETE, joining should not receive old messages."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": encode_message("This should be deleted"),
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        # Create room with message
+        status1, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        assert status1 == 200, f"POST failed: {status1}"
+        
+        # Delete room
+        status2, _, _ = make_request(
+            'DELETE', f'/r/{room_id}',
+            headers={"Authorization": password}
+        )
+        assert status2 == 202, f"DELETE failed: {status2}"
+        
+        # Room is deleted - this test verifies DELETE succeeds
+        # Socket.IO test should verify messages are cleared
+
+
+class TestRoomNameEdgeCasesAdvanced:
+    """Additional room name edge cases."""
+    
+    def test_room_with_double_slash(self):
+        """Room name starting with slash like //foo."""
+        wait_for_server(SERVER_URL)
+        # This creates path /r//foo
+        room_id = "/test-room"
+        
+        status, headers, body = make_request('GET', f'/r/{room_id}')
+        # Document behavior - might be 200 or 404
+        assert status in [200, 301, 404], f"Got unexpected status {status}"
+    
+    def test_room_with_query_string(self):
+        """Room with query string should ignore query."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        
+        status, headers, body = make_request('GET', f'/r/{room_id}?foo=bar')
+        assert status == 200, f"Expected 200, got {status}"
+    
+    def test_room_with_fragment(self):
+        """Room with fragment should work (fragment not sent to server)."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        
+        # Note: fragments aren't sent to server, so this is same as normal request
+        status, headers, body = make_request('GET', f'/r/{room_id}')
+        assert status == 200, f"Expected 200, got {status}"
+    
+    def test_room_with_semicolon(self):
+        """Room name with semicolon."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test;room;{random_id()}"
+        
+        status, headers, body = make_request('GET', f'/r/{room_id}')
+        assert status in [200, 400], f"Got unexpected status {status}"
+
+
+class TestSizeFieldBehavior:
+    """Tests for size field handling."""
+    
+    def test_size_with_extra_fields(self):
+        """Size object with extra fields should be accepted."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": encode_message("Test"),
+            "size": {
+                "rows": 24,
+                "cols": 80,
+                "extra": "ignored",
+                "nested": {"foo": "bar"}
+            }
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        assert status == 200, f"Expected 200, got {status}"
+    
+    def test_size_as_array(self):
+        """Size as array instead of object."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": encode_message("Test"),
+            "size": [24, 80]
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        # Server accepts any JSON value for size
+        assert status in [200, 400], f"Got unexpected status {status}"
+    
+    def test_size_as_string(self):
+        """Size as string instead of object."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": encode_message("Test"),
+            "size": "24x80"
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        # Server accepts any JSON value for size
+        assert status in [200, 400], f"Got unexpected status {status}"
+
+
+class TestMessageFieldBehavior:
+    """Tests for message field handling."""
+    
+    def test_message_as_number(self):
+        """Message as number instead of string."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": 12345,
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        # Server accepts and emits whatever is provided
+        assert status in [200, 400], f"Got unexpected status {status}"
+    
+    def test_message_as_object(self):
+        """Message as object instead of string."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": {"nested": "object"},
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        # Server accepts and emits whatever is provided
+        assert status in [200, 400], f"Got unexpected status {status}"
+    
+    def test_message_as_array(self):
+        """Message as array instead of string."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": ["line1", "line2"],
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        # Server accepts and emits whatever is provided
+        assert status in [200, 400], f"Got unexpected status {status}"
+    
+    def test_empty_string_message(self):
+        """Empty string message."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": "",
+            "size": {"rows": 24, "cols": 80}
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        assert status == 200, f"Expected 200, got {status}"
+
+
+class TestExtraBodyFields:
+    """Tests for extra fields in request body."""
+    
+    def test_post_with_extra_fields(self):
+        """POST with extra fields in body should work."""
+        wait_for_server(SERVER_URL)
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        
+        body = {
+            "message": encode_message("Test"),
+            "size": {"rows": 24, "cols": 80},
+            "extra": "ignored",
+            "another": {"nested": "data"},
+            "timestamp": 1234567890
+        }
+        
+        status, _, _ = make_request(
+            'POST', f'/r/{room_id}',
+            headers={"Authorization": password},
+            body=body
+        )
+        
+        assert status == 200, f"Expected 200, got {status}"
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])
