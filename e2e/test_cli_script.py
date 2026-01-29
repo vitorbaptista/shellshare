@@ -121,6 +121,10 @@ def run_cli_script_mode(room, password, server=SERVER_URL, env=None, timeout=30)
 class TestScriptModeBasic:
     """Basic tests for script mode."""
 
+    @pytest.mark.skipif(
+        platform.system() == "Windows",
+        reason="Windows CLI expects real script.exe, mock Python script can't be executed as .exe"
+    )
     def test_script_mode_streams_output(self, unique_room, unique_password, mock_script_env):
         """Mock script output should appear via Socket.IO."""
         listener = SocketListener(unique_room)
@@ -191,6 +195,10 @@ class TestScriptModeBasic:
         listener.disconnect()
         listener2.disconnect()
 
+    @pytest.mark.skipif(
+        platform.system() == "Windows",
+        reason="Windows CLI expects real script.exe, mock Python script can't be executed as .exe"
+    )
     def test_script_mode_uses_temp_file(self, unique_room, unique_password, mock_script_env):
         """Script mode should use a temp file for script output."""
         listener = SocketListener(unique_room)
@@ -241,8 +249,17 @@ class TestScriptModeTerminalSize:
 
 
 class TestScriptModeWithMockContent:
-    """Tests verifying specific mock script content is transmitted."""
+    """Tests verifying specific mock script content is transmitted.
+    
+    Note: These tests are skipped on Windows because the CLI expects a real
+    script.exe binary, but our mock is a Python script that Windows can't
+    execute as an .exe file.
+    """
 
+    @pytest.mark.skipif(
+        platform.system() == "Windows",
+        reason="Windows CLI expects real script.exe, mock Python script can't be executed as .exe"
+    )
     def test_mock_script_markers_transmitted(self, unique_room, unique_password, mock_script_env):
         """Verify specific markers from mock script are transmitted."""
         listener = SocketListener(unique_room)
@@ -270,6 +287,10 @@ class TestScriptModeWithMockContent:
 
         assert has_mock_content, f"Mock script content not found in: {accumulated[:500]}"
 
+    @pytest.mark.skipif(
+        platform.system() == "Windows",
+        reason="Windows CLI expects real script.exe, mock Python script can't be executed as .exe"
+    )
     def test_script_mode_complete_session(self, unique_room, unique_password, mock_script_env):
         """Test a complete script mode session from start to end."""
         listener = SocketListener(unique_room)
