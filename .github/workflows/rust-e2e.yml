@@ -16,12 +16,6 @@ env:
 jobs:
   rust-e2e:
     runs-on: ubuntu-latest
-    
-    services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
 
     steps:
       - name: Checkout code
@@ -48,7 +42,7 @@ jobs:
       - name: Start Rust server
         working-directory: rust-server
         run: |
-          ./target/release/shellshare server --port 3000 --mongodb-uri mongodb://localhost:27017/shellshare &
+          ./target/release/shellshare server --port 3000 &
           echo $! > /tmp/server.pid
         env:
           RUST_LOG: info
