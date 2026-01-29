@@ -255,14 +255,15 @@ fn setup_socket_handlers(io: &SocketIo) {
             let io_guard = state.io.read().await;
             if let Some(ref io) = *io_guard {
                 for room in rooms {
+                    // Count remaining users in room (this socket is already removed)
+                    let user_count = if let Some(ns) = io.of("/") {
+                        ns.within(room.clone()).sockets().map(|s| s.len()).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    info!("Room {} now has {} users", room, user_count);
+                    // Emit with fresh ns reference
                     if let Some(ns) = io.of("/") {
-                        // Count remaining users in room (this socket is already removed)
-                        let user_count = ns
-                            .within(room.clone())
-                            .sockets()
-                            .map(|s| s.len())
-                            .unwrap_or(0);
-                        info!("Room {} now has {} users", room, user_count);
                         let _ = ns.within(room).emit("usersCount", &user_count);
                     }
                 }
