@@ -11,6 +11,7 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use percent_encoding::percent_decode_str;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
 use serde::Deserialize;
@@ -272,14 +273,19 @@ fn setup_socket_handlers(io: &SocketIo) {
     });
 }
 
-/// Normalize room name by stripping /r/ prefix
+/// Normalize room name by stripping /r/ prefix and URL-decoding
 fn normalize_room_name(room: &str) -> String {
     let room = room.trim_start_matches('/');
-    if room.starts_with("r/") {
-        room[2..].to_string()
+    let room = if room.starts_with("r/") {
+        &room[2..]
     } else {
-        room.to_string()
-    }
+        room
+    };
+    // URL-decode to handle encoded characters from Socket.IO
+    // (Axum auto-decodes HTTP paths, but Socket.IO sends raw strings)
+    percent_decode_str(room)
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 /// GET / - Home page

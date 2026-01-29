@@ -77,6 +77,10 @@ def test_happy_path_broadcast_appears_in_browser():
         page.wait_for_selector("#terminal", timeout=10000)
         print("Terminal element found")
         
+        # Wait for Socket.IO to connect (user count becomes 1)
+        page.wait_for_function("document.getElementById('online-counter').textContent !== '0'", timeout=10000)
+        print("Socket.IO connected (user count updated)")
+        
         # Broadcast using CLI
         print(f"Broadcasting via CLI: {test_message}")
         returncode, stdout, stderr = broadcast_with_cli(room_id, test_message, password, SERVER_URL)

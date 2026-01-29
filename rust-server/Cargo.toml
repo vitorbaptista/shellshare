@@ -39,6 +39,9 @@ socketioxide = { version = "0.15", features = ["state"] }
 # Base64 encoding for message accumulation
 base64 = "0.22"
 
+# URL decoding for room names
+percent-encoding = "2.3"
+
 [profile.release]
 lto = true
 strip = true
