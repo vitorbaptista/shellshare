@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     extract::{Path, State, DefaultBodyLimit},
     http::{header, HeaderMap, Request, StatusCode, Method},
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post, delete},
     Json, Router,
 };
@@ -14,7 +14,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use percent_encoding::percent_decode_str;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
-use serde::Deserialize;
 use socketioxide::{
     extract::{Data, SocketRef, State as SioState},
     SocketIo,
@@ -130,7 +129,7 @@ async fn run_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Err
     info!("Starting shellshare server on {}:{}", host, port);
 
     // Shared state
-    let mut app_state = AppState::default();
+    let app_state = AppState::default();
 
     // Socket.IO setup
     let (sio_layer, io) = SocketIo::builder()
@@ -171,7 +170,7 @@ async fn run_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Err
 
 /// Setup Socket.IO event handlers
 fn setup_socket_handlers(io: &SocketIo) {
-    io.ns("/", |socket: SocketRef, state: SioState<AppState>| async move {
+    io.ns("/", |socket: SocketRef, _state: SioState<AppState>| async move {
         info!("Client connected: {}", socket.id);
 
         // Handle join event
