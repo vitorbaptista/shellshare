@@ -797,6 +797,8 @@ class TestSocketIOEdgeCases:
         wait_for_server(SERVER_URL)
         
         room_id = f"テスト-{random_id()}"
+        # URL-encode for HTTP requests
+        encoded_room_id = urllib.parse.quote(room_id, safe='')
         password = f"secret-{random_id()}"
         test_message = f"Unicode-{random_id()}"
         
@@ -810,12 +812,13 @@ class TestSocketIOEdgeCases:
             msg_received.set()
         
         sio.connect(SERVER_URL)
+        # Socket.IO can handle unicode directly
         sio.emit('join', f'/r/{room_id}')
         
         time.sleep(0.5)
         
-        # Broadcast to unicode room
-        status = broadcast_message(room_id, test_message, password)
+        # Broadcast to unicode room (use encoded version for HTTP)
+        status = broadcast_message(encoded_room_id, test_message, password)
         assert status == 200, f"Broadcast to unicode room failed: {status}"
         
         assert msg_received.wait(timeout=5), "Should receive message in unicode room"

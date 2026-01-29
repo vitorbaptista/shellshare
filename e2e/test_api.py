@@ -1092,8 +1092,10 @@ class TestRoomNameEdgeCases:
         """Room names with unicode characters."""
         wait_for_server(SERVER_URL)
         room_id = f"テスト-{random_id()}"
+        # URL-encode the unicode characters for HTTP request
+        encoded_room_id = urllib.parse.quote(room_id, safe='')
         
-        status, headers, body = make_request('GET', f'/r/{room_id}')
+        status, headers, body = make_request('GET', f'/r/{encoded_room_id}')
         assert status == 200, f"Expected 200 for unicode room name, got {status}"
     
     def test_room_with_very_long_name(self):
