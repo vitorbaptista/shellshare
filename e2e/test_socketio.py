@@ -1462,6 +1462,250 @@ class TestSocketIOMultipleClients:
             sio.disconnect()
 
 
+class TestSocketIOLateJoinerHistory:
+    """Tests for late joiner history feature.
+
+    These tests verify that viewers joining an existing room receive
+    the message history so they don't see a blank screen.
+    """
+
+    def test_late_joiner_receives_single_message_history(self):
+        """Late joiner should receive a single message that was broadcast before they joined."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+        test_message = f"HistorySingle-{random_id()}"
+
+        # Broadcast message BEFORE any viewer joins
+        status = broadcast_message(room_id, test_message, password)
+        assert status == 200, f"Broadcast failed: {status}"
+
+        # Wait for message to be stored
+        time.sleep(1.0)
+
+        # Late joiner connects
+        sio = socketio.Client()
+        received_messages = []
+        message_received = threading.Event()
+
+        @sio.on('message')
+        def on_message(data):
+            received_messages.append(data)
+            message_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        # Should receive the historical message
+        assert message_received.wait(timeout=5), "Late joiner did not receive history"
+
+        assert len(received_messages) > 0, "No messages received"
+        decoded = decode_message(received_messages[0])
+        assert test_message in decoded, f"Expected '{test_message}' in history"
+
+        sio.disconnect()
+
+    def test_late_joiner_receives_multiple_messages_in_order(self):
+        """Late joiner should receive multiple messages in the correct order."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Broadcast multiple messages BEFORE any viewer joins
+        messages_sent = [f"MSG1-{random_id()}", f"MSG2-{random_id()}", f"MSG3-{random_id()}"]
+        for msg in messages_sent:
+            status = broadcast_message(room_id, msg, password)
+            assert status == 200, f"Broadcast failed: {status}"
+            time.sleep(0.3)
+
+        # Wait for messages to be stored
+        time.sleep(1.0)
+
+        # Late joiner connects
+        sio = socketio.Client()
+        received_messages = []
+        message_received = threading.Event()
+
+        @sio.on('message')
+        def on_message(data):
+            received_messages.append(data)
+            message_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        # Should receive the accumulated history
+        assert message_received.wait(timeout=5), "Late joiner did not receive history"
+
+        # Decode and verify all messages are present in order
+        decoded = decode_message(received_messages[0])
+
+        for msg in messages_sent:
+            assert msg in decoded, f"Expected '{msg}' in accumulated history"
+
+        # Verify order
+        idx1 = decoded.find(messages_sent[0])
+        idx2 = decoded.find(messages_sent[1])
+        idx3 = decoded.find(messages_sent[2])
+        assert idx1 < idx2 < idx3, f"Messages not in order: indices {idx1}, {idx2}, {idx3}"
+
+        sio.disconnect()
+
+    def test_late_joiner_and_live_viewer_same_content(self):
+        """Late joiner and live viewer should ultimately see the same content."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Live viewer joins first
+        live_viewer = socketio.Client()
+        live_messages = []
+        live_ready = threading.Event()
+
+        @live_viewer.on('message')
+        def on_live_message(data):
+            live_messages.append(decode_message(data))
+
+        @live_viewer.on('usersCount')
+        def on_live_count(count):
+            live_ready.set()
+
+        live_viewer.connect(SERVER_URL)
+        live_viewer.emit('join', f'/r/{room_id}')
+
+        # Wait for live viewer to be ready
+        assert live_ready.wait(timeout=5), "Live viewer failed to join"
+
+        time.sleep(0.5)
+
+        # Broadcast messages while live viewer is watching
+        messages_sent = [f"LIVE1-{random_id()}", f"LIVE2-{random_id()}"]
+        for msg in messages_sent:
+            status = broadcast_message(room_id, msg, password)
+            assert status == 200, f"Broadcast failed: {status}"
+            time.sleep(0.3)
+
+        # Wait for live viewer to receive all messages
+        time.sleep(1.0)
+
+        # Late joiner connects
+        late_joiner = socketio.Client()
+        late_messages = []
+        late_received = threading.Event()
+
+        @late_joiner.on('message')
+        def on_late_message(data):
+            late_messages.append(decode_message(data))
+            late_received.set()
+
+        late_joiner.connect(SERVER_URL)
+        late_joiner.emit('join', f'/r/{room_id}')
+
+        # Wait for late joiner to receive history
+        assert late_received.wait(timeout=5), "Late joiner did not receive history"
+
+        # Compare content: live viewer should have accumulated all messages
+        live_content = ''.join(live_messages)
+        late_content = ''.join(late_messages)
+
+        # Both should contain all the sent messages
+        for msg in messages_sent:
+            assert msg in live_content, f"Live viewer missing '{msg}'"
+            assert msg in late_content, f"Late joiner missing '{msg}'"
+
+        live_viewer.disconnect()
+        late_joiner.disconnect()
+
+    def test_late_joiner_receives_correct_terminal_size(self):
+        """Late joiner should receive the correct terminal size."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Broadcast with specific size BEFORE viewer joins
+        expected_size = {"rows": 48, "cols": 160}
+        status = broadcast_message(room_id, "Size test", password, size=expected_size)
+        assert status == 200, f"Broadcast failed: {status}"
+
+        # Wait for message to be stored
+        time.sleep(1.0)
+
+        # Late joiner connects
+        sio = socketio.Client()
+        received_sizes = []
+        size_received = threading.Event()
+
+        @sio.on('size')
+        def on_size(data):
+            received_sizes.append(data)
+            size_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        # Should receive the size
+        assert size_received.wait(timeout=5), "Late joiner did not receive size"
+
+        assert len(received_sizes) > 0, "No size received"
+        assert received_sizes[0] == expected_size, \
+            f"Expected {expected_size}, got {received_sizes[0]}"
+
+        sio.disconnect()
+
+    def test_late_joiner_size_before_message(self):
+        """Late joiner should receive size BEFORE message for correct terminal rendering."""
+        wait_for_server(SERVER_URL)
+
+        room_id = f"test-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # Broadcast with size
+        expected_size = {"rows": 30, "cols": 100}
+        status = broadcast_message(room_id, "Content", password, size=expected_size)
+        assert status == 200, f"Broadcast failed: {status}"
+
+        time.sleep(1.0)
+
+        # Late joiner tracks event order
+        sio = socketio.Client()
+        events = []
+        all_received = threading.Event()
+
+        @sio.on('size')
+        def on_size(data):
+            events.append(('size', data))
+            check_done()
+
+        @sio.on('message')
+        def on_message(data):
+            events.append(('message', data))
+            check_done()
+
+        def check_done():
+            event_types = [e[0] for e in events]
+            if 'size' in event_types and 'message' in event_types:
+                all_received.set()
+
+        sio.connect(SERVER_URL)
+        sio.emit('join', f'/r/{room_id}')
+
+        assert all_received.wait(timeout=5), f"Not all events received: {events}"
+
+        # Verify size comes before message
+        event_types = [e[0] for e in events]
+        size_idx = event_types.index('size')
+        message_idx = event_types.index('message')
+
+        assert size_idx < message_idx, \
+            f"Size should come before message, but got order: {event_types}"
+
+        sio.disconnect()
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

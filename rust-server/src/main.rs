@@ -25,6 +25,11 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
+/// Maximum number of messages to store per room for late joiners.
+/// This prevents unbounded memory growth while keeping enough history
+/// for a good late-joiner experience.
+const MAX_HISTORY_MESSAGES: usize = 100;
+
 /// Shellshare - Live terminal broadcasting
 #[derive(Parser)]
 #[command(name = "shellshare")]
@@ -218,17 +223,17 @@ fn setup_socket_handlers(io: &SocketIo) {
 
                 // Send existing room data if any
                 if let Some(data) = room_data {
-                    // Send accumulated message
-                    if let Some(msg) = data.get_accumulated_message() {
-                        if let Err(e) = socket.emit("message", &msg) {
-                            warn!("Failed to emit message: {:?}", e);
-                        }
-                    }
-
-                    // Send size if set
+                    // Send size FIRST - terminal must be sized before receiving content
                     if let Some(ref size) = data.size {
                         if let Err(e) = socket.emit("size", size) {
                             warn!("Failed to emit size: {:?}", e);
+                        }
+                    }
+
+                    // Then send accumulated message history
+                    if let Some(msg) = data.get_accumulated_message() {
+                        if let Err(e) = socket.emit("message", &msg) {
+                            warn!("Failed to emit message: {:?}", e);
                         }
                     }
                 }
@@ -417,6 +422,11 @@ async fn broadcast_handler(
         if let Some(message) = body_obj.and_then(|o| o.get("message")) {
             if let Some(msg_str) = message.as_str() {
                 room_data.messages.push(msg_str.to_string());
+
+                // Limit history size to prevent unbounded memory growth
+                while room_data.messages.len() > MAX_HISTORY_MESSAGES {
+                    room_data.messages.remove(0); // Remove oldest
+                }
 
                 // Emit ONLY the new message to all clients in room
                 // (accumulated message is only sent when a new client joins)
