@@ -85,12 +85,22 @@ def test_happy_path_broadcast_appears_in_browser():
         returncode, stdout, stderr = broadcast_with_cli(room_id, test_message, password, SERVER_URL)
         print(f"CLI stderr: {stderr.strip()}")
         assert returncode == 0, f"CLI failed with code {returncode}: {stderr}"
-        
-        # Wait for Socket.io to deliver the message
-        page.wait_for_timeout(2000)
-        
-        # Get terminal content
+
+        # Wait for message to appear in terminal
+        # The terminal text content is updated when Socket.IO message arrives
         terminal = page.locator("#terminal")
+        try:
+            terminal.wait_for(state="visible", timeout=5000)
+            # Use expect to wait for the text to appear
+            from playwright.sync_api import expect
+            expect(terminal).to_contain_text(test_message, timeout=10000)
+        except Exception as e:
+            # If the assertion fails, get content for debugging
+            content = terminal.text_content()
+            print(f"Terminal content when failed: {content[:200] if content else 'empty'}")
+            raise
+
+        # Get terminal content
         content = terminal.text_content()
         
         # Normalize whitespace for comparison
@@ -122,35 +132,44 @@ def test_user_counter_shows_in_browser():
         room_url = f"{SERVER_URL}/r/{room_id}"
         print(f"User 1 opening room: {room_url}")
         page1.goto(room_url)
-        
-        # Wait for counter to update
-        page1.wait_for_timeout(1000)
-        
+
+        # Wait for counter to show 1
+        page1.wait_for_function(
+            "document.getElementById('online-counter').textContent === '1'",
+            timeout=10000
+        )
+
         # Check counter shows 1
         counter = page1.locator("#online-counter")
         count1 = counter.text_content()
         print(f"User count after 1 user: {count1}")
         assert count1 == "1", f"Expected 1 user, got {count1}"
-        
+
         # Second user joins
         page2 = browser.new_page()
         print(f"User 2 opening room: {room_url}")
         page2.goto(room_url)
-        
-        # Wait for counter to update on both pages
-        page1.wait_for_timeout(1000)
-        
+
+        # Wait for counter to show 2 on first page
+        page1.wait_for_function(
+            "document.getElementById('online-counter').textContent === '2'",
+            timeout=10000
+        )
+
         # Check counter shows 2 on first page
         count2 = counter.text_content()
         print(f"User count after 2 users: {count2}")
         assert count2 == "2", f"Expected 2 users, got {count2}"
-        
+
         # Close second user
         page2.close()
-        
-        # Wait for counter to update
-        page1.wait_for_timeout(1000)
-        
+
+        # Wait for counter to show 1 again
+        page1.wait_for_function(
+            "document.getElementById('online-counter').textContent === '1'",
+            timeout=10000
+        )
+
         # Check counter shows 1 again
         count3 = counter.text_content()
         print(f"User count after user 2 leaves: {count3}")
@@ -190,12 +209,13 @@ def test_terminal_size_updates_in_browser():
             room_id, "Test message", password, SERVER_URL
         )
         assert returncode == 0, f"CLI failed: {stderr}"
-        
-        # Wait for size update
-        page.wait_for_timeout(2000)
-        
-        # The terminal should have been created - verify it exists
+
+        # Wait for message to appear in terminal (confirms size update was processed)
         terminal = page.locator("#terminal")
+        from playwright.sync_api import expect
+        expect(terminal).to_contain_text("Test message", timeout=10000)
+
+        # The terminal should have been created - verify it exists
         assert terminal.count() > 0, "Terminal should exist"
         
         print("✓ PASSED: Terminal receives size updates!")
@@ -246,19 +266,20 @@ def test_multiple_broadcasts_no_duplication():
         returncode, _, stderr = broadcast_with_cli(room_id, marker_a, password, SERVER_URL)
         assert returncode == 0, f"First broadcast failed: {stderr}"
 
-        # Wait for message to arrive
-        page.wait_for_timeout(1000)
+        # Wait for first message to arrive
+        terminal = page.locator("#terminal")
+        from playwright.sync_api import expect
+        expect(terminal).to_contain_text(marker_a, timeout=10000)
 
         # Second broadcast
         print(f"Broadcasting second message: {marker_b}")
         returncode, _, stderr = broadcast_with_cli(room_id, marker_b, password, SERVER_URL)
         assert returncode == 0, f"Second broadcast failed: {stderr}"
 
-        # Wait for message to arrive
-        page.wait_for_timeout(1000)
+        # Wait for second message to arrive
+        expect(terminal).to_contain_text(marker_b, timeout=10000)
 
         # Get terminal content
-        terminal = page.locator("#terminal")
         content = terminal.text_content()
         print(f"Terminal content: {content[:200]}...")
 

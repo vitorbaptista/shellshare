@@ -43,6 +43,50 @@ def random_id(length=12):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
+def wait_for_content(listener, predicate, timeout=5):
+    """
+    Wait until accumulated messages satisfy a predicate.
+
+    Args:
+        listener: SocketListener instance
+        predicate: Function that takes accumulated messages string and returns bool
+        timeout: Maximum seconds to wait
+
+    Returns:
+        True if predicate was satisfied, False if timeout expired
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        accumulated = listener.get_accumulated_messages()
+        if predicate(accumulated):
+            return True
+        remaining = timeout - (time.time() - start)
+        if remaining > 0:
+            listener._message_event.wait(timeout=min(0.5, remaining))
+            listener._message_event.clear()
+    return False
+
+
+def poll_until(predicate, timeout=5, interval=0.1):
+    """
+    Poll until predicate returns True or timeout expires.
+
+    Args:
+        predicate: Function that returns bool
+        timeout: Maximum seconds to wait
+        interval: Polling interval in seconds
+
+    Returns:
+        True if predicate became True, False if timeout expired
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
 def wait_for_server(url, timeout_seconds=30):
     """Wait for server to be ready."""
     start = time.time()
@@ -180,6 +224,18 @@ class SocketListener:
     def get_last_size(self) -> dict:
         """Get the last received terminal size."""
         return self._sizes[-1] if self._sizes else None
+
+    def wait_for_size(self, timeout=5) -> bool:
+        """Wait for a size event to arrive."""
+        start = time.time()
+        while time.time() - start < timeout:
+            if self._sizes:
+                return True
+            remaining = timeout - (time.time() - start)
+            if remaining > 0:
+                self._size_event.wait(timeout=min(0.5, remaining))
+                self._size_event.clear()
+        return False
 
     def clear_messages(self):
         """Clear accumulated messages."""

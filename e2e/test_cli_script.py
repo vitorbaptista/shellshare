@@ -28,7 +28,9 @@ from conftest import (
     CLI_COMMAND,
     SERVER_URL,
     SocketListener,
+    poll_until,
     random_id,
+    wait_for_content,
 )
 
 
@@ -69,15 +71,13 @@ class TestScriptModeBasic:
         listener = SocketListener(unique_room)
         listener.connect()
 
-        # Give listener time to fully connect
-        time.sleep(0.5)
-
         _, _, _ = run_cli_script_mode(
             unique_room, unique_password, timeout=15
         )
 
-        # Wait for messages to accumulate
-        time.sleep(2)
+        # Wait for some output using polling
+        assert wait_for_content(listener, lambda s: len(s) > 0, timeout=10), \
+            "No output received from PTY"
 
         accumulated = listener.get_accumulated_messages()
         listener.disconnect()
@@ -112,8 +112,8 @@ class TestScriptModeBasic:
             text=True,
         )
 
-        # Give shell time to start
-        time.sleep(1)
+        # Wait briefly for shell to start, then send exit
+        time.sleep(0.5)
 
         # Send exit command
         try:
@@ -145,15 +145,9 @@ class TestScriptModeBasic:
             unique_room, unique_password, timeout=15
         )
 
-        # Wait for DELETE to be processed
-        time.sleep(1)
-
         # Connect a new listener - if DELETE was sent, room should be empty
         listener2 = SocketListener(unique_room)
         listener2.connect()
-
-        # Give time for any message to arrive
-        time.sleep(1)
 
         # The exact behavior depends on server implementation
         # (some servers clear room on DELETE, others just decrement count)
@@ -193,7 +187,7 @@ class TestScriptModeTerminalSize:
         )
 
         # Wait for size event
-        time.sleep(2)
+        listener.wait_for_size(timeout=5)
 
         size = listener.get_last_size()
         listener.disconnect()
@@ -215,8 +209,9 @@ class TestScriptModeOutput:
             unique_room, unique_password, timeout=15
         )
 
-        # Wait for content to be transmitted
-        time.sleep(3)
+        # Wait for content to be transmitted using polling
+        assert wait_for_content(listener, lambda s: len(s) > 0, timeout=10), \
+            "No output received from PTY"
 
         accumulated = listener.get_accumulated_messages()
 
@@ -239,8 +234,9 @@ class TestScriptModeOutput:
             text=True,
         )
 
-        # Wait for shell to start and produce output
-        time.sleep(3)
+        # Wait for some output to be transmitted
+        assert wait_for_content(listener, lambda s: len(s) > 0, timeout=10), \
+            "No PTY output transmitted"
 
         # Check that some output was transmitted
         accumulated = listener.get_accumulated_messages()
@@ -299,6 +295,10 @@ class TestScriptModeViewer:
 
     def test_late_joiner_sees_accumulated_content(self, unique_room, unique_password):
         """Late joiner should see accumulated content from script mode."""
+        # First viewer to ensure content is accumulated
+        first_listener = SocketListener(unique_room)
+        first_listener.connect()
+
         # Start streaming
         proc = subprocess.Popen(
             CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
@@ -309,17 +309,19 @@ class TestScriptModeViewer:
         )
 
         # Wait for some content to be generated
-        time.sleep(3)
+        assert wait_for_content(first_listener, lambda s: len(s) > 0, timeout=10), \
+            "No content generated"
 
         # Late joiner connects
-        listener = SocketListener(unique_room)
-        listener.connect()
+        late_listener = SocketListener(unique_room)
+        late_listener.connect()
 
-        # Wait for accumulated content
-        time.sleep(2)
+        # Wait for accumulated content to be delivered to late joiner
+        assert wait_for_content(late_listener, lambda s: len(s) > 0, timeout=10), \
+            "Late joiner received no content"
 
         # Check if late joiner got something
-        accumulated = listener.get_accumulated_messages()
+        accumulated = late_listener.get_accumulated_messages()
 
         # Clean up - terminate instead of trying to send exit
         proc.terminate()
@@ -328,7 +330,9 @@ class TestScriptModeViewer:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
-        listener.disconnect()
+
+        first_listener.disconnect()
+        late_listener.disconnect()
 
         # Late joiner should see at least some content
         # (shell prompt, etc.)

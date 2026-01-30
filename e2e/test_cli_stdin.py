@@ -27,7 +27,9 @@ from conftest import (
     SERVER_URL,
     SocketListener,
     decode_message,
+    poll_until,
     random_id,
+    wait_for_content,
 )
 
 
@@ -110,15 +112,9 @@ class TestBasicFunctionality:
         )
         assert returncode == 0
 
-        # Give server time to process DELETE
-        time.sleep(1)
-
         # The room data should be cleared, so a new joiner won't get the message
         listener2 = SocketListener(unique_room)
         listener2.connect()
-
-        # Wait a bit for any message
-        time.sleep(1)
 
         # After DELETE, the room content should be cleared
         # (This verifies DELETE was called - the exact behavior depends on server)
@@ -196,13 +192,13 @@ class TestMessageEncoding:
         msg1 = f"FIRST-{random_id(6)}"
         msg2 = f"SECOND-{random_id(6)}"
 
-        # Send first message
+        # Send first message and wait for it
         run_cli_stdin(msg1, unique_room, unique_password)
-        time.sleep(0.5)
+        listener.wait_for_message(timeout=5, containing=msg1)
 
-        # Send second message (same room, same password)
+        # Send second message (same room, same password) and wait for it
         run_cli_stdin(msg2, unique_room, unique_password)
-        time.sleep(0.5)
+        listener.wait_for_message(timeout=5, containing=msg2)
 
         # Both messages should be accumulated
         accumulated = listener.get_accumulated_messages()
@@ -372,7 +368,6 @@ class TestAuthorization:
         This test uses concurrent connections to test password enforcement.
         """
         import subprocess
-        import time
 
         listener = SocketListener(unique_room)
         listener.connect()
@@ -390,7 +385,9 @@ class TestAuthorization:
         # Send some data but don't close stdin yet
         proc1.stdin.write("claim\n")
         proc1.stdin.flush()
-        time.sleep(1)
+
+        # Wait for first message to arrive
+        listener.wait_for_message(timeout=5, containing="claim")
 
         # Try with a different password while first is still active
         returncode, stdout, stderr = run_cli_stdin(
@@ -427,7 +424,6 @@ class TestAuthorization:
         Sequential writers (not concurrent) can use different passwords.
         """
         import subprocess
-        import time
 
         listener = SocketListener(unique_room)
         listener.connect()
@@ -448,7 +444,9 @@ class TestAuthorization:
         # Send data but keep connection open
         proc1.stdin.write("first\n")
         proc1.stdin.flush()
-        time.sleep(1)
+
+        # Wait for first message to arrive
+        listener.wait_for_message(timeout=5, containing="first")
 
         # Try second writer concurrently with different password
         returncode2, stdout2, stderr2 = run_cli_stdin(
@@ -665,7 +663,7 @@ class TestTerminalSize:
         run_cli_stdin("test", unique_room, unique_password)
 
         # Wait for size event (sent with each POST)
-        time.sleep(1)
+        assert listener.wait_for_size(timeout=5), "No size event received"
 
         size = listener.get_last_size()
 
@@ -727,8 +725,8 @@ class TestDefaultPassword:
         )
         proc1.communicate(input=msg1, timeout=10)
 
-        # Wait for message to arrive via Socket.IO before DELETE clears the room
-        time.sleep(0.5)
+        # Wait for message to arrive via Socket.IO
+        listener.wait_for_message(timeout=5, containing=msg1)
 
         # Second write without -W (same machine = same MAC = same password)
         args2 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
@@ -744,7 +742,7 @@ class TestDefaultPassword:
         assert proc2.returncode == 0, f"Second write failed: {stderr}"
 
         # Wait for second message to arrive
-        time.sleep(0.5)
+        listener.wait_for_message(timeout=5, containing=msg2)
 
         # Both messages should be received
         accumulated = listener.get_accumulated_messages()
@@ -775,9 +773,6 @@ class TestEdgeCases:
         )
 
         assert returncode == 0
-
-        # Wait for any message
-        time.sleep(1)
 
         # Whitespace should be transmitted (even if hard to verify)
         # Just check no error occurred
@@ -896,8 +891,12 @@ class TestEdgeCases:
             markers.append(marker)
             run_cli_stdin(marker, unique_room, unique_password)
 
-        # Give time for all messages
-        time.sleep(2)
+        # Wait for all messages using the helper
+        def all_markers_received(accumulated):
+            return all(marker in accumulated for marker in markers)
+
+        assert wait_for_content(listener, all_markers_received, timeout=10), \
+            f"Not all markers received in accumulated messages"
 
         accumulated = listener.get_accumulated_messages()
 
