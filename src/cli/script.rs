@@ -1,6 +1,7 @@
 //! Script mode for shellshare CLI
 //!
 //! Spawns a PTY and streams output to the server, similar to the `script` command.
+//! Output is displayed locally AND sent to the server for remote viewing.
 
 use crate::cli::encoding;
 use crate::cli::http;
@@ -13,11 +14,76 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+/// RAII guard to enable/restore terminal raw mode.
+/// This is essential for interactive apps like vim to work properly.
+///
+/// The key insight: `portable_pty` handles the PTY (slave side), but we also need
+/// to configure the **user's terminal** (master side) to be in raw mode for proper
+/// character-by-character input and escape sequence handling.
+#[cfg(unix)]
+struct RawModeGuard {
+    original: Option<libc::termios>,
+}
+
+#[cfg(unix)]
+impl RawModeGuard {
+    fn new() -> Self {
+        unsafe {
+            // Check if stdin is a TTY
+            if libc::isatty(libc::STDIN_FILENO) == 0 {
+                return Self { original: None };
+            }
+
+            // Save original terminal settings
+            let mut original: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut original) != 0 {
+                return Self { original: None };
+            }
+
+            // Create raw mode settings
+            let mut raw = original;
+            libc::cfmakeraw(&mut raw);
+
+            // Apply raw mode
+            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) != 0 {
+                return Self { original: None };
+            }
+
+            Self { original: Some(original) }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if let Some(ref original) = self.original {
+            unsafe {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, original);
+            }
+        }
+    }
+}
+
+// Windows: ConPTY handles raw mode automatically
+#[cfg(windows)]
+struct RawModeGuard;
+
+#[cfg(windows)]
+impl RawModeGuard {
+    fn new() -> Self { Self }
+}
+
 /// Run script mode - spawn a shell in a PTY and stream output to server
 pub fn run_script_mode(
     client: &http::Client,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Enable raw mode BEFORE spawning shell
+    // This allows character-by-character input and proper escape sequence handling
+    // for interactive TUI apps like vim, less, htop, etc.
+    let _raw_guard = RawModeGuard::new();
+
     // Get the user's shell
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
@@ -51,11 +117,11 @@ pub fn run_script_mode(
     // Clone client for the streaming thread
     let client_clone = client.clone();
     let running_clone = running.clone();
-    let running_reader = running.clone();
 
-    // Spawn a thread to read from PTY and stream to server
+    // Spawn a thread to read from PTY, display locally, and stream to server
     let stream_thread = thread::spawn(move || {
         let mut buffer = [0u8; 4096];
+        let mut stdout = std::io::stdout();
 
         loop {
             if !running_clone.load(Ordering::SeqCst) {
@@ -69,6 +135,14 @@ pub fn run_script_mode(
                 }
                 Ok(n) => {
                     let data = &buffer[..n];
+
+                    // Write to local stdout so user sees their terminal
+                    if stdout.write_all(data).is_err() {
+                        break;
+                    }
+                    let _ = stdout.flush();
+
+                    // Encode and send to server
                     let encoded = encoding::encode_message(data);
                     let size = TerminalSize {
                         cols: pty_size.cols,
@@ -98,7 +172,7 @@ pub fn run_script_mode(
     let running_stdin = running.clone();
 
     // Spawn a thread to forward stdin to the PTY
-    let stdin_thread = thread::spawn(move || {
+    let _stdin_thread = thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut stdin_lock = stdin.lock();
         let mut buffer = [0u8; 1024];
@@ -131,19 +205,37 @@ pub fn run_script_mode(
         }
     });
 
-    // Wait for the child process to exit
-    let _exit_status = child.wait()?;
+    // Poll child status instead of blocking, so we can respond to Ctrl+C
+    loop {
+        // Check if Ctrl+C was pressed
+        if !running.load(Ordering::SeqCst) {
+            // Kill the child process
+            let _ = child.kill();
+            break;
+        }
+
+        // Check if child has exited (non-blocking)
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                // Child exited
+                break;
+            }
+            Ok(None) => {
+                // Child still running, sleep briefly and check again
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => {
+                // Error checking status, assume child died
+                break;
+            }
+        }
+    }
 
     // Signal threads to stop
     running.store(false, Ordering::SeqCst);
-    running_reader.store(false, Ordering::SeqCst);
 
-    // Wait for stream thread (with timeout via join)
+    // Wait for stream thread
     let _ = stream_thread.join();
-
-    // stdin_thread may block on read, so we can't reliably wait for it
-    // Just let it be when the process exits
-    drop(stdin_thread);
 
     // Note: On Windows, we need to keep pair.slave alive until after child exits
     // (see portable-pty issue #4206). This is handled automatically since we
