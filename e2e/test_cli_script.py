@@ -71,15 +71,34 @@ class TestScriptModeBasic:
         listener = SocketListener(unique_room)
         listener.connect()
 
-        _, _, _ = run_cli_script_mode(
-            unique_room, unique_password, timeout=15
+        # Start CLI process (don't wait for it to complete)
+        proc = subprocess.Popen(
+            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
-        # Wait for some output using polling
+        # Wait for some output while CLI is still running
         assert wait_for_content(listener, lambda s: len(s) > 0, timeout=10), \
             "No output received from PTY"
 
         accumulated = listener.get_accumulated_messages()
+
+        # Clean up the process
+        try:
+            proc.stdin.write("exit\n")
+            proc.stdin.flush()
+            proc.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, BrokenPipeError):
+            proc.terminate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+
         listener.disconnect()
 
         # Verify we got some output from the PTY (shell prompt, etc.)
@@ -205,15 +224,33 @@ class TestScriptModeOutput:
         listener = SocketListener(unique_room)
         listener.connect()
 
-        run_cli_script_mode(
-            unique_room, unique_password, timeout=15
+        # Start CLI process (don't wait for it to complete)
+        proc = subprocess.Popen(
+            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
-        # Wait for content to be transmitted using polling
+        # Wait for content to be transmitted while CLI is still running
         assert wait_for_content(listener, lambda s: len(s) > 0, timeout=10), \
             "No output received from PTY"
 
         accumulated = listener.get_accumulated_messages()
+
+        # Clean up the process
+        try:
+            proc.stdin.write("exit\n")
+            proc.stdin.flush()
+            proc.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, BrokenPipeError):
+            proc.terminate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
 
         listener.disconnect()
 
