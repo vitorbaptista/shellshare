@@ -12,7 +12,7 @@ the radio buttons to test each OS regardless of the default.
 import pytest
 from playwright.sync_api import sync_playwright, expect
 
-# Server URL for the tests
+# Server URL for the tests - can be overridden to test against production
 SERVER_URL = "http://localhost:3000"
 
 
@@ -34,108 +34,102 @@ def page(browser):
 
 
 class TestIndexPageOneliner:
-    """Tests for the one-liner command on the index page."""
+    """Tests for the one-liner command on the index page.
+    
+    Each OS should show ONLY its command:
+    - macOS: curl -sLo (NOT wget, NOT iwr)
+    - Linux: wget -qO (NOT curl, NOT iwr)
+    - Windows: iwr (NOT curl, NOT wget)
+    """
 
-    def test_macos_shows_curl_command(self, page):
-        """When macOS is selected, should show curl command and hide iwr."""
+    def test_macos_shows_only_curl(self, page):
+        """macOS should show curl, and NOT show wget or iwr."""
         page.goto(SERVER_URL)
-        
-        # Click macOS radio to ensure it's selected
         page.click("label[for='os-macos']")
         
-        # Get the download code block
         download_code = page.locator(".download code")
+        visible_text = download_code.inner_text()
         
-        # Should show curl
-        curl_span = download_code.locator("span.macos").first
-        expect(curl_span).to_be_visible()
-        expect(curl_span).to_contain_text("curl -sLo")
+        # macOS MUST show curl
+        assert "curl -sLo" in visible_text, \
+            f"macOS should show 'curl -sLo', got: {visible_text}"
         
-        # Should NOT show iwr (Windows command)
-        windows_span = download_code.locator("span.windows")
-        expect(windows_span).to_be_hidden()
+        # macOS must NOT show wget (Linux command)
+        assert "wget" not in visible_text, \
+            f"macOS should NOT show 'wget', got: {visible_text}"
+        
+        # macOS must NOT show iwr (Windows command)
+        assert "iwr" not in visible_text, \
+            f"macOS should NOT show 'iwr', got: {visible_text}"
 
-    def test_linux_shows_wget_command(self, page):
-        """When Linux is selected, should show wget command and hide iwr."""
+    def test_linux_shows_only_wget(self, page):
+        """Linux should show wget, and NOT show curl or iwr."""
         page.goto(SERVER_URL)
-        
-        # Click Linux radio
         page.click("label[for='os-linux']")
         
-        # Get the download code block
         download_code = page.locator(".download code")
+        visible_text = download_code.inner_text()
         
-        # Should show wget
-        linux_span = download_code.locator("span.linux").first
-        expect(linux_span).to_be_visible()
-        expect(linux_span).to_contain_text("wget -qO")
+        # Linux MUST show wget
+        assert "wget -qO" in visible_text, \
+            f"Linux should show 'wget -qO', got: {visible_text}"
         
-        # Should NOT show iwr (Windows command)
-        windows_span = download_code.locator("span.windows")
-        expect(windows_span).to_be_hidden()
+        # Linux must NOT show curl (macOS command)
+        assert "curl" not in visible_text, \
+            f"Linux should NOT show 'curl', got: {visible_text}"
+        
+        # Linux must NOT show iwr (Windows command)
+        assert "iwr" not in visible_text, \
+            f"Linux should NOT show 'iwr', got: {visible_text}"
 
-    def test_windows_shows_iwr_command(self, page):
-        """When Windows is selected, should show iwr command."""
+    def test_windows_shows_only_iwr(self, page):
+        """Windows should show iwr, and NOT show curl or wget."""
         page.goto(SERVER_URL)
-        
-        # Click Windows radio
-        page.click("label[for='os-windows']")
-        
-        # Get the download code block
-        download_code = page.locator(".download code")
-        
-        # Should show iwr
-        windows_span = download_code.locator("span.windows")
-        expect(windows_span).to_be_visible()
-        expect(windows_span).to_contain_text("iwr")
-        
-        # Should NOT show curl or wget (macOS/Linux commands)
-        macos_only_span = download_code.locator("span.macos:not(.linux)")
-        linux_only_span = download_code.locator("span.linux:not(.macos)")
-        expect(macos_only_span).to_be_hidden()
-        expect(linux_only_span).to_be_hidden()
-
-    def test_switching_from_windows_to_macos_hides_iwr(self, page):
-        """Switching from Windows to macOS should hide iwr command."""
-        page.goto(SERVER_URL)
-        
-        # First select Windows
         page.click("label[for='os-windows']")
         
         download_code = page.locator(".download code")
-        windows_span = download_code.locator("span.windows")
-        expect(windows_span).to_be_visible()
+        visible_text = download_code.inner_text()
         
-        # Now switch to macOS
+        # Windows MUST show iwr
+        assert "iwr" in visible_text, \
+            f"Windows should show 'iwr', got: {visible_text}"
+        
+        # Windows must NOT show curl (macOS command)
+        assert "curl" not in visible_text, \
+            f"Windows should NOT show 'curl', got: {visible_text}"
+        
+        # Windows must NOT show wget (Linux command)
+        assert "wget" not in visible_text, \
+            f"Windows should NOT show 'wget', got: {visible_text}"
+
+    def test_switching_between_all_os(self, page):
+        """Verify switching between all OS options works correctly."""
+        page.goto(SERVER_URL)
+        download_code = page.locator(".download code")
+        
+        # Test macOS
         page.click("label[for='os-macos']")
+        text = download_code.inner_text()
+        assert "curl" in text and "wget" not in text and "iwr" not in text, \
+            f"macOS failed: {text}"
         
-        # iwr should now be hidden
-        expect(windows_span).to_be_hidden()
-        
-        # curl should be visible
-        curl_span = download_code.locator("span.macos").first
-        expect(curl_span).to_be_visible()
-
-    def test_switching_from_windows_to_linux_hides_iwr(self, page):
-        """Switching from Windows to Linux should hide iwr command."""
-        page.goto(SERVER_URL)
-        
-        # First select Windows
-        page.click("label[for='os-windows']")
-        
-        download_code = page.locator(".download code")
-        windows_span = download_code.locator("span.windows")
-        expect(windows_span).to_be_visible()
-        
-        # Now switch to Linux
+        # Test Linux
         page.click("label[for='os-linux']")
+        text = download_code.inner_text()
+        assert "wget" in text and "curl" not in text and "iwr" not in text, \
+            f"Linux failed: {text}"
         
-        # iwr should now be hidden
-        expect(windows_span).to_be_hidden()
+        # Test Windows
+        page.click("label[for='os-windows']")
+        text = download_code.inner_text()
+        assert "iwr" in text and "curl" not in text and "wget" not in text, \
+            f"Windows failed: {text}"
         
-        # wget should be visible
-        linux_span = download_code.locator("span.linux").first
-        expect(linux_span).to_be_visible()
+        # Back to macOS
+        page.click("label[for='os-macos']")
+        text = download_code.inner_text()
+        assert "curl" in text and "wget" not in text and "iwr" not in text, \
+            f"macOS (after switch) failed: {text}"
 
     def test_body_class_changes_with_os_selection(self, page):
         """Body class should change when selecting different OS."""
@@ -152,35 +146,6 @@ class TestIndexPageOneliner:
         # Select Windows
         page.click("label[for='os-windows']")
         expect(page.locator("body")).to_have_class("instructions-windows")
-        
-        # Back to macOS
-        page.click("label[for='os-macos']")
-        expect(page.locator("body")).to_have_class("instructions-macos")
-
-    def test_oneliner_text_content_for_each_os(self, page):
-        """Verify the visible text content of the one-liner for each OS."""
-        page.goto(SERVER_URL)
-        
-        download_code = page.locator(".download code")
-        
-        # macOS - should show curl, not iwr
-        page.click("label[for='os-macos']")
-        visible_text = download_code.inner_text()
-        assert "curl -sLo" in visible_text, f"macOS should show 'curl -sLo', got: {visible_text}"
-        assert "iwr" not in visible_text, f"macOS should NOT show 'iwr', got: {visible_text}"
-        
-        # Linux - should show wget, not iwr
-        page.click("label[for='os-linux']")
-        visible_text = download_code.inner_text()
-        assert "wget -qO" in visible_text, f"Linux should show 'wget -qO', got: {visible_text}"
-        assert "iwr" not in visible_text, f"Linux should NOT show 'iwr', got: {visible_text}"
-        
-        # Windows - should show iwr, not curl or wget
-        page.click("label[for='os-windows']")
-        visible_text = download_code.inner_text()
-        assert "iwr" in visible_text, f"Windows should show 'iwr', got: {visible_text}"
-        assert "curl" not in visible_text, f"Windows should NOT show 'curl', got: {visible_text}"
-        assert "wget" not in visible_text, f"Windows should NOT show 'wget', got: {visible_text}"
 
     def test_radio_button_reflects_selection(self, page):
         """Radio buttons should reflect the current selection."""
