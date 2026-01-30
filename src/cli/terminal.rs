@@ -1,8 +1,6 @@
 //! Terminal utilities for shellshare CLI
 //!
-//! Provides terminal size detection matching the Python CLI's behavior.
-
-use std::process::Command;
+//! Provides terminal size detection using direct ioctl calls via term_size crate.
 
 /// Terminal size in columns and rows
 #[derive(Debug, Clone, Copy)]
@@ -20,45 +18,15 @@ impl Default for TerminalSize {
     }
 }
 
-/// Get the current terminal size using tput (matching Python CLI behavior)
+/// Get the current terminal size using ioctl (TIOCGWINSZ) via term_size crate.
+/// This is more reliable than spawning tput commands, especially during PTY setup.
 pub fn get_terminal_size() -> TerminalSize {
-    let default = TerminalSize::default();
-
-    // Try to get cols using tput
-    let cols = Command::new("tput")
-        .arg("cols")
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .parse::<u16>()
-                    .ok()
-            } else {
-                None
-            }
+    term_size::dimensions()
+        .map(|(cols, rows)| TerminalSize {
+            cols: cols as u16,
+            rows: rows as u16,
         })
-        .unwrap_or(default.cols);
-
-    // Try to get rows using tput
-    let rows = Command::new("tput")
-        .arg("lines")
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .parse::<u16>()
-                    .ok()
-            } else {
-                None
-            }
-        })
-        .unwrap_or(default.rows);
-
-    TerminalSize { cols, rows }
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

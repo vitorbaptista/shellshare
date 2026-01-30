@@ -9,11 +9,16 @@ use crate::cli::terminal::{self, TerminalSize};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use signal_hook::consts::SIGWINCH;
+#[cfg(unix)]
+use signal_hook::iterator::Signals;
 
 /// RAII guard to enable/restore terminal raw mode.
 /// This is essential for interactive apps like vim to work properly.
@@ -109,11 +114,59 @@ pub fn run_script_mode(
     // Spawn the shell in the PTY
     let mut child = pair.slave.spawn_command(cmd)?;
 
+    // Keep master reference for resize operations
+    let master = pair.master;
+
+    // Explicitly resize PTY after spawning to ensure correct dimensions
+    master.resize(pty_size)?;
+
     // Get a reader for the PTY master
-    let mut reader = pair.master.try_clone_reader()?;
+    let mut reader = master.try_clone_reader()?;
 
     // Get a writer for the PTY master (for forwarding stdin)
-    let mut writer = pair.master.take_writer()?;
+    let mut writer = master.take_writer()?;
+
+    // Shared terminal size for HTTP thread (updated by SIGWINCH handler)
+    let current_cols = Arc::new(AtomicU16::new(size.cols));
+    let current_rows = Arc::new(AtomicU16::new(size.rows));
+
+    // Channel for resize requests from SIGWINCH handler to main loop
+    #[cfg(unix)]
+    let (resize_tx, resize_rx) = mpsc::channel::<PtySize>();
+
+    // Spawn SIGWINCH handler thread for dynamic terminal resize
+    #[cfg(unix)]
+    let sigwinch_thread = {
+        let running_sigwinch = running.clone();
+        let cols = current_cols.clone();
+        let rows = current_rows.clone();
+
+        let handle = thread::spawn(move || {
+            if let Ok(mut signals) = Signals::new(&[SIGWINCH]) {
+                for _ in signals.forever() {
+                    if !running_sigwinch.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    // Get new terminal size
+                    let new_size = terminal::get_terminal_size();
+                    // Update shared size atomics
+                    cols.store(new_size.cols, Ordering::SeqCst);
+                    rows.store(new_size.rows, Ordering::SeqCst);
+                    // Send resize request to main loop (which owns the master)
+                    let _ = resize_tx.send(PtySize {
+                        rows: new_size.rows,
+                        cols: new_size.cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
+            }
+        });
+        Some(handle)
+    };
+
+    #[cfg(not(unix))]
+    let sigwinch_thread: Option<thread::JoinHandle<()>> = None;
 
     // Channel for sending PTY output to HTTP sender thread (non-blocking)
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -122,6 +175,10 @@ pub fn run_script_mode(
     let client_clone = client.clone();
     let running_clone = running.clone();
     let running_http = running.clone();
+
+    // Clone atomics for HTTP thread
+    let http_cols = current_cols.clone();
+    let http_rows = current_rows.clone();
 
     // Spawn HTTP sender thread - handles all network I/O separately
     // This ensures network latency never blocks terminal display
@@ -149,8 +206,8 @@ pub fn run_script_mode(
                     if !send_buffer.is_empty() {
                         let encoded = encoding::encode_message(&send_buffer);
                         let size = TerminalSize {
-                            cols: pty_size.cols,
-                            rows: pty_size.rows,
+                            cols: http_cols.load(Ordering::SeqCst),
+                            rows: http_rows.load(Ordering::SeqCst),
                         };
                         let _ = client_clone.post_message(&encoded, size);
                     }
@@ -165,8 +222,8 @@ pub fn run_script_mode(
             if should_send {
                 let encoded = encoding::encode_message(&send_buffer);
                 let size = TerminalSize {
-                    cols: pty_size.cols,
-                    rows: pty_size.rows,
+                    cols: http_cols.load(Ordering::SeqCst),
+                    rows: http_rows.load(Ordering::SeqCst),
                 };
 
                 if let Err(e) = client_clone.post_message(&encoded, size) {
@@ -282,13 +339,19 @@ pub fn run_script_mode(
         }
     });
 
-    // Poll child status instead of blocking, so we can respond to Ctrl+C
+    // Poll child status instead of blocking, so we can respond to Ctrl+C and resize requests
     loop {
         // Check if Ctrl+C was pressed
         if !running.load(Ordering::SeqCst) {
             // Kill the child process
             let _ = child.kill();
             break;
+        }
+
+        // Handle any pending resize requests (Unix only)
+        #[cfg(unix)]
+        while let Ok(new_size) = resize_rx.try_recv() {
+            let _ = master.resize(new_size);
         }
 
         // Check if child has exited (non-blocking)
@@ -315,10 +378,20 @@ pub fn run_script_mode(
     let _ = stream_thread.join();
     let _ = http_thread.join();
 
+    // Join SIGWINCH handler thread (Unix only)
+    #[cfg(unix)]
+    if let Some(handle) = sigwinch_thread {
+        // Send SIGWINCH to ourselves to unblock the signal iterator
+        unsafe {
+            libc::raise(SIGWINCH);
+        }
+        let _ = handle.join();
+    }
+
     // Note: On Windows, we need to keep pair.slave alive until after child exits
     // (see portable-pty issue #4206). This is handled automatically since we
-    // don't drop `pair` until here.
-    drop(pair);
+    // don't drop `pair.slave` until here.
+    drop(pair.slave);
 
     Ok(())
 }
