@@ -30,26 +30,32 @@
           <code>
             <span class="macos">curl -sLo</span>
             <span class="linux">wget -qO</span>
-            shellshare <a href="https://get.shellshare.net">https://get.shellshare.net</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare
+            <span class="macos linux">shellshare <a href="https://get.shellshare.net">https://get.shellshare.net</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
+            <span class="windows">iwr <a href="https://get.shellshare.net">https://get.shellshare.net</a> -OutFile shellshare.exe; .\shellshare.exe</span>
           </code>
           <nav class="operating-systems">
             <input type="radio" id="os-linux" name="os" value="linux">
             <label for="os-linux"><i class="fa fa-2x fa-linux"></i></label>
             <input type="radio" id="os-macos" name="os" value="macos" checked>
             <label for="os-macos"><i class="fa fa-2x fa-apple"></i></label>
+            <input type="radio" id="os-windows" name="os" value="windows">
+            <label for="os-windows"><i class="fa fa-2x fa-windows"></i></label>
           </nav>
         </div>
         <h3>What is it?</h3>
         <p>Shellshare allows you to broadcast your terminal live with a single command.</p>
         <h3>How to use?</h3>
         <p>Open a terminal and write:</p>
-        <pre><code>$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
+        <pre><code><span class="macos linux">$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
 $ chmod +x shellshare
-$ ./shellshare
+$ ./shellshare</span><span class="windows">PS&gt; iwr https://get.shellshare.net -OutFile shellshare.exe
+PS&gt; .\shellshare.exe</span>
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
-$ # Everything you do now will be broadcast live on the URL above.
+<span class="macos linux">$ # Everything you do now will be broadcast live on the URL above.
 $ # When you're done, hit CTRL+D
-$ exit
+$ exit</span><span class="windows">PS&gt; # Everything you do now will be broadcast live on the URL above.
+PS&gt; # When you're done, hit CTRL+D
+PS&gt; exit</span>
 <span class="shell-output">End of transmission.</span></code></pre>
       </section>
       <section class="faq">
@@ -60,11 +66,13 @@ $ exit
         <p>No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
         <h3>Can I broadcast to a custom room name?</h3>
         <p>Yes. You can broadcast to a named room secured with a password by calling shellshare as:</p>
-        <pre><code>$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
-$ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS
+        <pre><code><span class="macos linux">$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
+$ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="windows">PS&gt; iwr https://get.shellshare.net -OutFile shellshare.exe
+PS&gt; .\shellshare.exe --room MY-ROOM --password MY-PASS</span>
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/MY-ROOM</span>
-$ # ...
-$ exit
+<span class="macos linux">$ # ...
+$ exit</span><span class="windows">PS&gt; # ...
+PS&gt; exit</span>
 <span class="shell-output">End of transmission.</span></code></pre>
         <p>If you don't set a password, shellshare will use your network card's MAC address to uniquely identify your computer. This means you'll be able to transmit to the same room later only if you're using the same computer.</p>
         <h3>Can I recover the password to a custom room?</h3>
@@ -72,6 +80,8 @@ $ exit
         <h3>Can I run shellshare on Windows?</h3>
         <p>Yes. We have pre-built binaries for Linux, macOS (Intel and Apple Silicon), and Windows. When you download from <a href="https://get.shellshare.net">https://get.shellshare.net</a>, we automatically detect your operating system and give you the correct binary.</p>
         <p>You can also pass the <code>os</code> query parameter to explicitly download a specific binary. The options are <code>linux</code>, <code>windows</code>, <code>mac</code> and <code>mac-arm</code>. For example, if you want to download the Linux binary regardless of your operating system, access <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a>.</p>
+        <h3>Can I self-host shellshare?</h3>
+        <p>Yes. The shellshare binary also includes the server. You can start it by running <code>shellshare server</code> and accessing the server at <a href="http://localhost:3000">http://localhost:3000</a>. Open another terminal window and broadcast to it using <code>shellshare --server http://localhost:3000</code>. This way no data leaves your computer. I suggest <a href="https://ngrok.com">ngrok</a> as an easy way to allow other people to access your server.</p>
         <h3>I found a problem! What do I do?</h3>
         <p>Please, open an issue at our <a href="https://github.com/vitorbaptista/shellshare/issues">issues page</a> describing what the problem was, your shellshare version, and your operating system.</p>
         <h3>How can I help?</h3>

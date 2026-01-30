@@ -81,8 +81,12 @@ pre {
   font-style: italic;
 }
 
-.instructions-macos .linux,
-.instructions-linux .macos {
+.instructions-macos .linux:not(.macos),
+.instructions-macos .windows:not(.macos),
+.instructions-linux .macos:not(.linux),
+.instructions-linux .windows:not(.linux),
+.instructions-windows .macos:not(.windows),
+.instructions-windows .linux:not(.windows) {
   display: none;
 }
 
