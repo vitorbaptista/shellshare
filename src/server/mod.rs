@@ -19,6 +19,7 @@ use socketioxide::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -39,12 +40,24 @@ struct StaticAssets;
 struct Templates;
 
 /// Room data stored in memory
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct RoomData {
     /// Accumulated messages (each is base64 encoded)
     messages: Vec<String>,
     /// Terminal size
     size: Option<serde_json::Value>,
+    /// Last activity timestamp (broadcast or viewer join)
+    last_activity: Instant,
+}
+
+impl Default for RoomData {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            size: None,
+            last_activity: Instant::now(),
+        }
+    }
 }
 
 impl RoomData {
@@ -70,6 +83,24 @@ impl RoomData {
     }
 }
 
+/// Room cleanup configuration
+#[derive(Clone, Debug)]
+struct CleanupConfig {
+    /// How often to run cleanup
+    interval: Duration,
+    /// TTL for inactive rooms
+    inactive_ttl: Duration,
+}
+
+impl Default for CleanupConfig {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(60 * 60),         // 1 hour
+            inactive_ttl: Duration::from_secs(6 * 60 * 60), // 6 hours
+        }
+    }
+}
+
 /// Shared application state
 #[derive(Default, Clone)]
 struct AppState {
@@ -81,17 +112,34 @@ struct AppState {
     io: Arc<RwLock<Option<SocketIo>>>,
     /// Track which rooms each socket is in (for disconnect handling)
     socket_rooms: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    /// Cleanup configuration for abandoned rooms
+    cleanup_config: CleanupConfig,
 }
 
 /// Request body for POST /r/:room - using Value to preserve null vs missing distinction
 type BroadcastRequest = serde_json::Value;
 
 /// Run the shellshare server
-pub async fn run(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    host: &str,
+    port: u16,
+    cleanup_interval_secs: u64,
+    room_ttl_secs: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting shellshare server on {}:{}", host, port);
+    info!(
+        "Room cleanup: interval={}s, TTL={}s",
+        cleanup_interval_secs, room_ttl_secs
+    );
 
-    // Shared state
-    let app_state = AppState::default();
+    // Shared state with cleanup configuration
+    let app_state = AppState {
+        cleanup_config: CleanupConfig {
+            interval: Duration::from_secs(cleanup_interval_secs),
+            inactive_ttl: Duration::from_secs(room_ttl_secs),
+        },
+        ..Default::default()
+    };
 
     // Socket.IO setup
     let (sio_layer, io) = SocketIo::builder()
@@ -106,6 +154,9 @@ pub async fn run(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>
         let mut io_lock = app_state.io.write().await;
         *io_lock = Some(io);
     }
+
+    // Spawn background cleanup task for abandoned rooms
+    spawn_cleanup_task(app_state.clone());
 
     // Build router
     let app = Router::new()
@@ -163,10 +214,16 @@ fn setup_socket_handlers(io: &SocketIo) {
                         .push(room_name.clone());
                 }
 
-                // Get room data
-                let rooms = state.rooms.read().await;
-                let room_data = rooms.get(&room_name).cloned();
-                drop(rooms);
+                // Get room data and update activity timestamp
+                let room_data = {
+                    let mut rooms = state.rooms.write().await;
+                    if let Some(room_data) = rooms.get_mut(&room_name) {
+                        room_data.last_activity = Instant::now();
+                        Some(room_data.clone())
+                    } else {
+                        None
+                    }
+                };
 
                 // Count users in room
                 let user_count = socket
@@ -345,6 +402,9 @@ async fn broadcast_handler(
         let mut rooms = state.rooms.write().await;
         let room_data = rooms.entry(room_name.clone()).or_default();
 
+        // Update activity timestamp
+        room_data.last_activity = Instant::now();
+
         // Extract message and size from body (preserving null vs missing)
         let body_obj = body.as_object();
 
@@ -461,6 +521,50 @@ async fn check_authorization(state: &AppState, room: &str, secret: &str) -> bool
         }
         auth_cache.insert(room.to_string(), secret.to_string());
         true
+    }
+}
+
+/// Spawn background task to clean up abandoned rooms
+fn spawn_cleanup_task(state: AppState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(state.cleanup_config.interval);
+        loop {
+            interval.tick().await;
+            cleanup_abandoned_rooms(&state).await;
+        }
+    });
+}
+
+/// Remove rooms that have been inactive for longer than the TTL
+async fn cleanup_abandoned_rooms(state: &AppState) {
+    let now = Instant::now();
+    let ttl = state.cleanup_config.inactive_ttl;
+
+    // Collect rooms to delete (inactive for > TTL)
+    let rooms_to_delete: Vec<String> = {
+        let rooms = state.rooms.read().await;
+        rooms
+            .iter()
+            .filter(|(_, data)| now.duration_since(data.last_activity) > ttl)
+            .map(|(name, _)| name.clone())
+            .collect()
+    };
+
+    // Delete rooms
+    if !rooms_to_delete.is_empty() {
+        info!("Cleaning up {} abandoned rooms", rooms_to_delete.len());
+        {
+            let mut rooms = state.rooms.write().await;
+            for room in &rooms_to_delete {
+                rooms.remove(room);
+            }
+        }
+        {
+            let mut auth = state.auth_cache.write().await;
+            for room in &rooms_to_delete {
+                auth.remove(room);
+            }
+        }
     }
 }
 

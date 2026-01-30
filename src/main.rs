@@ -56,6 +56,14 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value = "3000", env = "PORT")]
         port: u16,
+
+        /// Room cleanup interval in seconds (default: 3600 = 1 hour)
+        #[arg(long, default_value = "3600")]
+        cleanup_interval: u64,
+
+        /// Room TTL in seconds - rooms inactive for this long are removed (default: 21600 = 6 hours)
+        #[arg(long, default_value = "21600")]
+        room_ttl: u64,
     },
 }
 
@@ -63,7 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Server { host, port }) => {
+        Some(Commands::Server {
+            host,
+            port,
+            cleanup_interval,
+            room_ttl,
+        }) => {
             // Initialize logging for server
             let subscriber = FmtSubscriber::builder()
                 .with_max_level(Level::INFO)
@@ -72,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create runtime only for server mode
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(server::run(&host, port))?;
+            runtime.block_on(server::run(&host, port, cleanup_interval, room_ttl))?;
         }
         None => {
             // Run client mode
