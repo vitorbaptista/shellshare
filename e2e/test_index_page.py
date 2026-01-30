@@ -3,6 +3,10 @@ E2E tests for the index page using Playwright.
 
 These tests verify that the one-liner command changes correctly when
 selecting different operating systems via the radio buttons.
+
+Note: The page auto-detects the user's OS via JavaScript, so the default
+selection depends on the browser's platform. These tests explicitly click
+the radio buttons to test each OS regardless of the default.
 """
 
 import pytest
@@ -31,14 +35,6 @@ def page(browser):
 
 class TestIndexPageOneliner:
     """Tests for the one-liner command on the index page."""
-
-    def test_macos_selected_by_default(self, page):
-        """macOS should be selected by default."""
-        page.goto(SERVER_URL)
-        
-        # Check that macOS radio is checked
-        macos_radio = page.locator("#os-macos")
-        expect(macos_radio).to_be_checked()
 
     def test_macos_shows_curl_command(self, page):
         """When macOS is selected, should show curl command and hide iwr."""
@@ -145,7 +141,8 @@ class TestIndexPageOneliner:
         """Body class should change when selecting different OS."""
         page.goto(SERVER_URL)
         
-        # Default should be macOS
+        # Select macOS explicitly
+        page.click("label[for='os-macos']")
         expect(page.locator("body")).to_have_class("instructions-macos")
         
         # Select Linux
@@ -184,3 +181,25 @@ class TestIndexPageOneliner:
         assert "iwr" in visible_text, f"Windows should show 'iwr', got: {visible_text}"
         assert "curl" not in visible_text, f"Windows should NOT show 'curl', got: {visible_text}"
         assert "wget" not in visible_text, f"Windows should NOT show 'wget', got: {visible_text}"
+
+    def test_radio_button_reflects_selection(self, page):
+        """Radio buttons should reflect the current selection."""
+        page.goto(SERVER_URL)
+        
+        # Select and verify macOS
+        page.click("label[for='os-macos']")
+        expect(page.locator("#os-macos")).to_be_checked()
+        expect(page.locator("#os-linux")).not_to_be_checked()
+        expect(page.locator("#os-windows")).not_to_be_checked()
+        
+        # Select and verify Linux
+        page.click("label[for='os-linux']")
+        expect(page.locator("#os-macos")).not_to_be_checked()
+        expect(page.locator("#os-linux")).to_be_checked()
+        expect(page.locator("#os-windows")).not_to_be_checked()
+        
+        # Select and verify Windows
+        page.click("label[for='os-windows']")
+        expect(page.locator("#os-macos")).not_to_be_checked()
+        expect(page.locator("#os-linux")).not_to_be_checked()
+        expect(page.locator("#os-windows")).to_be_checked()
