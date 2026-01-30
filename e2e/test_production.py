@@ -5,6 +5,8 @@ These tests verify that the one-liner command changes correctly when
 selecting different operating systems via the radio buttons on the 
 live production site.
 
+This file is STANDALONE and doesn't use conftest.py fixtures.
+
 Run with: uv run pytest test_production.py -v
 """
 
@@ -13,6 +15,13 @@ from playwright.sync_api import sync_playwright
 
 # Test against production!
 PRODUCTION_URL = "https://shellshare.net"
+
+
+# Override the conftest fixture to not wait for localhost
+@pytest.fixture(scope="session", autouse=True)
+def ensure_server_running():
+    """No-op for production tests - production is always running."""
+    pass
 
 
 @pytest.fixture(scope="module")
