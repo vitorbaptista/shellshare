@@ -228,18 +228,6 @@ fn setup_socket_handlers(io: &SocketIo) {
                     }
                 };
 
-                // Count users in room
-                let user_count = socket
-                    .within(room_name.clone())
-                    .sockets()
-                    .map(|s| s.len())
-                    .unwrap_or(0);
-
-                // Send user count to this client
-                if let Err(e) = socket.emit("usersCount", &user_count) {
-                    warn!("Failed to emit usersCount: {:?}", e);
-                }
-
                 // Send existing room data if any
                 if let Some(data) = room_data {
                     // Send size FIRST - terminal must be sized before receiving content
@@ -258,6 +246,12 @@ fn setup_socket_handlers(io: &SocketIo) {
                 }
 
                 // Broadcast updated user count to all in room (including this client)
+                // Get fresh count right before broadcast to avoid race conditions
+                let user_count = socket
+                    .within(room_name.clone())
+                    .sockets()
+                    .map(|s| s.len())
+                    .unwrap_or(0);
                 let _ = socket.within(room_name).emit("usersCount", &user_count);
             },
         );
