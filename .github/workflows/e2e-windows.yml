@@ -74,6 +74,6 @@ jobs:
 
           # Run E2E tests
           cd e2e
-          uv run pytest -n 20
+          uv run pytest -n 10
         env:
           CI: true

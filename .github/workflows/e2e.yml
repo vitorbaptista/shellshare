@@ -70,6 +70,6 @@ jobs:
       - name: Run E2E tests
         run: |
           cd e2e
-          uv run pytest -n 20
+          uv run pytest -n 10
         env:
           CI: true
