@@ -9,7 +9,7 @@ on:
       - master
 
 jobs:
-  e2e-docker:
+  e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -17,26 +17,42 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build and start services
-        run: docker compose up -d --build
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Rust binary
+        run: cargo build --release
+
+      - name: Start server
+        run: |
+          ./target/release/shellshare server --host 0.0.0.0 --port 3000 &
+          sleep 2
 
       - name: Wait for server
         run: |
-          server_up=false
           for i in {1..30}; do
             if curl -s http://localhost:3000 > /dev/null; then
               echo "Server is up after $i attempt(s)."
-              server_up=true
-              break
+              exit 0
             fi
             echo "Waiting for server... ($i)"
             sleep 2
           done
-          if [ "$server_up" = false ]; then
-            echo "Server did not become ready after 30 attempts."
-            docker compose logs
-            exit 1
-          fi
+          echo "Server did not become ready after 30 attempts."
+          exit 1
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -58,11 +74,3 @@ jobs:
           uv run pytest -v
         env:
           CI: true
-
-      - name: Show logs on failure
-        if: failure()
-        run: docker compose logs
-
-      - name: Stop services
-        if: always()
-        run: docker compose down
