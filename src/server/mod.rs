@@ -114,6 +114,8 @@ pub async fn run(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>
         .route("/r/{*room}", get(room_page_handler))
         .route("/r/{*room}", post(broadcast_handler))
         .route("/r/{*room}", delete(delete_room_handler))
+        // Self-serve binary download
+        .route("/bin/shellshare", get(serve_self_binary))
         // Static files - fallback
         .fallback(serve_static)
         // State and middleware
@@ -467,6 +469,33 @@ async fn check_authorization(state: &AppState, room: &str, secret: &str) -> bool
         }
         auth_cache.insert(room.to_string(), secret.to_string());
         true
+    }
+}
+
+/// Serve the running binary itself for download
+async fn serve_self_binary() -> impl IntoResponse {
+    match std::env::current_exe() {
+        Ok(exe_path) => match tokio::fs::read(&exe_path).await {
+            Ok(data) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"shellshare\"",
+                )
+                .body(Body::from(data))
+                .unwrap(),
+            Err(_) => Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("Failed to read binary"))
+                .unwrap(),
+        },
+        Err(_) => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Failed to locate binary"))
+            .unwrap(),
     }
 }
 
