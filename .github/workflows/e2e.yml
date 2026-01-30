@@ -11,7 +11,10 @@ on:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 
     steps:
@@ -67,6 +70,11 @@ jobs:
         run: |
           cd e2e
           uv run playwright install chromium
+
+      - name: Install Playwright system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          cd e2e
           uv run playwright install-deps chromium
 
       - name: Run E2E tests
