@@ -1,0 +1,6 @@
+FROM debian:bookworm-slim
+WORKDIR /app
+COPY shellshare .
+ENV PORT=3000
+EXPOSE $PORT
+CMD ["sh", "-c", "./shellshare server --host 0.0.0.0 --port $PORT"]
