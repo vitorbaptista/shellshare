@@ -175,9 +175,6 @@ pub fn run_script_mode(
         Some(handle)
     };
 
-    #[cfg(not(unix))]
-    let sigwinch_thread: Option<thread::JoinHandle<()>> = None;
-
     // Channel for sending PTY output to HTTP sender thread (non-blocking)
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
