@@ -12,3 +12,8 @@ dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["."]
 python_files = ["test_*.py"]
+
+[dependency-groups]
+dev = [
+    "pytest-xdist>=3.8.0",
+]
