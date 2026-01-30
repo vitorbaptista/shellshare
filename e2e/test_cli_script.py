@@ -50,8 +50,10 @@ def run_cli_script_mode(room, password, server=SERVER_URL, env=None, timeout=30)
     )
 
     try:
-        # Send exit command to shell and close stdin
-        stdout, stderr = proc.communicate(input="exit\n", timeout=timeout)
+        # Send echo command to guarantee output, then exit
+        # This ensures the shell produces output even in minimal CI environments
+        # where there may be no PS1 prompt configured
+        stdout, stderr = proc.communicate(input="echo shellshare-test\nexit\n", timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         stdout, stderr = proc.communicate()
