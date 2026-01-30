@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - master
+  workflow_call:
 
 jobs:
   e2e-windows:
@@ -21,84 +22,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+        uses: Swatinem/rust-cache@v2
 
       - name: Build Rust server
         run: cargo build --release
-
-      - name: Start server
-        shell: pwsh
-        run: |
-          # Start the server as a background job
-          # Use 127.0.0.1 instead of 0.0.0.0 for Windows compatibility
-          $job = Start-Job -ScriptBlock {
-            Set-Location $using:PWD
-            & ".\target\release\shellshare.exe" server --host "127.0.0.1" --port "3000"
-          }
-          Start-Sleep -Seconds 5
-          Write-Host "Server job started with ID: $($job.Id)"
-          # Check if job is still running (should be Running, not Failed or Completed)
-          $jobState = (Get-Job -Id $job.Id).State
-          Write-Host "Job state: $jobState"
-          if ($jobState -eq "Failed" -or $jobState -eq "Completed") {
-            Write-Host "Job terminated prematurely! Output:"
-            Receive-Job -Id $job.Id
-            exit 1
-          }
-
-      - name: Wait for server
-        shell: pwsh
-        run: |
-          $timeout = 60
-          $elapsed = 0
-          while ($elapsed -lt $timeout) {
-            # Check if process is still running
-            $proc = Get-Process -Name "shellshare" -ErrorAction SilentlyContinue
-            if (-not $proc) {
-              Write-Host "ERROR: shellshare process not found!"
-              Write-Host "=== Job output ==="
-              $jobs = Get-Job
-              foreach ($j in $jobs) {
-                Write-Host "Job $($j.Id) state: $($j.State)"
-                Receive-Job -Id $j.Id
-              }
-              exit 1
-            }
-            
-            # Check if port is listening
-            $netstat = netstat -an | Select-String ":3000"
-            Write-Host "Port 3000 status: $netstat"
-            
-            try {
-              $response = Invoke-WebRequest -Uri "http://127.0.0.1:3000" -UseBasicParsing -TimeoutSec 2
-              if ($response.StatusCode -eq 200) {
-                Write-Host "Server is up after $elapsed seconds"
-                exit 0
-              }
-            } catch {
-              Write-Host "Waiting for server... ($elapsed s) - Error: $($_.Exception.Message)"
-            }
-            Start-Sleep -Seconds 2
-            $elapsed += 2
-          }
-          Write-Host "Server did not start within $timeout seconds"
-          Write-Host "=== Job output ==="
-          $jobs = Get-Job
-          foreach ($j in $jobs) {
-            Write-Host "Job $($j.Id) state: $($j.State)"
-            Receive-Job -Id $j.Id
-          }
-          exit 1
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -114,8 +41,39 @@ jobs:
           uv run playwright install chromium
 
       - name: Run E2E tests
+        shell: pwsh
         run: |
+          # Start server as background job (stays alive within this step)
+          $job = Start-Job -ScriptBlock {
+            Set-Location $using:PWD
+            & ".\target\release\shellshare.exe" server --host "127.0.0.1" --port "3000"
+          }
+
+          # Wait for server to be ready
+          $timeout = 60
+          $elapsed = 0
+          while ($elapsed -lt $timeout) {
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:3000" -UseBasicParsing -TimeoutSec 2
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Server is up after $elapsed seconds"
+                break
+              }
+            } catch {
+              Write-Host "Waiting for server... ($elapsed s)"
+            }
+            Start-Sleep -Seconds 2
+            $elapsed += 2
+          }
+
+          if ($elapsed -ge $timeout) {
+            Write-Host "Server did not start within $timeout seconds"
+            Receive-Job -Id $job.Id
+            exit 1
+          }
+
+          # Run E2E tests
           cd e2e
-          uv run pytest -v
+          uv run pytest -n 20
         env:
           CI: true

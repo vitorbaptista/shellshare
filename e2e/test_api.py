@@ -248,12 +248,12 @@ class TestBroadcast:
         room_id = f"test-{random_id()}"
         password1 = f"secret-{random_id()}"
         password2 = f"different-{random_id()}"
-        
+
         body = {
             "message": encode_message("Hello"),
             "size": {"rows": 24, "cols": 80}
         }
-        
+
         # First request claims the room
         status1, _, _ = make_request(
             'POST', f'/r/{room_id}',
@@ -261,11 +261,8 @@ class TestBroadcast:
             body=body
         )
         assert status1 == 200, f"First request failed: {status1}"
-        
-        # Wait for authorization to be persisted (async operation)
-        time.sleep(1.0)
-        
-        # Second request with different password should fail
+
+        # Second request with different password should fail (server is synchronous)
         status2, _, _ = make_request(
             'POST', f'/r/{room_id}',
             headers={"Authorization": password2},
@@ -376,7 +373,7 @@ class TestDeleteRoom:
         room_id = f"test-{random_id()}"
         password1 = f"secret-{random_id()}"
         password2 = f"different-{random_id()}"
-        
+
         # First create the room
         body = {
             "message": encode_message("Hello"),
@@ -387,16 +384,13 @@ class TestDeleteRoom:
             headers={"Authorization": password1},
             body=body
         )
-        
-        # Wait for authorization to be persisted (async operation)
-        time.sleep(1.0)
-        
-        # Try to delete with wrong password
+
+        # Try to delete with wrong password (server is synchronous)
         status, _, _ = make_request(
             'DELETE', f'/r/{room_id}',
             headers={"Authorization": password2}
         )
-        
+
         assert status == 401, f"Expected 401, got {status}"
     
     def test_delete_unclaimed_room_returns_202(self):
@@ -448,12 +442,12 @@ class TestAuthorization:
         wait_for_server(SERVER_URL)
         room_id = f"test-{random_id()}"
         password = f"secret-{random_id()}"
-        
+
         body = {
             "message": encode_message("Claim"),
             "size": {"rows": 24, "cols": 80}
         }
-        
+
         # Claim the room
         status, _, _ = make_request(
             'POST', f'/r/{room_id}',
@@ -461,11 +455,8 @@ class TestAuthorization:
             body=body
         )
         assert status == 200, "Failed to claim room"
-        
-        # Wait for authorization to be persisted
-        time.sleep(1.0)
-        
-        # Try with wrong password
+
+        # Try with wrong password (server is synchronous)
         status, _, _ = make_request(
             'POST', f'/r/{room_id}',
             headers={"Authorization": "wrong"},
@@ -480,12 +471,12 @@ class TestAuthorization:
         room_id2 = f"test-{random_id()}"
         password1 = f"secret-{random_id()}"
         password2 = f"secret-{random_id()}"
-        
+
         body = {
             "message": encode_message("Test"),
             "size": {"rows": 24, "cols": 80}
         }
-        
+
         # Claim room 1 with password 1
         status1, _, _ = make_request(
             'POST', f'/r/{room_id1}',
@@ -493,7 +484,7 @@ class TestAuthorization:
             body=body
         )
         assert status1 == 200, "Failed to claim room 1"
-        
+
         # Claim room 2 with password 2
         status2, _, _ = make_request(
             'POST', f'/r/{room_id2}',
@@ -501,11 +492,8 @@ class TestAuthorization:
             body=body
         )
         assert status2 == 200, "Failed to claim room 2"
-        
-        # Wait for authorizations to be persisted
-        time.sleep(1.0)
-        
-        # Password 1 should not work on room 2
+
+        # Password 1 should not work on room 2 (server is synchronous)
         status3, _, _ = make_request(
             'POST', f'/r/{room_id2}',
             headers={"Authorization": password1},
@@ -675,12 +663,12 @@ class TestMissingAuthorizationHeader:
         wait_for_server(SERVER_URL)
         room_id = f"test-{random_id()}"
         password = f"secret-{random_id()}"
-        
+
         body = {
             "message": encode_message("Hello"),
             "size": {"rows": 24, "cols": 80}
         }
-        
+
         # First, claim the room with a password
         status1, _, _ = make_request(
             'POST', f'/r/{room_id}',
@@ -688,17 +676,14 @@ class TestMissingAuthorizationHeader:
             body=body
         )
         assert status1 == 200, f"Failed to claim room: {status1}"
-        
-        # Wait for auth to persist
-        time.sleep(1.0)
-        
-        # Now try without Authorization header
+
+        # Now try without Authorization header (server is synchronous)
         status2, _, _ = make_request(
             'POST', f'/r/{room_id}',
             headers={},  # No Authorization header
             body=body
         )
-        
+
         # Should fail because room is claimed with a different (non-empty) password
         assert status2 == 401, f"Expected 401 for POST without auth on claimed room, got {status2}"
     
@@ -1190,27 +1175,26 @@ class TestResponseBodyFormat:
         room_id = f"test-{random_id()}"
         password1 = f"secret-{random_id()}"
         password2 = f"different-{random_id()}"
-        
+
         body = {
             "message": encode_message("Hello"),
             "size": {"rows": 24, "cols": 80}
         }
-        
+
         # Claim room
         make_request(
             'POST', f'/r/{room_id}',
             headers={"Authorization": password1},
             body=body
         )
-        time.sleep(1.0)
-        
-        # Try wrong password
+
+        # Try wrong password (server is synchronous)
         status, headers, resp_body = make_request(
             'POST', f'/r/{room_id}',
             headers={"Authorization": password2},
             body=body
         )
-        
+
         assert status == 401, f"Expected 401, got {status}"
         # Express sendStatus(401) sends "Unauthorized" as body
         assert resp_body == "Unauthorized", f"Expected 'Unauthorized' body, got: {resp_body}"
@@ -1296,12 +1280,12 @@ class TestDeleteEdgeCases:
         room_id = f"test-{random_id()}"
         password1 = f"secret-{random_id()}"
         password2 = f"different-{random_id()}"
-        
+
         body = {
             "message": encode_message("Hello"),
             "size": {"rows": 24, "cols": 80}
         }
-        
+
         # Create room with password1
         status1, _, _ = make_request(
             'POST', f'/r/{room_id}',
@@ -1309,18 +1293,15 @@ class TestDeleteEdgeCases:
             body=body
         )
         assert status1 == 200, f"Failed to create room: {status1}"
-        
+
         # Delete room
         status2, _, _ = make_request(
             'DELETE', f'/r/{room_id}',
             headers={"Authorization": password1}
         )
         assert status2 == 202, f"Failed to delete room: {status2}"
-        
-        # Wait for deletion to complete
-        time.sleep(1.0)
-        
-        # Reclaim with different password
+
+        # Reclaim with different password (server is synchronous)
         status3, _, _ = make_request(
             'POST', f'/r/{room_id}',
             headers={"Authorization": password2},
@@ -1423,27 +1404,26 @@ class TestResponseHeaders:
         room_id = f"test-{random_id()}"
         password1 = f"secret-{random_id()}"
         password2 = f"different-{random_id()}"
-        
+
         body = {
             "message": encode_message("Hello"),
             "size": {"rows": 24, "cols": 80}
         }
-        
+
         # Claim room
         make_request(
             'POST', f'/r/{room_id}',
             headers={"Authorization": password1},
             body=body
         )
-        time.sleep(1.0)
-        
-        # Wrong password
+
+        # Wrong password (server is synchronous)
         status, headers, resp_body = make_request(
             'POST', f'/r/{room_id}',
             headers={"Authorization": password2},
             body=body
         )
-        
+
         assert status == 401, f"Expected 401, got {status}"
         content_type = headers.get('Content-Type', '')
         assert 'text/plain' in content_type or 'text/html' in content_type, \

@@ -106,23 +106,23 @@ This test suite is designed to:
    cd e2e
    uv sync
    uv run playwright install chromium
-   uv run pytest -v
+   uv run pytest
    ```
 
 ## Running Specific Tests
 
 ```bash
 # Run only API tests
-uv run pytest test_api.py -v
+uv run pytest test_api.py
 
 # Run only Socket.IO tests
-uv run pytest test_socketio.py -v
+uv run pytest test_socketio.py
 
 # Run only browser tests
-uv run pytest test_broadcast.py -v
+uv run pytest test_broadcast.py
 
 # Run a specific test
-uv run pytest test_api.py::TestBroadcast::test_broadcast_wrong_password_returns_401 -v
+uv run pytest test_api.py::TestBroadcast::test_broadcast_wrong_password_returns_401
 ```
 
 ## CI

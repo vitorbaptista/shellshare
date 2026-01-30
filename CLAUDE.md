@@ -21,7 +21,7 @@ cargo run -- server --port 8080 --host 127.0.0.1
 cargo run -- --server http://localhost:3000  # Run client
 
 # E2E tests (Python + Playwright)
-cd e2e && uv sync && uv run pytest -v
+cd e2e && uv sync && uv run pytest
 ```
 
 ## Architecture

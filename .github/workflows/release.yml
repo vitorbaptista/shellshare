@@ -10,8 +10,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Run E2E tests before building
+  e2e-linux:
+    uses: ./.github/workflows/e2e.yml
+
+  e2e-windows:
+    uses: ./.github/workflows/e2e-windows.yml
+
   # Pass 1: Build bare binaries (no embedding) for all platforms
   build-bare:
+    needs: [e2e-linux, e2e-windows]
     strategy:
       fail-fast: false
       matrix:

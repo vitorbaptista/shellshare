@@ -58,7 +58,7 @@ percent-encoding = "2.3"
 url = "2"
 
 # HTTP client (CLI)
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # MAC address for default password (CLI)
 mac_address = "1"
