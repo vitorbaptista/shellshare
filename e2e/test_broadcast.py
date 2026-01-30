@@ -9,6 +9,7 @@ the server and the Python CLI client.
 import random
 import string
 import subprocess
+import sys
 import time
 import urllib.request
 from playwright.sync_api import sync_playwright
@@ -165,9 +166,11 @@ def test_user_counter_shows_in_browser():
         page2.close()
 
         # Wait for counter to show 1 again
+        # Windows needs longer timeout as Socket.IO disconnect detection is slower
+        disconnect_timeout = 60000 if sys.platform == "win32" else 10000
         page1.wait_for_function(
             "document.getElementById('online-counter').textContent === '1'",
-            timeout=10000
+            timeout=disconnect_timeout
         )
 
         # Check counter shows 1 again
