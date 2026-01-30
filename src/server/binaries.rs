@@ -154,6 +154,8 @@ pub async fn serve_binary(
                     header::CONTENT_DISPOSITION,
                     format!("attachment; filename=\"{}\"", platform.filename()),
                 )
+                .header(header::CACHE_CONTROL, "public, max-age=2678400")
+                .header(header::ETAG, format!("\"{}\"", data.len()))
                 .body(Body::from(data.to_vec()))
                 .unwrap();
         }
@@ -175,6 +177,8 @@ async fn serve_self_binary() -> Response {
                     header::CONTENT_DISPOSITION,
                     "attachment; filename=\"shellshare\"",
                 )
+                .header(header::CACHE_CONTROL, "public, max-age=2678400")
+                .header(header::ETAG, format!("\"{}\"", data.len()))
                 .body(Body::from(data))
                 .unwrap(),
             Err(_) => Response::builder()
