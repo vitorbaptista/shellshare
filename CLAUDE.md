@@ -65,3 +65,9 @@ Messages are encoded matching the original Python CLI: URL-encode (Python urllib
 ## Testing
 
 E2E tests in `e2e/` use Python pytest + Playwright for browser automation. Tests cover HTTP API, Socket.IO events, and full CLI-to-browser integration.
+
+# Additional instructions
+
+- When adding new dependency, always use `cargo add`
+- Before committing run `make lint` and fix any issues
+- When fixing a lint issue, don't simply disable the check unless we really don't need it
