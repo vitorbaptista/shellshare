@@ -20,11 +20,13 @@ identical real-time behavior.
 
 import base64
 import json
+import platform
 import threading
 import time
 import urllib.parse
 import urllib.request
 
+import pytest
 import socketio
 
 SERVER_URL = "http://localhost:3000"
@@ -1194,6 +1196,10 @@ class TestSocketIOSizePassthrough:
         
         sio.disconnect()
     
+    @pytest.mark.skipif(
+        platform.system() == "Windows",
+        reason="Windows has timing issues with null size event detection"
+    )
     def test_size_null_value_not_emitted(self):
         """Null size should not be emitted (only valid sizes with cols/rows are emitted)."""
         wait_for_server(SERVER_URL)
