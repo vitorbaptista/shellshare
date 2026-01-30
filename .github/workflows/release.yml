@@ -52,6 +52,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Install musl tools (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -100,6 +103,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Install musl tools (Linux)
         if: matrix.os == 'ubuntu-latest'
