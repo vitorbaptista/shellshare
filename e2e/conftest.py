@@ -23,8 +23,18 @@ import pytest
 import socketio
 
 # Constants
-CLI_PATH = Path(__file__).parent.parent / "public" / "bin" / "shellshare"
-CLI_COMMAND = [sys.executable, str(CLI_PATH)]
+# Use the Rust binary from target/release (or target/debug for development)
+_PROJECT_ROOT = Path(__file__).parent.parent
+_RELEASE_PATH = _PROJECT_ROOT / "target" / "release" / "shellshare"
+_DEBUG_PATH = _PROJECT_ROOT / "target" / "debug" / "shellshare"
+
+# Prefer release build, fall back to debug
+if _RELEASE_PATH.exists():
+    CLI_PATH = _RELEASE_PATH
+else:
+    CLI_PATH = _DEBUG_PATH
+
+CLI_COMMAND = [str(CLI_PATH)]
 SERVER_URL = "http://localhost:3000"
 
 

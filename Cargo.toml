@@ -10,7 +10,7 @@ name = "shellshare"
 path = "src/main.rs"
 
 [dependencies]
-# Web framework
+# Web framework (server)
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }
@@ -18,7 +18,7 @@ tower-http = { version = "0.6", features = ["fs", "trace"] }
 # Async runtime
 tokio = { version = "1", features = ["full", "sync"] }
 
-# Static file embedding
+# Static file embedding (server)
 rust-embed = { version = "8", features = ["mime-guess", "axum"] }
 mime_guess = "2"
 
@@ -33,14 +33,30 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Socket.IO
+# Socket.IO (server)
 socketioxide = { version = "0.15", features = ["state"] }
 
-# Base64 encoding for message accumulation
+# Base64 encoding
 base64 = "0.22"
 
-# URL decoding for room names
+# URL encoding/decoding
 percent-encoding = "2.3"
+url = "2"
+
+# HTTP client (CLI)
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+
+# MAC address for default password (CLI)
+mac_address = "1"
+
+# Random room ID generation (CLI)
+rand = "0.8"
+
+# PTY for script mode (CLI)
+portable-pty = "0.8"
+
+# Ctrl+C handling (CLI)
+ctrlc = "3"
 
 [profile.release]
 lto = true
