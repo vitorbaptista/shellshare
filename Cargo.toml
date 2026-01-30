@@ -74,6 +74,7 @@ ctrlc = "3"
 libc = "0.2.180"
 term_size = "0.3.2"
 signal-hook = "0.4.3"
+hex = "0.4.3"
 
 [profile.release]
 lto = true
