@@ -83,6 +83,6 @@ jobs:
 
           # Run E2E tests
           cd e2e
-          uv run pytest -v
+          uv run pytest
         env:
           CI: true

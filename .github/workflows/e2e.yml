@@ -71,6 +71,6 @@ jobs:
       - name: Run E2E tests
         run: |
           cd e2e
-          uv run pytest -v
+          uv run pytest
         env:
           CI: true
