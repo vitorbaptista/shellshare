@@ -90,8 +90,12 @@ pub fn run_script_mode(
     // for interactive TUI apps like vim, less, htop, etc.
     let _raw_guard = RawModeGuard::new();
 
-    // Get the user's shell
+    // Get the user's shell (platform-specific)
+    #[cfg(unix)]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+    #[cfg(windows)]
+    let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
 
     // Get terminal size
     let size = terminal::get_terminal_size();
@@ -108,8 +112,11 @@ pub fn run_script_mode(
     // Open a PTY pair
     let pair = pty_system.openpty(pty_size)?;
 
-    // Build command to spawn the shell
-    let cmd = CommandBuilder::new(&shell);
+    // Build command to spawn the shell, preserving current working directory
+    let mut cmd = CommandBuilder::new(&shell);
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.cwd(cwd);
+    }
 
     // Spawn the shell in the PTY
     let mut child = pair.slave.spawn_command(cmd)?;
