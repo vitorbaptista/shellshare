@@ -81,12 +81,12 @@ pre {
   font-style: italic;
 }
 
-.instructions-macos .linux:not(.macos),
-.instructions-macos .windows:not(.macos),
-.instructions-linux .macos:not(.linux),
-.instructions-linux .windows:not(.linux),
-.instructions-windows .macos:not(.windows),
-.instructions-windows .linux:not(.windows) {
+body:has(#os-linux:checked) .windows:not(.linux),
+body:has(#os-linux:checked) .macos:not(.linux),
+body:has(#os-macos:checked) .windows:not(.macos),
+body:has(#os-macos:checked) .linux:not(.macos),
+body:has(#os-windows:checked) .macos:not(.windows),
+body:has(#os-windows:checked) .linux:not(.windows) {
   display: none;
 }
 

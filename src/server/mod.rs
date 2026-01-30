@@ -332,11 +332,9 @@ async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
                 .unwrap_or("");
 
             let os = detect_os_from_user_agent(user_agent);
-            let body_class = format!("instructions-{os}");
 
             let html = String::from_utf8_lossy(&content.data);
             let html = html
-                .replace("{{BODY_CLASS}}", &body_class)
                 .replace(
                     "{{LINUX_CHECKED}}",
                     if os == "linux" { " checked" } else { "" },
