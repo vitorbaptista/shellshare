@@ -2,14 +2,17 @@
 //!
 //! This module contains the server implementation using axum + socketioxide.
 
+mod binaries;
+
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{header, HeaderMap, Method, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
+use binaries::BinaryDownloadQuery;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use percent_encoding::percent_decode_str;
 use rust_embed::Embed;
@@ -165,8 +168,8 @@ pub async fn run(
         .route("/r/{*room}", get(room_page_handler))
         .route("/r/{*room}", post(broadcast_handler))
         .route("/r/{*room}", delete(delete_room_handler))
-        // Self-serve binary download
-        .route("/bin/shellshare", get(serve_self_binary))
+        // Binary download (serves embedded binaries or self)
+        .route("/bin/shellshare", get(serve_binary))
         // Static files - fallback
         .fallback(serve_static)
         // State and middleware
@@ -568,32 +571,15 @@ async fn cleanup_abandoned_rooms(state: &AppState) {
     }
 }
 
-/// Serve the running binary itself for download
-#[allow(clippy::option_if_let_else)] // Nested match is clearer than map_or_else here
-async fn serve_self_binary() -> impl IntoResponse {
-    match std::env::current_exe() {
-        Ok(exe_path) => match tokio::fs::read(&exe_path).await {
-            Ok(data) => Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/octet-stream")
-                .header(
-                    header::CONTENT_DISPOSITION,
-                    "attachment; filename=\"shellshare\"",
-                )
-                .body(Body::from(data))
-                .unwrap(),
-            Err(_) => Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                .body(Body::from("Failed to read binary"))
-                .unwrap(),
-        },
-        Err(_) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Failed to locate binary"))
-            .unwrap(),
-    }
+/// Serve platform-specific binary or fallback to self
+///
+/// Supports `?os=` query parameter and User-Agent detection.
+/// See [`binaries::serve_binary`] for details.
+async fn serve_binary(
+    query: Query<BinaryDownloadQuery>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    binaries::serve_binary(query, headers).await
 }
 
 /// Serve embedded static files

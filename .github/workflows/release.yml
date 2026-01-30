@@ -1,0 +1,206 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Pass 1: Build bare binaries (no embedding) for all platforms
+  build-bare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: bare-linux-x86_64
+            binary: shellshare
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: bare-windows-x86_64
+            binary: shellshare.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: bare-macos-x86_64
+            binary: shellshare
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: bare-macos-aarch64
+            binary: shellshare
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build bare binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload bare binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          retention-days: 1
+
+  # Pass 2: Build with embedded binaries from Pass 1
+  build-embedded:
+    needs: build-bare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: shellshare-linux-x86_64
+            binary: shellshare
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: shellshare-windows-x86_64
+            binary: shellshare.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: shellshare-macos-x86_64
+            binary: shellshare
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: shellshare-macos-aarch64
+            binary: shellshare
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # Download all bare binaries from Pass 1
+      - name: Download Linux bare binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bare-linux-x86_64
+          path: binaries-temp/linux
+
+      - name: Download Windows bare binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bare-windows-x86_64
+          path: binaries-temp/windows
+
+      - name: Download macOS Intel bare binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bare-macos-x86_64
+          path: binaries-temp/macos-intel
+
+      - name: Download macOS ARM bare binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bare-macos-aarch64
+          path: binaries-temp/macos-arm
+
+      # Organize binaries with expected names
+      - name: Organize binaries (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p binaries
+          cp binaries-temp/linux/shellshare binaries/shellshare-linux-x86_64
+          cp binaries-temp/windows/shellshare.exe binaries/shellshare-windows-x86_64.exe
+          cp binaries-temp/macos-intel/shellshare binaries/shellshare-macos-x86_64
+          cp binaries-temp/macos-arm/shellshare binaries/shellshare-macos-aarch64
+          ls -la binaries/
+
+      - name: Organize binaries (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          New-Item -ItemType Directory -Force -Path binaries
+          Copy-Item binaries-temp/linux/shellshare binaries/shellshare-linux-x86_64
+          Copy-Item binaries-temp/windows/shellshare.exe binaries/shellshare-windows-x86_64.exe
+          Copy-Item binaries-temp/macos-intel/shellshare binaries/shellshare-macos-x86_64
+          Copy-Item binaries-temp/macos-arm/shellshare binaries/shellshare-macos-aarch64
+          Get-ChildItem binaries/
+
+      - name: Build with embedded binaries
+        run: cargo build --release --target ${{ matrix.target }} --features embed-binaries
+
+      - name: Upload embedded binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          retention-days: 7
+
+  # Create GitHub release with all binaries
+  release:
+    needs: build-embedded
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: shellshare-linux-x86_64
+          path: release/linux
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: shellshare-windows-x86_64
+          path: release/windows
+
+      - name: Download macOS Intel binary
+        uses: actions/download-artifact@v4
+        with:
+          name: shellshare-macos-x86_64
+          path: release/macos-intel
+
+      - name: Download macOS ARM binary
+        uses: actions/download-artifact@v4
+        with:
+          name: shellshare-macos-aarch64
+          path: release/macos-arm
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p assets
+          cp release/linux/shellshare assets/shellshare-linux-x86_64
+          cp release/windows/shellshare.exe assets/shellshare-windows-x86_64.exe
+          cp release/macos-intel/shellshare assets/shellshare-macos-x86_64
+          cp release/macos-arm/shellshare assets/shellshare-macos-aarch64
+          chmod +x assets/shellshare-linux-x86_64 assets/shellshare-macos-x86_64 assets/shellshare-macos-aarch64
+          ls -la assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/shellshare-linux-x86_64
+            assets/shellshare-windows-x86_64.exe
+            assets/shellshare-macos-x86_64
+            assets/shellshare-macos-aarch64
+          generate_release_notes: true

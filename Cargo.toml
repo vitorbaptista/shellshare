@@ -12,6 +12,10 @@ keywords = ["terminal", "broadcast", "shell", "live", "tty"]
 categories = ["command-line-utilities", "network-programming"]
 rust-version = "1.75"
 
+[features]
+default = []
+embed-binaries = []
+
 [badges]
 maintenance = { status = "passively-maintained" }
 

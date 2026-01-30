@@ -1,6 +1,10 @@
 # Rust
 /target/
 
+# Cross-platform binaries for embedding (CI-generated)
+/binaries/*
+!/binaries/.gitkeep
+
 # Static assets (generated)
 public/javascript/*.bundle.js
 public/javascript/*.min.js
