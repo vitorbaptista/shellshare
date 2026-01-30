@@ -245,13 +245,19 @@ fn setup_socket_handlers(io: &SocketIo) {
                     }
                 }
 
-                // Broadcast updated user count to all in room (including this client)
-                // Get fresh count right before broadcast to avoid race conditions
+                // Get fresh user count right before emissions
                 let user_count = socket
                     .within(room_name.clone())
                     .sockets()
                     .map(|s| s.len())
                     .unwrap_or(0);
+
+                // Send user count directly to this client (guaranteed delivery)
+                if let Err(e) = socket.emit("usersCount", &user_count) {
+                    warn!("Failed to emit usersCount: {:?}", e);
+                }
+
+                // Also broadcast to notify other clients in the room
                 let _ = socket.within(room_name).emit("usersCount", &user_count);
             },
         );
