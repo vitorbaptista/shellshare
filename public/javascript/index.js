@@ -15,9 +15,9 @@
     }
   }
 
-  macosElement.onclick = toggleOS;
-  linuxElement.onclick = toggleOS;
-  windowsElement.onclick = toggleOS;
+  macosElement.addEventListener('change', toggleOS);
+  linuxElement.addEventListener('change', toggleOS);
+  windowsElement.addEventListener('change', toggleOS);
 
   // Auto-detect OS
   var platform = navigator.platform || '';
