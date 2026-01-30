@@ -27,8 +27,9 @@
     windowsElement.checked = true;
   } else if (platform.indexOf('Linux') !== -1) {
     linuxElement.checked = true;
+  } else {
+    macosElement.checked = true;
   }
-  // macOS is already checked by default in HTML
 
   toggleOS();
 })();

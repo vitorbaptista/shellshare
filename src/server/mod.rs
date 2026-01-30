@@ -311,41 +311,13 @@ fn normalize_room_name(room: &str) -> String {
 }
 
 /// GET / - Home page
-async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
-    let user_agent = headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let is_linux = user_agent.to_lowercase().contains("linux");
-
+async fn index_handler() -> impl IntoResponse {
     match Templates::get("index.html") {
-        Some(content) => {
-            let html = String::from_utf8_lossy(&content.data);
-            // Simple template replacement for isLinux
-            let html = if is_linux {
-                html.replace(
-                    "class=\"instructions-macos\"",
-                    "class=\"instructions-linux\"",
-                )
-                .replace(
-                    "id=\"os-macos\" name=\"os\" value=\"macos\" checked",
-                    "id=\"os-macos\" name=\"os\" value=\"macos\"",
-                )
-                .replace(
-                    "id=\"os-linux\" name=\"os\" value=\"linux\"",
-                    "id=\"os-linux\" name=\"os\" value=\"linux\" checked",
-                )
-            } else {
-                html.to_string()
-            };
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-                .body(Body::from(html))
-                .unwrap()
-        }
+        Some(content) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .body(Body::from(content.data.into_owned()))
+            .unwrap(),
         None => Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
