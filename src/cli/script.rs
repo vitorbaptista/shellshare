@@ -3,6 +3,8 @@
 //! Spawns a PTY and streams output to the server, similar to the `script` command.
 //! Output is displayed locally AND sent to the server for remote viewing.
 
+#![allow(unsafe_code)] // PTY handling requires unsafe for terminal control
+
 use crate::cli::encoding;
 use crate::cli::http;
 use crate::cli::terminal::{self, TerminalSize};
@@ -81,6 +83,7 @@ impl RawModeGuard {
 }
 
 /// Run script mode - spawn a shell in a PTY and stream output to server
+#[allow(clippy::too_many_lines)] // Complex PTY setup with multiple threads
 pub fn run_script_mode(
     client: &http::Client,
     running: &Arc<AtomicBool>,
@@ -149,7 +152,7 @@ pub fn run_script_mode(
         let rows = current_rows.clone();
 
         let handle = thread::spawn(move || {
-            if let Ok(mut signals) = Signals::new(&[SIGWINCH]) {
+            if let Ok(mut signals) = Signals::new([SIGWINCH]) {
                 for _ in signals.forever() {
                     if !running_sigwinch.load(Ordering::SeqCst) {
                         break;
@@ -183,17 +186,18 @@ pub fn run_script_mode(
     let running_clone = running.clone();
     let running_http = running.clone();
 
-    // Clone atomics for HTTP thread
-    let http_cols = current_cols.clone();
-    let http_rows = current_rows.clone();
+    // Move atomics to HTTP thread (last use of these Arcs)
+    let http_cols = current_cols;
+    let http_rows = current_rows;
 
     // Spawn HTTP sender thread - handles all network I/O separately
     // This ensures network latency never blocks terminal display
     let http_thread = thread::spawn(move || {
-        let mut send_buffer: Vec<u8> = Vec::with_capacity(8192);
-        let mut last_send = Instant::now();
         const SEND_INTERVAL: Duration = Duration::from_millis(100);
         const MAX_BUFFER_SIZE: usize = 4096;
+
+        let mut send_buffer: Vec<u8> = Vec::with_capacity(8192);
+        let mut last_send = Instant::now();
 
         loop {
             if !running_http.load(Ordering::SeqCst) {
@@ -234,7 +238,7 @@ pub fn run_script_mode(
                 };
 
                 if let Err(e) = client_clone.post_message(&encoded, size) {
-                    eprintln!("\r\nERROR: {}", e);
+                    eprintln!("\r\nERROR: {e}");
                     eprintln!("\rERROR: Exit shellshare and try again later.");
                     running_http.store(false, Ordering::SeqCst);
                     break;
@@ -296,12 +300,13 @@ pub fn run_script_mode(
     // Spawn a thread to forward stdin to the PTY
     // Also detects double Ctrl+C for force-quit (useful when shell is unresponsive)
     let _stdin_thread = thread::spawn(move || {
+        const CTRLC_BYTE: u8 = 0x03;
+        const DOUBLE_CTRLC_WINDOW: Duration = Duration::from_millis(500);
+
         let stdin = std::io::stdin();
         let mut stdin_lock = stdin.lock();
         let mut buffer = [0u8; 1024];
         let mut last_ctrlc: Option<Instant> = None;
-        const CTRLC_BYTE: u8 = 0x03;
-        const DOUBLE_CTRLC_WINDOW: Duration = Duration::from_millis(500);
 
         loop {
             if !running_stdin.load(Ordering::SeqCst) {

@@ -125,7 +125,7 @@ pub async fn run(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>
         .layer(TraceLayer::new_for_http());
 
     // Run server
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await?;
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
     info!("Listening on {}:{}", host, port);
     axum::serve(listener, app).await?;
 
@@ -220,15 +220,13 @@ fn setup_socket_handlers(io: &SocketIo) {
             if let Some(ref io) = *io_guard {
                 for room in rooms {
                     // Count remaining users in room (this socket is already removed)
-                    let user_count = if let Some(ns) = io.of("/") {
+                    let user_count = io.of("/").map_or(0, |ns| {
                         ns.within(room.clone())
                             .sockets()
                             .map(|s| s.len())
                             .unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    info!("Room {} now has {} users", room, user_count);
+                    });
+                    info!("Room {room} now has {user_count} users");
                     // Emit with fresh ns reference
                     if let Some(ns) = io.of("/") {
                         let _ = ns.within(room).emit("usersCount", &user_count);
@@ -242,21 +240,14 @@ fn setup_socket_handlers(io: &SocketIo) {
 /// Normalize room name by stripping /r/ prefix and URL-decoding
 fn normalize_room_name(room: &str) -> String {
     let room = room.trim_start_matches('/');
-    let room = if room.starts_with("r/") {
-        &room[2..]
-    } else {
-        room
-    };
+    let room = room.strip_prefix("r/").unwrap_or(room);
     // URL-decode to handle encoded characters from Socket.IO
     // (Axum auto-decodes HTTP paths, but Socket.IO sends raw strings)
     // Use strict UTF-8 decoding to avoid conflating invalid UTF-8 with
     // valid inputs that contain the replacement character.
-    match percent_decode_str(room).decode_utf8() {
-        Ok(decoded) => decoded.into_owned(),
-        // On invalid UTF-8, fall back to the original (prefix-stripped)
-        // room name to avoid silent collisions.
-        Err(_) => room.to_string(),
-    }
+    percent_decode_str(room)
+        .decode_utf8()
+        .map_or_else(|_| room.to_string(), std::borrow::Cow::into_owned)
 }
 
 /// GET / - Home page
@@ -320,6 +311,7 @@ async fn room_page_handler(Path(_room): Path<String>) -> impl IntoResponse {
 }
 
 /// POST /r/:room - Broadcast message to room
+#[allow(clippy::significant_drop_tightening)] // Lock must span room_data mutations
 async fn broadcast_handler(
     Path(room_path): Path<String>,
     headers: HeaderMap,
@@ -473,6 +465,7 @@ async fn check_authorization(state: &AppState, room: &str, secret: &str) -> bool
 }
 
 /// Serve the running binary itself for download
+#[allow(clippy::option_if_let_else)] // Nested match is clearer than map_or_else here
 async fn serve_self_binary() -> impl IntoResponse {
     match std::env::current_exe() {
         Ok(exe_path) => match tokio::fs::read(&exe_path).await {

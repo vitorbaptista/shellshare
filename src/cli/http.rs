@@ -23,14 +23,14 @@ pub enum HttpError {
 impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HttpError::Unauthorized => {
+            Self::Unauthorized => {
                 write!(f, "You're not authorized to share on this room.")
             }
-            HttpError::RequestTooLarge => {
+            Self::RequestTooLarge => {
                 write!(f, "You've wrote too much too fast. Please, slow down.")
             }
-            HttpError::NetworkError(msg) => {
-                write!(f, "There was an error connecting to the server: {}", msg)
+            Self::NetworkError(msg) => {
+                write!(f, "There was an error connecting to the server: {msg}")
             }
         }
     }
@@ -41,7 +41,7 @@ impl std::error::Error for HttpError {}
 /// HTTP client for communicating with the shellshare server
 #[derive(Clone)]
 pub struct Client {
-    client: ReqwestClient,
+    inner: ReqwestClient,
     server_url: String,
     room_path: String,
     password: String,
@@ -54,12 +54,12 @@ impl Client {
         room_path: &str,
         password: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let client = ReqwestClient::builder()
+        let inner = ReqwestClient::builder()
             .timeout(Duration::from_secs(30))
             .build()?;
 
         Ok(Self {
-            client,
+            inner,
             server_url: server_url.to_string(),
             room_path: room_path.to_string(),
             password: password.to_string(),
@@ -104,7 +104,7 @@ impl Client {
     /// Perform a single POST request
     fn do_post(&self, url: &str, body: &serde_json::Value) -> Result<(), HttpError> {
         let response = self
-            .client
+            .inner
             .post(url)
             .header("Content-Type", "application/json")
             .header("Authorization", &self.password)
@@ -117,8 +117,7 @@ impl Client {
             StatusCode::UNAUTHORIZED => Err(HttpError::Unauthorized),
             StatusCode::PAYLOAD_TOO_LARGE => Err(HttpError::RequestTooLarge),
             status => Err(HttpError::NetworkError(format!(
-                "Unexpected status code: {}",
-                status
+                "Unexpected status code: {status}"
             ))),
         }
     }
@@ -128,7 +127,7 @@ impl Client {
         let url = format!("{}/{}", self.server_url, self.room_path);
 
         let response = self
-            .client
+            .inner
             .delete(&url)
             .header("Authorization", &self.password)
             .send()
@@ -138,8 +137,7 @@ impl Client {
             StatusCode::OK | StatusCode::ACCEPTED | StatusCode::NO_CONTENT => Ok(()),
             StatusCode::UNAUTHORIZED => Err(HttpError::Unauthorized),
             status => Err(HttpError::NetworkError(format!(
-                "Unexpected status code: {}",
-                status
+                "Unexpected status code: {status}"
             ))),
         }
     }

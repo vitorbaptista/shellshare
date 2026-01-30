@@ -1,7 +1,7 @@
 //! Message encoding for shellshare
 //!
 //! This module provides encoding that matches the Python CLI:
-//! 1. URL-encode the data (like Python's urllib.parse.quote())
+//! 1. URL-encode the data (like Python's `urllib.parse.quote()`)
 //! 2. Base64-encode the result
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -15,12 +15,13 @@ use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 /// encoded_str = base64.b64encode(urlencoded).decode('utf-8')
 /// ```
 ///
-/// Python's urllib.parse.quote() by default:
+/// Python's `urllib.parse.quote()` by default:
 /// - Does NOT encode: letters, digits, '_', '.', '-', '~'
 /// - DOES encode: everything else, including '/'
 ///
-/// We use NON_ALPHANUMERIC which encodes everything except ASCII alphanumeric,
+/// We use `NON_ALPHANUMERIC` which encodes everything except ASCII alphanumeric,
 /// then manually decode the few safe characters to match Python exactly.
+#[allow(clippy::option_if_let_else)] // if-let is more readable here
 pub fn encode_message(data: &[u8]) -> String {
     // First, try to interpret as UTF-8 string for URL encoding
     // If it's not valid UTF-8, we encode each byte
@@ -34,7 +35,7 @@ pub fn encode_message(data: &[u8]) -> String {
                 if b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-' || b == b'~' {
                     (b as char).to_string()
                 } else {
-                    format!("%{:02X}", b)
+                    format!("%{b:02X}")
                 }
             })
             .collect::<String>()
@@ -44,9 +45,9 @@ pub fn encode_message(data: &[u8]) -> String {
     BASE64.encode(url_encoded.as_bytes())
 }
 
-/// URL-encode a string using Python's urllib.parse.quote() defaults.
+/// URL-encode a string using Python's `urllib.parse.quote()` defaults.
 ///
-/// Python's quote() with no arguments leaves these characters unencoded:
+/// Python's `quote()` with no arguments leaves these characters unencoded:
 /// - ASCII letters (a-z, A-Z)
 /// - ASCII digits (0-9)
 /// - '_', '.', '-', '~'

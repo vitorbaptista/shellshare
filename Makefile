@@ -1,8 +1,12 @@
 SHELL := /bin/bash
-.PHONY: build benchmark deploy
+.PHONY: build lint benchmark deploy
 
 build:
 	cargo build --release
+
+lint:
+	cargo clippy
+	cargo check
 
 ROOM ?= testroom
 PASS ?= testpass

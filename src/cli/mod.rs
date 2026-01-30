@@ -35,32 +35,29 @@ fn generate_room_id() -> String {
         .collect()
 }
 
-/// Get the default password (MAC address as integer, like Python's uuid.getnode())
+/// Get the default password (MAC address as integer, like Python's `uuid.getnode()`)
 fn get_default_password() -> String {
-    match mac_address::get_mac_address() {
-        Ok(Some(mac)) => {
-            // Convert MAC address bytes to an integer (like Python's uuid.getnode())
-            let bytes = mac.bytes();
-            let mut value: u64 = 0;
-            for &byte in &bytes {
-                value = (value << 8) | (byte as u64);
-            }
-            value.to_string()
+    if let Ok(Some(mac)) = mac_address::get_mac_address() {
+        // Convert MAC address bytes to an integer (like Python's uuid.getnode())
+        let bytes = mac.bytes();
+        let mut value: u64 = 0;
+        for &byte in &bytes {
+            value = (value << 8) | u64::from(byte);
         }
-        _ => {
-            // Fallback to a random value if MAC address is unavailable
-            let mut rng = rand::thread_rng();
-            rng.gen::<u64>().to_string()
-        }
+        value.to_string()
+    } else {
+        // Fallback to a random value if MAC address is unavailable
+        let mut rng = rand::thread_rng();
+        rng.gen::<u64>().to_string()
     }
 }
 
 /// Normalize server URL (ensure it has a scheme, strip trailing slashes)
 fn normalize_server_url(server: &str) -> String {
-    let server = if !server.contains("://") {
-        format!("http://{}", server)
-    } else {
+    let server = if server.contains("://") {
         server.to_string()
+    } else {
+        format!("http://{server}")
     };
     server.trim_end_matches('/').to_string()
 }
@@ -72,7 +69,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
     let password = args.password.unwrap_or_else(get_default_password);
 
     // Build room path (r/{room})
-    let room_path = format!("r/{}", room);
+    let room_path = format!("r/{room}");
 
     // Create HTTP client
     let client = http::Client::new(&server, &room_path, &password)?;
@@ -92,7 +89,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     if args.stdin {
         // Stdin mode - print to stderr
-        eprintln!("Sharing terminal in {}/{}", server, room_path);
+        eprintln!("Sharing terminal in {server}/{room_path}");
 
         // Read from stdin and stream to server
         stream_stdin(&client, &running)?;
@@ -109,7 +106,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
             println!("You can resize it anytime.");
         }
 
-        println!("Sharing terminal in {}/{}", server, room_path);
+        println!("Sharing terminal in {server}/{room_path}");
 
         // Run script mode with PTY
         script::run_script_mode(&client, &running)?;
@@ -145,7 +142,7 @@ fn stream_stdin(
         let size = terminal::get_terminal_size();
 
         if let Err(e) = client.post_message(&encoded, size) {
-            eprintln!("\r\nERROR: {}", e);
+            eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
             break;
         }

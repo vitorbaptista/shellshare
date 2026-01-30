@@ -1,9 +1,19 @@
 [package]
 name = "shellshare"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
 description = "Live terminal broadcasting - server and client"
 license = "Apache-2.0"
+authors = ["Vitor Baptista"]
+repository = "https://github.com/vitorbaptista/shellshare"
+homepage = "https://shellshare.net"
+readme = "README.md"
+keywords = ["terminal", "broadcast", "shell", "live", "tty"]
+categories = ["command-line-utilities", "network-programming"]
+rust-version = "1.75"
+
+[badges]
+maintenance = { status = "passively-maintained" }
 
 [[bin]]
 name = "shellshare"
@@ -65,3 +75,11 @@ signal-hook = "0.4.3"
 lto = true
 strip = true
 opt-level = "z"
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
