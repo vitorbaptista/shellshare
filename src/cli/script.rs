@@ -10,9 +10,10 @@ use crate::cli::terminal::{self, TerminalSize};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// RAII guard to enable/restore terminal raw mode.
 /// This is essential for interactive apps like vim to work properly.
@@ -114,13 +115,76 @@ pub fn run_script_mode(
     // Get a writer for the PTY master (for forwarding stdin)
     let mut writer = pair.master.take_writer()?;
 
-    // Clone client for the streaming thread
+    // Channel for sending PTY output to HTTP sender thread (non-blocking)
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+
+    // Clone for threads
     let client_clone = client.clone();
     let running_clone = running.clone();
+    let running_http = running.clone();
 
-    // Spawn a thread to read from PTY, display locally, and stream to server
+    // Spawn HTTP sender thread - handles all network I/O separately
+    // This ensures network latency never blocks terminal display
+    let http_thread = thread::spawn(move || {
+        let mut send_buffer: Vec<u8> = Vec::with_capacity(8192);
+        let mut last_send = Instant::now();
+        const SEND_INTERVAL: Duration = Duration::from_millis(100);
+        const MAX_BUFFER_SIZE: usize = 4096;
+
+        loop {
+            if !running_http.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // Try to receive data with timeout
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(data) => {
+                    send_buffer.extend(data);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // No data received, check if we should flush buffer
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // Channel closed, send remaining data and exit
+                    if !send_buffer.is_empty() {
+                        let encoded = encoding::encode_message(&send_buffer);
+                        let size = TerminalSize {
+                            cols: pty_size.cols,
+                            rows: pty_size.rows,
+                        };
+                        let _ = client_clone.post_message(&encoded, size);
+                    }
+                    break;
+                }
+            }
+
+            // Send if buffer is large enough OR enough time has passed
+            let should_send = send_buffer.len() >= MAX_BUFFER_SIZE
+                || (last_send.elapsed() >= SEND_INTERVAL && !send_buffer.is_empty());
+
+            if should_send {
+                let encoded = encoding::encode_message(&send_buffer);
+                let size = TerminalSize {
+                    cols: pty_size.cols,
+                    rows: pty_size.rows,
+                };
+
+                if let Err(e) = client_clone.post_message(&encoded, size) {
+                    eprintln!("\r\nERROR: {}", e);
+                    eprintln!("\rERROR: Exit shellshare and try again later.");
+                    running_http.store(false, Ordering::SeqCst);
+                    break;
+                }
+                send_buffer.clear();
+                last_send = Instant::now();
+            }
+        }
+    });
+
+    // Spawn PTY reader thread - reads from PTY, displays locally, sends to channel
+    // This thread NEVER blocks on network I/O
     let stream_thread = thread::spawn(move || {
-        let mut buffer = [0u8; 4096];
+        let mut read_buffer = [0u8; 4096];
         let mut stdout = std::io::stdout();
 
         loop {
@@ -128,35 +192,26 @@ pub fn run_script_mode(
                 break;
             }
 
-            match reader.read(&mut buffer) {
+            match reader.read(&mut read_buffer) {
                 Ok(0) => {
                     // EOF
                     break;
                 }
                 Ok(n) => {
-                    let data = &buffer[..n];
+                    let data = &read_buffer[..n];
 
-                    // Write to local stdout so user sees their terminal
+                    // Write to local stdout IMMEDIATELY - never blocks on network
                     if stdout.write_all(data).is_err() {
                         break;
                     }
                     let _ = stdout.flush();
 
-                    // Encode and send to server
-                    let encoded = encoding::encode_message(data);
-                    let size = TerminalSize {
-                        cols: pty_size.cols,
-                        rows: pty_size.rows,
-                    };
-
-                    if let Err(e) = client_clone.post_message(&encoded, size) {
-                        eprintln!("\r\nERROR: {}", e);
-                        eprintln!("\rERROR: Exit shellshare and try again later.");
-                        break;
-                    }
+                    // Send to HTTP thread via channel (non-blocking)
+                    // If channel is full/closed, we just drop the data for server
+                    // (local display already happened)
+                    let _ = tx.send(data.to_vec());
                 }
                 Err(e) => {
-                    // Check if it's a would-block error (non-blocking IO)
                     if e.kind() == std::io::ErrorKind::WouldBlock {
                         thread::sleep(Duration::from_millis(10));
                         continue;
@@ -166,16 +221,23 @@ pub fn run_script_mode(
                 }
             }
         }
+
+        // Drop sender to signal HTTP thread to flush and exit
+        drop(tx);
     });
 
     // Clone running flag for stdin thread
     let running_stdin = running.clone();
 
     // Spawn a thread to forward stdin to the PTY
+    // Also detects double Ctrl+C for force-quit (useful when shell is unresponsive)
     let _stdin_thread = thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut stdin_lock = stdin.lock();
         let mut buffer = [0u8; 1024];
+        let mut last_ctrlc: Option<Instant> = None;
+        const CTRLC_BYTE: u8 = 0x03;
+        const DOUBLE_CTRLC_WINDOW: Duration = Duration::from_millis(500);
 
         loop {
             if !running_stdin.load(Ordering::SeqCst) {
@@ -186,7 +248,22 @@ pub fn run_script_mode(
             match stdin_lock.read(&mut buffer) {
                 Ok(0) => break, // EOF
                 Ok(n) => {
-                    if writer.write_all(&buffer[..n]).is_err() {
+                    let data = &buffer[..n];
+
+                    // Check for Ctrl+C (0x03) for double-tap force quit
+                    if data.contains(&CTRLC_BYTE) {
+                        if let Some(last) = last_ctrlc {
+                            if last.elapsed() < DOUBLE_CTRLC_WINDOW {
+                                // Double Ctrl+C detected - force quit
+                                running_stdin.store(false, Ordering::SeqCst);
+                                break;
+                            }
+                        }
+                        last_ctrlc = Some(Instant::now());
+                    }
+
+                    // Forward input to PTY (including single Ctrl+C for normal use)
+                    if writer.write_all(data).is_err() {
                         break;
                     }
                     // Flush to ensure data reaches the PTY immediately
@@ -234,8 +311,9 @@ pub fn run_script_mode(
     // Signal threads to stop
     running.store(false, Ordering::SeqCst);
 
-    // Wait for stream thread
+    // Wait for threads to finish
     let _ = stream_thread.join();
+    let _ = http_thread.join();
 
     // Note: On Windows, we need to keep pair.slave alive until after child exits
     // (see portable-pty issue #4206). This is handled automatically since we
