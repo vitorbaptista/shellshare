@@ -607,10 +607,12 @@ async fn serve_static(req: Request<Body>) -> impl IntoResponse {
                     .unwrap();
             }
             let mime = mime_guess::from_path(path).first_or_octet_stream();
+            let etag = format!("\"{}\"", hex::encode(content.metadata.sha256_hash()));
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
                 .header(header::CACHE_CONTROL, "public, max-age=2678400")
+                .header(header::ETAG, etag)
                 .body(Body::from(content.data.into_owned()))
                 .unwrap()
         }
