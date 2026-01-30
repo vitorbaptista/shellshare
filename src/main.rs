@@ -37,7 +37,7 @@ struct Cli {
     room: Option<String>,
 
     /// Password for room authentication (default: MAC address as integer)
-    #[arg(short, long, global = true)]
+    #[arg(short = 'W', long, global = true)]
     password: Option<String>,
 
     /// Read from stdin instead of spawning a shell
@@ -59,8 +59,7 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -71,7 +70,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .finish();
             tracing::subscriber::set_global_default(subscriber)?;
 
-            server::run(&host, port).await?;
+            // Create runtime only for server mode
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(server::run(&host, port))?;
         }
         None => {
             // Run client mode
