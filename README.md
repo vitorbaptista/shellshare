@@ -23,6 +23,12 @@ https://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
 Anyone that opens this link will be able to see what you're doing in your
 terminal. When you're done, type `exit` or hit CTRL+D.
 
+### Hosting a server
+
+The same `shellshare` binary also includes the server code, allowing you to broadcast your terminal to a server you control.
+
+To do so you just need to run `shellshare server` in one terminal and access [http://localhost:3000](http://localhost:3000). You can broadcast to this server using `shellshare --server http://localhost:3000`. You can use [ngrok](https://ngrok.com) to easily get a public URL to shellshare running on your local machine.
+
 ## Installing
 
 Requires [Rust](https://rustup.rs/) to build from source:
