@@ -17,6 +17,7 @@ WORKDIR /app
 # Copy the compiled binary
 COPY --from=builder /build/target/release/shellshare .
 
-EXPOSE 3000
+ENV PORT=3000
+EXPOSE $PORT
 
-CMD ["./shellshare", "server", "--host", "0.0.0.0"]
+CMD ["sh", "-c", "./shellshare server --host 0.0.0.0 --port $PORT"]

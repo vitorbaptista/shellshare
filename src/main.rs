@@ -48,7 +48,7 @@ enum Commands {
         host: String,
 
         /// Port to listen on
-        #[arg(short, long, default_value = "3000")]
+        #[arg(short, long, default_value = "3000", env = "PORT")]
         port: u16,
     },
 }
