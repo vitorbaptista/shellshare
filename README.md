@@ -47,27 +47,17 @@ broadcast to this instance, use the `--server` option:
 
 ## Deploy
 
-To deploy with [Dokku](https://dokku.com/), configure it to pull the pre-built
-Docker image from GitHub Container Registry:
+To deploy with [Dokku](https://dokku.com/), configure it to pull from `Dockerfile.production`, which pulls the Docker image from GitHub Container Registry:
 
 ```bash
 # Create the app
 dokku apps:create shellshare
 
-# Configure to pull from GHCR instead of building
-dokku git:set shellshare deploy-branch ""
-dokku docker-options:add shellshare deploy "--pull=always"
-dokku git:from-image shellshare ghcr.io/vitorbaptista/shellshare:latest
+# Configure to pull from Dockerfile.prooduction
+dokku builder-dockerfile:set shellshare dockerfile-path Dockerfile.production
 
 # Deploy
-dokku ps:rebuild shellshare
-```
-
-To deploy a specific version, use the commit SHA as the tag:
-
-```bash
-dokku git:from-image shellshare ghcr.io/vitorbaptista/shellshare:<commit-sha>
-dokku ps:rebuild shellshare
+make deploy
 ```
 
 ## Limitations
