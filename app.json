@@ -1,9 +1,4 @@
 {
-  "builders": {
-    "dockerfile": {
-      "dockerfile-path": "Dockerfile.production"
-    }
-  },
   "healthchecks": {
     "web": [
       {
