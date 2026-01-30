@@ -462,9 +462,9 @@ class TestStaticFiles:
     """Tests for static file serving."""
     
     def test_script_exe_exists(self):
-        """GET /bin/script.exe should return 200."""
+        """GET /bin/shellshare should return 200."""
         wait_for_server(SERVER_URL)
-        status, headers, body = make_request('GET', '/bin/script.exe')
+        status, headers, body = make_request('GET', '/bin/shellshare')
         assert status == 200, f"Expected 200, got {status}"
         assert 'application/octet-stream' in headers.get('Content-Type', ''), \
             f"Expected octet-stream, got {headers.get('Content-Type')}"
@@ -479,7 +479,7 @@ class TestStaticFiles:
     def test_static_files_have_cache_headers(self):
         """Static files should have cache headers."""
         wait_for_server(SERVER_URL)
-        status, headers, body = make_request('GET', '/bin/script.exe')
+        status, headers, body = make_request('GET', '/bin/shellshare')
         assert 'Cache-Control' in headers, "Expected Cache-Control header"
 
 
