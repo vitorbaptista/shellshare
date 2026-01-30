@@ -25,8 +25,9 @@ import socketio
 # Constants
 # Use the Rust binary from target/release (or target/debug for development)
 _PROJECT_ROOT = Path(__file__).parent.parent
-_RELEASE_PATH = _PROJECT_ROOT / "target" / "release" / "shellshare"
-_DEBUG_PATH = _PROJECT_ROOT / "target" / "debug" / "shellshare"
+_EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
+_RELEASE_PATH = _PROJECT_ROOT / "target" / "release" / f"shellshare{_EXE_SUFFIX}"
+_DEBUG_PATH = _PROJECT_ROOT / "target" / "debug" / f"shellshare{_EXE_SUFFIX}"
 
 # Prefer release build, fall back to debug
 if _RELEASE_PATH.exists():
