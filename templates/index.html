@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="/stylesheet/index.css">
   <link rel="icon" type="image/png" href="/favicon.png">
 </head>
-<body>
+<body class="{{BODY_CLASS}}">
   <div class="wrapper">
     <header>
       <hgroup class="title">
@@ -34,11 +34,11 @@
             <span class="windows">iwr <a href="https://get.shellshare.net">https://get.shellshare.net</a> -OutFile shellshare.exe; .\shellshare.exe</span>
           </code>
           <nav class="operating-systems">
-            <input type="radio" id="os-linux" name="os" value="linux">
+            <input type="radio" id="os-linux" name="os" value="linux"{{LINUX_CHECKED}}>
             <label for="os-linux"><i class="fa fa-2x fa-linux"></i></label>
-            <input type="radio" id="os-macos" name="os" value="macos" checked>
+            <input type="radio" id="os-macos" name="os" value="macos"{{MACOS_CHECKED}}>
             <label for="os-macos"><i class="fa fa-2x fa-apple"></i></label>
-            <input type="radio" id="os-windows" name="os" value="windows">
+            <input type="radio" id="os-windows" name="os" value="windows"{{WINDOWS_CHECKED}}>
             <label for="os-windows"><i class="fa fa-2x fa-windows"></i></label>
           </nav>
         </div>

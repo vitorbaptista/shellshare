@@ -310,14 +310,52 @@ fn normalize_room_name(room: &str) -> String {
         .map_or_else(|_| room.to_string(), std::borrow::Cow::into_owned)
 }
 
+/// Detect OS from User-Agent header
+fn detect_os_from_user_agent(user_agent: &str) -> &'static str {
+    let ua = user_agent.to_lowercase();
+    if ua.contains("windows") {
+        "windows"
+    } else if ua.contains("mac") {
+        "macos"
+    } else {
+        "linux" // default
+    }
+}
+
 /// GET / - Home page
-async fn index_handler() -> impl IntoResponse {
+async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
     match Templates::get("index.html") {
-        Some(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(Body::from(content.data.into_owned()))
-            .unwrap(),
+        Some(content) => {
+            let user_agent = headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            let os = detect_os_from_user_agent(user_agent);
+            let body_class = format!("instructions-{os}");
+
+            let html = String::from_utf8_lossy(&content.data);
+            let html = html
+                .replace("{{BODY_CLASS}}", &body_class)
+                .replace(
+                    "{{LINUX_CHECKED}}",
+                    if os == "linux" { " checked" } else { "" },
+                )
+                .replace(
+                    "{{MACOS_CHECKED}}",
+                    if os == "macos" { " checked" } else { "" },
+                )
+                .replace(
+                    "{{WINDOWS_CHECKED}}",
+                    if os == "windows" { " checked" } else { "" },
+                );
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(html))
+                .unwrap()
+        }
         None => Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
