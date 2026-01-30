@@ -55,7 +55,7 @@ enum Commands {
 
 /// Embedded static files from the public directory
 #[derive(Embed, Clone)]
-#[folder = "../public/"]
+#[folder = "public/"]
 struct StaticAssets;
 
 /// Embedded view templates
