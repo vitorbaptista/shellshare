@@ -38,7 +38,7 @@ def run_cli_script_mode(room, password, server=SERVER_URL, env=None, timeout=30)
 
     Returns (returncode, stdout, stderr)
     """
-    args = CLI_COMMAND + ["-s", server, "-r", room, "-p", password]
+    args = CLI_COMMAND + ["-s", server, "-r", room, "-W", password]
 
     proc = subprocess.Popen(
         args,
@@ -103,7 +103,7 @@ class TestScriptModeBasic:
         Due to PTY stdin forwarding complexity, we send exit command.
         """
         proc = subprocess.Popen(
-            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-p", unique_password],
+            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -230,7 +230,7 @@ class TestScriptModeOutput:
 
         # Start CLI process
         proc = subprocess.Popen(
-            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-p", unique_password],
+            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -299,7 +299,7 @@ class TestScriptModeViewer:
         """Late joiner should see accumulated content from script mode."""
         # Start streaming
         proc = subprocess.Popen(
-            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-p", unique_password],
+            CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

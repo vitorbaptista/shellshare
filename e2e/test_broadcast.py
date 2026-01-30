@@ -6,17 +6,16 @@ with it through the public interfaces (CLI + browser). They test both
 the server and the Python CLI client.
 """
 
-import os
 import random
 import string
 import subprocess
-import sys
 import time
 import urllib.request
 from playwright.sync_api import sync_playwright
 
+from conftest import CLI_COMMAND
+
 SERVER_URL = "http://localhost:3000"
-CLI_PATH = os.path.join(os.path.dirname(__file__), "..", "public", "bin", "shellshare")
 
 
 def random_id(length=12):
@@ -39,7 +38,7 @@ def wait_for_server(url, timeout_seconds=30):
 def broadcast_with_cli(room_id, message, password, server_url):
     """Broadcast a message using the shellshare CLI with --stdin flag."""
     proc = subprocess.Popen(
-        [sys.executable, CLI_PATH, "--stdin", "-s", server_url, "-r", room_id, "-p", password],
+        CLI_COMMAND + ["--stdin", "-s", server_url, "-r", room_id, "-W", password],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

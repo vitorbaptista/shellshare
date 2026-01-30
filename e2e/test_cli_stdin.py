@@ -37,7 +37,7 @@ def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, t
 
     Returns (returncode, stdout, stderr)
     """
-    args = CLI_COMMAND + ["--stdin", "-s", server, "-r", room, "-p", password]
+    args = CLI_COMMAND + ["--stdin", "-s", server, "-r", room, "-W", password]
     if extra_args:
         args.extend(extra_args)
 
@@ -266,7 +266,7 @@ class TestServerCommunication:
         listener.disconnect()
 
     def test_short_flags(self, unique_password):
-        """Short flags -s, -r, -p should work."""
+        """Short flags -s, -r, -W should work."""
         custom_room = f"short-{random_id()}"
 
         listener = SocketListener(custom_room)
@@ -277,7 +277,7 @@ class TestServerCommunication:
             "--stdin",
             "-s", SERVER_URL,
             "-r", custom_room,
-            "-p", unique_password,
+            "-W", unique_password,
         ]
 
         proc = subprocess.Popen(
@@ -378,7 +378,7 @@ class TestAuthorization:
         listener.connect()
 
         # Start first writer - keep it running
-        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room, "-p", "original-password"]
+        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room, "-W", "original-password"]
         proc1 = subprocess.Popen(
             args1,
             stdin=subprocess.PIPE,
@@ -436,7 +436,7 @@ class TestAuthorization:
         password2 = f"second-{random_id()}"
 
         # Start first writer and keep it running
-        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room, "-p", password1]
+        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room, "-W", password1]
         proc1 = subprocess.Popen(
             args1,
             stdin=subprocess.PIPE,
@@ -566,7 +566,7 @@ class TestArgumentParsing:
         # Help should mention the available flags
         assert "--server" in output or "-s" in output
         assert "--room" in output or "-r" in output
-        assert "--password" in output or "-p" in output
+        assert "--password" in output or "-W" in output
         assert "--stdin" in output
 
     def test_help_short_flag(self):
@@ -713,7 +713,10 @@ class TestDefaultPassword:
         listener = SocketListener(unique_room)
         listener.connect()
 
-        # First write without -p
+        msg1 = f"FIRST-{random_id(6)}"
+        msg2 = f"SECOND-{random_id(6)}"
+
+        # First write without -W
         args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
         proc1 = subprocess.Popen(
             args1,
@@ -722,9 +725,12 @@ class TestDefaultPassword:
             stderr=subprocess.PIPE,
             text=True,
         )
-        proc1.communicate(input="first", timeout=10)
+        proc1.communicate(input=msg1, timeout=10)
 
-        # Second write without -p (same machine = same MAC = same password)
+        # Wait for message to arrive via Socket.IO before DELETE clears the room
+        time.sleep(0.5)
+
+        # Second write without -W (same machine = same MAC = same password)
         args2 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
         proc2 = subprocess.Popen(
             args2,
@@ -733,14 +739,17 @@ class TestDefaultPassword:
             stderr=subprocess.PIPE,
             text=True,
         )
-        stdout, stderr = proc2.communicate(input="second", timeout=10)
+        stdout, stderr = proc2.communicate(input=msg2, timeout=10)
 
         assert proc2.returncode == 0, f"Second write failed: {stderr}"
 
+        # Wait for second message to arrive
+        time.sleep(0.5)
+
         # Both messages should be received
         accumulated = listener.get_accumulated_messages()
-        assert "first" in accumulated
-        assert "second" in accumulated
+        assert msg1 in accumulated, f"First message not found in: {accumulated}"
+        assert msg2 in accumulated, f"Second message not found in: {accumulated}"
 
         listener.disconnect()
 
