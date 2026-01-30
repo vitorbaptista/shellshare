@@ -14,14 +14,8 @@ The objective of [shellshare.net](https://shellshare.net) is to provide an easy 
 
 Copy and paste the following line in your terminal:
 
-```
-wget -qO shellshare https://get.shellshare.net && python shellshare
-```
-
-If you don't have `wget` installed (as in Mac OS X), you can use `curl` as:
-
-```
-curl -sLo shellshare https://get.shellshare.net && python shellshare
+```bash
+curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare && ./shellshare
 ```
 
 You'll see a line saying `Sharing session in
@@ -31,36 +25,44 @@ terminal. When you're done, type `exit` or hit CTRL+D.
 
 ## Installing
 
-It requires Node 4.2.x (but should work with earlier versions), npm, Gulp and
-MongoDB. Considering that these dependencies are installed on your local
-machine, run:
+Requires [Rust](https://rustup.rs/) to build from source:
 
-```
-npm install
-npm start
+```bash
+cargo build --release
+./target/release/shellshare server
 ```
 
 This will run the server on [localhost:3000](http://localhost:3000). To
-broadcast to this instance, use the `--server` option of the client, as
-following:
+broadcast to this instance, use the `--server` option:
 
-```
-./public/bin/shellshare --server localhost:3000
-```
-
-### Docker
-
-Alternatively, you could run the server using [docker
-compose](https://docs.docker.com/compose/install/) as follows:
-
-```
-docker-compose up --build
+```bash
+./target/release/shellshare --server http://localhost:3000
 ```
 
-It will build a container with shellshare and all its dependencies, pull the
-latest mongodb container and connect them as needed. If you want to modify any
-of the environment variables or properties, check the
-[`docker-compose.yml`](./docker-compose.yml) file.
+## Deploy
+
+To deploy with [Dokku](https://dokku.com/), configure it to pull the pre-built
+Docker image from GitHub Container Registry:
+
+```bash
+# Create the app
+dokku apps:create shellshare
+
+# Configure to pull from GHCR instead of building
+dokku git:set shellshare deploy-branch ""
+dokku docker-options:add shellshare deploy "--pull=always"
+dokku git:from-image shellshare ghcr.io/vitorbaptista/shellshare:latest
+
+# Deploy
+dokku ps:rebuild shellshare
+```
+
+To deploy a specific version, use the commit SHA as the tag:
+
+```bash
+dokku git:from-image shellshare ghcr.io/vitorbaptista/shellshare:<commit-sha>
+dokku ps:rebuild shellshare
+```
 
 ## Limitations
 

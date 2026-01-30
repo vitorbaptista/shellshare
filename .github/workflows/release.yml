@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: [master]
   workflow_dispatch:
 
 env:
@@ -151,6 +152,44 @@ jobs:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
           retention-days: 7
+
+  # Build and push Docker image to GHCR
+  docker:
+    needs: build-embedded
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Linux embedded binary
+        uses: actions/download-artifact@v4
+        with:
+          name: shellshare-linux-x86_64
+          path: .
+
+      - name: Make binary executable
+        run: chmod +x shellshare
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.release
+          push: true
+          tags: |
+            ghcr.io/vitorbaptista/shellshare:latest
+            ghcr.io/vitorbaptista/shellshare:${{ github.sha }}
 
   # Create GitHub release with all binaries
   release:
