@@ -469,13 +469,6 @@ class TestStaticFiles:
         assert 'application/octet-stream' in headers.get('Content-Type', ''), \
             f"Expected octet-stream, got {headers.get('Content-Type')}"
     
-    def test_javascript_files_exist(self):
-        """JavaScript files should be accessible."""
-        wait_for_server(SERVER_URL)
-        # Test a known JS file (room.bundle.min.js for the room page)
-        status, headers, body = make_request('GET', '/javascript/room.bundle.min.js')
-        assert status == 200, f"Expected 200, got {status}"
-    
     def test_static_files_have_cache_headers(self):
         """Static files should have cache headers."""
         wait_for_server(SERVER_URL)

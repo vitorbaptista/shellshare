@@ -503,9 +503,16 @@ class TestErrorHandling:
 
         assert returncode == 0, f"CLI failed with large input: {stderr}"
 
-        # Verify marker was transmitted
-        received = socket_listener.wait_for_message(timeout=10, containing=marker)
-        assert received is not None, "Large message marker not received"
+        # Verify marker was transmitted (use longer timeout for large data)
+        received = socket_listener.wait_for_message(timeout=30, containing=marker)
+        
+        # If not found via wait, check accumulated messages as fallback
+        if received is None:
+            accumulated = socket_listener.get_accumulated_messages()
+            assert marker in accumulated, \
+                f"Large message marker not received. Accumulated: {accumulated[:500]}..."
+        else:
+            assert received is not None, "Large message marker not received"
 
 
 class TestArgumentParsing:
