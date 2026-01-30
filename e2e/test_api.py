@@ -30,6 +30,7 @@ import base64
 import http.client
 import json
 import random
+import re
 import string
 import time
 import urllib.parse
@@ -134,30 +135,7 @@ class TestHomePage:
         wait_for_server(SERVER_URL)
         status, headers, body = make_request('GET', '/')
         assert 'shellshare' in body.lower(), "Expected 'shellshare' in home page"
-    
-    def test_home_page_linux_user_agent_shows_wget(self):
-        """Linux user-agent should see wget instructions."""
-        wait_for_server(SERVER_URL)
-        status, headers, body = make_request(
-            'GET', '/',
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
-        assert status == 200, f"Expected 200, got {status}"
-        # The page uses CSS to show/hide based on body class, but we can verify
-        # the body class or that wget is in the page
-        assert 'wget' in body.lower(), "Expected 'wget' in page for Linux user-agent"
-    
-    def test_home_page_mac_user_agent_shows_curl(self):
-        """Mac user-agent should see curl instructions."""
-        wait_for_server(SERVER_URL)
-        status, headers, body = make_request(
-            'GET', '/',
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
-        )
-        assert status == 200, f"Expected 200, got {status}"
-        # curl should be in the page for Mac users
-        assert 'curl' in body.lower(), "Expected 'curl' in page for Mac user-agent"
-    
+
     def test_home_page_no_user_agent(self):
         """Page should work without User-Agent header."""
         wait_for_server(SERVER_URL)
@@ -165,9 +143,80 @@ class TestHomePage:
         assert status == 200, f"Expected 200, got {status}"
 
 
+class TestOSDetection:
+    """Tests for server-side OS detection via User-Agent header.
+
+    The server detects OS from User-Agent and pre-checks the corresponding radio input:
+    - User-Agent contains "windows" → id="os-windows" has checked attribute
+    - User-Agent contains "mac" → id="os-macos" has checked attribute
+    - Default (Linux or unknown) → id="os-linux" has checked attribute
+    """
+
+    def test_linux_user_agent_checks_linux_radio(self):
+        """Linux User-Agent should pre-check the os-linux radio button."""
+        wait_for_server(SERVER_URL)
+        status, headers, body = make_request(
+            'GET', '/',
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+        )
+        assert status == 200, f"Expected 200, got {status}"
+        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
+        assert linux_input, "Could not find os-linux input element"
+        assert 'checked' in linux_input.group(), f"os-linux should be checked, got: {linux_input.group()}"
+
+    def test_macos_user_agent_checks_macos_radio(self):
+        """Mac User-Agent should pre-check the os-macos radio button."""
+        wait_for_server(SERVER_URL)
+        status, headers, body = make_request(
+            'GET', '/',
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        )
+        assert status == 200, f"Expected 200, got {status}"
+        macos_input = re.search(r'<input[^>]*id="os-macos"[^>]*>', body)
+        assert macos_input, "Could not find os-macos input element"
+        assert 'checked' in macos_input.group(), f"os-macos should be checked, got: {macos_input.group()}"
+        # Verify os-linux is NOT checked
+        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
+        assert linux_input, "Could not find os-linux input element"
+        assert 'checked' not in linux_input.group(), f"os-linux should NOT be checked when mac UA, got: {linux_input.group()}"
+
+    def test_windows_user_agent_checks_windows_radio(self):
+        """Windows User-Agent should pre-check the os-windows radio button."""
+        wait_for_server(SERVER_URL)
+        status, headers, body = make_request(
+            'GET', '/',
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        assert status == 200, f"Expected 200, got {status}"
+        windows_input = re.search(r'<input[^>]*id="os-windows"[^>]*>', body)
+        assert windows_input, "Could not find os-windows input element"
+        assert 'checked' in windows_input.group(), f"os-windows should be checked, got: {windows_input.group()}"
+        # Verify os-linux is NOT checked
+        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
+        assert linux_input, "Could not find os-linux input element"
+        assert 'checked' not in linux_input.group(), f"os-linux should NOT be checked when windows UA, got: {linux_input.group()}"
+
+    def test_default_checks_linux_radio(self):
+        """No/unknown User-Agent should default to pre-checking os-linux radio."""
+        wait_for_server(SERVER_URL)
+        # Test with empty/missing User-Agent
+        status, headers, body = make_request(
+            'GET', '/',
+            headers={"User-Agent": ""}
+        )
+        assert status == 200, f"Expected 200, got {status}"
+        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
+        assert linux_input, "Could not find os-linux input element"
+        assert 'checked' in linux_input.group(), f"os-linux should be checked by default, got: {linux_input.group()}"
+        # Verify os-macos is NOT checked
+        macos_input = re.search(r'<input[^>]*id="os-macos"[^>]*>', body)
+        assert macos_input, "Could not find os-macos input element"
+        assert 'checked' not in macos_input.group(), f"os-macos should NOT be checked by default, got: {macos_input.group()}"
+
+
 class TestRoomPage:
     """Tests for GET /r/:room endpoint."""
-    
+
     def test_room_page_returns_200(self):
         """GET /r/:room should return 200 OK for any room name."""
         wait_for_server(SERVER_URL)
@@ -423,8 +472,8 @@ class TestStaticFiles:
     def test_javascript_files_exist(self):
         """JavaScript files should be accessible."""
         wait_for_server(SERVER_URL)
-        # Test a known JS file (index.js or room.js - both should exist)
-        status, headers, body = make_request('GET', '/javascript/index.js')
+        # Test a known JS file (room.bundle.min.js for the room page)
+        status, headers, body = make_request('GET', '/javascript/room.bundle.min.js')
         assert status == 200, f"Expected 200, got {status}"
     
     def test_static_files_have_cache_headers(self):
