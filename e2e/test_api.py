@@ -472,9 +472,12 @@ class TestStaticFiles:
     def test_javascript_files_exist(self):
         """JavaScript files should be accessible."""
         wait_for_server(SERVER_URL)
-        # Test a known JS file (room.bundle.min.js for the room page)
-        status, headers, body = make_request('GET', '/javascript/room.bundle.min.js')
-        assert status == 200, f"Expected 200, got {status}"
+        # Test vendor JS files used by room.html
+        status, headers, body = make_request('GET', '/javascript/vendor/term.js')
+        assert status == 200, f"Expected 200 for term.js, got {status}"
+        
+        status, headers, body = make_request('GET', '/javascript/vendor/base64.js')
+        assert status == 200, f"Expected 200 for base64.js, got {status}"
     
     def test_static_files_have_cache_headers(self):
         """Static files should have cache headers."""
