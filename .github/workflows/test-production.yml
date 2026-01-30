@@ -1,0 +1,44 @@
+name: Test Production
+
+on:
+  push:
+    branches:
+      - master
+      - test-issue-94
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  test-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies
+        run: |
+          cd e2e
+          uv sync
+
+      - name: Install Playwright browsers
+        run: |
+          cd e2e
+          uv run playwright install chromium
+
+      - name: Install Playwright system dependencies
+        run: |
+          cd e2e
+          uv run playwright install-deps chromium
+
+      - name: Run production tests
+        run: |
+          cd e2e
+          uv run pytest test_production.py -v
+        env:
+          CI: true
