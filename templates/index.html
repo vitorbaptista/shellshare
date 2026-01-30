@@ -30,7 +30,7 @@
           <code>
             <span class="macos">curl -sLo</span>
             <span class="linux">wget -qO</span>
-            shellshare <a href="https://get.shellshare.net">https://get.shellshare.net</a> &amp;&amp; python shellshare
+            shellshare <a href="https://get.shellshare.net">https://get.shellshare.net</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare
           </code>
           <nav class="operating-systems">
             <input type="radio" id="os-linux" name="os" value="linux">
@@ -44,14 +44,13 @@
         <h3>How to use?</h3>
         <p>Open a terminal and write:</p>
         <pre><code>$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
-$ python shellshare
+$ chmod +x shellshare
+$ ./shellshare
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
 $ # Everything you do now will be broadcast live on the URL above.
 $ # When you're done, hit CTRL+D
 $ exit
 <span class="shell-output">End of transmission.</span></code></pre>
-        <h3>Supported platforms</h3>
-        <p>It has been tested on Ubuntu 20.04, Mac OS X and Windows, but it should work on any platform that has Python and <a href="http://man7.org/linux/man-pages/man1/script.1.html">script</a>. If it doesn't work on your system, please <a href="https://github.com/vitorbaptista/shellshare/issues">let me know</a>.</p>
       </section>
       <section class="faq">
         <h2>Frequently asked questions</h2>
@@ -62,7 +61,7 @@ $ exit
         <h3>Can I broadcast to a custom room name?</h3>
         <p>Yes. You can broadcast to a named room secured with a password by calling shellshare as:</p>
         <pre><code>$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
-$ python shellshare --room MY-ROOM --password MY-PASS
+$ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/MY-ROOM</span>
 $ # ...
 $ exit
@@ -70,12 +69,9 @@ $ exit
         <p>If you don't set a password, shellshare will use your network card's MAC address to uniquely identify your computer. This means you'll be able to transmit to the same room later only if you're using the same computer.</p>
         <h3>Can I recover the password to a custom room?</h3>
         <p>No. However, the rooms are deleted after a day of inactivity, so you can recreate it in 24 hours.</p>
-        <h3>Can I install shellshare from my package manager?</h3>
-        <p>We currently have a shellshare package on Homebrew only. If you use Homebrew, you can install shellshare using:</p>
-        <pre><code>brew install shellshare</code></pre>
-        <p>If you'd like to contribute, we have an <a href="https://github.com/vitorbaptista/shellshare/issues/28" rel="external">open issue to create a Debian package</a>.</p>
         <h3>Can I run shellshare on Windows?</h3>
-        <p>Yes. On the first time shellshare runs, it will download the required dependency into <span>.shellshare/script.exe</span> in your user's home folder. This executable will be used in the next times you run shellshare.</p>
+        <p>Yes. We have pre-built binaries for Linux, macOS (Intel and Apple Silicon), and Windows. When you download from <a href="https://get.shellshare.net">https://get.shellshare.net</a>, we automatically detect your operating system and give you the correct binary.</p>
+        <p>You can also pass the <code>os</code> query parameter to explicitly download a specific binary. The options are <code>linux</code>, <code>windows</code>, <code>mac</code> and <code>mac-arm</code>. For example, if you want to download the Linux binary regardless of your operating system, access <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a>.</p>
         <h3>I found a problem! What do I do?</h3>
         <p>Please, open an issue at our <a href="https://github.com/vitorbaptista/shellshare/issues">issues page</a> describing what the problem was, your shellshare version, and your operating system.</p>
         <h3>How can I help?</h3>
