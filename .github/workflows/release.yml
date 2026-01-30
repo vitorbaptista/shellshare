@@ -204,6 +204,7 @@ jobs:
           tags: |
             ghcr.io/vitorbaptista/shellshare:latest
             ghcr.io/vitorbaptista/shellshare:${{ github.sha }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/vitorbaptista/shellshare:{0}', github.ref_name) || '' }}
 
   # Create GitHub release with all binaries
   release:
