@@ -28,10 +28,9 @@
       <section class="instructions">
         <div class="download">
           <code>
-            <span class="macos">curl -sLo</span>
-            <span class="linux">wget -qO</span>
-            <span class="macos linux">shellshare <a href="https://get.shellshare.net">https://get.shellshare.net</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
-            <span class="windows">iwr <a href="https://get.shellshare.net">https://get.shellshare.net</a> -OutFile shellshare.exe; .\shellshare.exe</span>
+            <span class="macos">curl -sLo shellshare <a href="https://get.shellshare.net/?os=mac">https://get.shellshare.net/?os=mac</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
+            <span class="linux">wget -qO shellshare <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
+            <span class="windows">iwr <a href="https://get.shellshare.net/?os=windows">https://get.shellshare.net/?os=windows</a> -OutFile shellshare.exe; .\shellshare.exe</span>
           </code>
           <nav class="operating-systems">
             <input type="radio" id="os-linux" name="os" value="linux"{{LINUX_CHECKED}}>
@@ -46,9 +45,11 @@
         <p>Shellshare allows you to broadcast your terminal live with a single command.</p>
         <h3>How to use?</h3>
         <p>Open a terminal and write:</p>
-        <pre><code><span class="macos linux">$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
+        <pre><code><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
 $ chmod +x shellshare
-$ ./shellshare</span><span class="windows">PS&gt; iwr https://get.shellshare.net -OutFile shellshare.exe
+$ ./shellshare</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
+$ chmod +x shellshare
+$ ./shellshare</span><span class="windows">PS&gt; iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe
 PS&gt; .\shellshare.exe</span>
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
 <span class="macos linux">$ # Everything you do now will be broadcast live on the URL above.
@@ -66,8 +67,9 @@ PS&gt; exit</span>
         <p>No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
         <h3>Can I broadcast to a custom room name?</h3>
         <p>Yes. You can broadcast to a named room secured with a password by calling shellshare as:</p>
-        <pre><code><span class="macos linux">$ <span class="macos">curl -sLo</span><span class="linux">wget -qO</span> shellshare https://get.shellshare.net
-$ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="windows">PS&gt; iwr https://get.shellshare.net -OutFile shellshare.exe
+        <pre><code><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
+$ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
+$ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="windows">PS&gt; iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe
 PS&gt; .\shellshare.exe --room MY-ROOM --password MY-PASS</span>
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/MY-ROOM</span>
 <span class="macos linux">$ # ...
