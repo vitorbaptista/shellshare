@@ -1,1 +1,1 @@
-FROM ghcr.io/vitorbaptista/shellshare:597153bfdda94f461b1f8b82bea6bdde711c1ee2
+FROM ghcr.io/vitorbaptista/shellshare:a43aafcbc6a921b54b7b8d54aecc82c376d0ce9d
