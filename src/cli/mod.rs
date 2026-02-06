@@ -6,6 +6,7 @@
 mod encoding;
 mod http;
 mod script;
+pub mod serve;
 mod terminal;
 
 use std::io::{self, Read};
@@ -120,7 +121,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Stream stdin to the server (for testing)
-fn stream_stdin(
+pub fn stream_stdin(
     client: &http::Client,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
