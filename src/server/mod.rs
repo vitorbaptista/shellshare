@@ -611,7 +611,7 @@ async fn serve_static(req: Request<Body>) -> impl IntoResponse {
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
-                .header(header::CACHE_CONTROL, "public, max-age=2678400")
+                .header(header::CACHE_CONTROL, "public, no-cache")
                 .header(header::ETAG, etag)
                 .body(Body::from(content.data.into_owned()))
                 .unwrap()
