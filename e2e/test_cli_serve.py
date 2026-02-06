@@ -129,14 +129,16 @@ class TestServeStdinBasic:
             stop_serve(proc)
 
     def test_serve_stdin_prints_url_to_stderr(self):
-        """Serve --stdin should print the sharing URL to stderr."""
+        """Serve --stdin should print the base sharing URL to stderr."""
         port = get_free_port()
         returncode, stdout, stderr = run_serve_stdin("test\n", port)
 
         assert returncode == 0
         assert "Sharing terminal in" in stderr
-        assert "/r/terminal" in stderr
         assert str(port) in stderr
+        # URL should be the base URL (no /r/terminal suffix)
+        assert f"http://localhost:{port}" in stderr
+        assert "/r/terminal" not in stderr
 
     def test_serve_stdin_prints_end_of_transmission(self):
         """Serve --stdin should print end message on clean exit."""
@@ -162,7 +164,7 @@ class TestServeStdinBasic:
             stop_serve(proc)
 
     def test_serve_room_page_accessible(self):
-        """The /r/terminal room page should be accessible."""
+        """The /r/terminal room page should still be accessible."""
         port = get_free_port()
         server_url = f"http://localhost:{port}"
 
@@ -175,6 +177,26 @@ class TestServeStdinBasic:
                 f"{server_url}/r/terminal", timeout=5
             )
             assert response.status == 200
+        finally:
+            stop_serve(proc)
+
+    def test_serve_root_shows_terminal(self):
+        """GET / should serve the room viewer page, not the home page."""
+        port = get_free_port()
+        server_url = f"http://localhost:{port}"
+
+        proc = start_serve(port, stdin_mode=True)
+
+        try:
+            wait_for_server(server_url, timeout_seconds=15)
+
+            response = urllib.request.urlopen(server_url, timeout=5)
+            assert response.status == 200
+            content = response.read().decode()
+            # Should contain the room override script
+            assert "SHELLSHARE_ROOM" in content
+            # Should contain the terminal container (room page, not home page)
+            assert 'id="terminal"' in content
         finally:
             stop_serve(proc)
 
@@ -353,7 +375,7 @@ class TestServeScriptMode:
             stop_serve(proc)
 
     def test_serve_script_prints_sharing_url(self):
-        """Serve mode (PTY) should print sharing URL to stdout."""
+        """Serve mode (PTY) should print base sharing URL to stdout."""
         port = get_free_port()
         proc = start_serve(port)
 
@@ -365,7 +387,6 @@ class TestServeScriptMode:
             output = stdout + stderr
 
             assert "Sharing terminal in" in output
-            assert "/r/terminal" in output
             assert str(port) in output
         except subprocess.TimeoutExpired:
             proc.kill()

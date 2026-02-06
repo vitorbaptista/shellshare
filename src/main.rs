@@ -100,7 +100,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create runtime only for server mode
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(server::run(&host, port, cleanup_interval, room_ttl))?;
+            let config = server::ServerConfig {
+                host,
+                port,
+                cleanup_interval_secs: cleanup_interval,
+                room_ttl_secs: room_ttl,
+                serve_room: None,
+            };
+            runtime.block_on(server::run(&config))?;
         }
         Some(Commands::Serve { host, port, stdin }) => {
             // Run combined server + client mode

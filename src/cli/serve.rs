@@ -26,10 +26,15 @@ pub fn run(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Runtime::new()?;
 
     // Spawn the server in the background
-    let server_host = args.host.clone();
-    let server_port = args.port;
+    let server_config = crate::server::ServerConfig {
+        host: args.host.clone(),
+        port: args.port,
+        cleanup_interval_secs: 3600,
+        room_ttl_secs: 21600,
+        serve_room: Some(ROOM_NAME.to_string()),
+    };
     runtime.spawn(async move {
-        if let Err(e) = crate::server::run(&server_host, server_port, 3600, 21600).await {
+        if let Err(e) = crate::server::run(&server_config).await {
             eprintln!("Server error: {e}");
         }
     });
@@ -60,7 +65,7 @@ pub fn run(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     if args.stdin {
         // Stdin mode - print to stderr (same as regular client stdin mode)
-        eprintln!("Sharing terminal in {base_url}/r/{ROOM_NAME}");
+        eprintln!("Sharing terminal in {base_url}");
 
         super::stream_stdin(&client, &running)?;
 
@@ -75,7 +80,7 @@ pub fn run(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
             println!("You can resize it anytime.");
         }
 
-        println!("Sharing terminal in {base_url}/r/{ROOM_NAME}");
+        println!("Sharing terminal in {base_url}");
 
         script::run_script_mode(&client, &running)?;
 

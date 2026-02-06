@@ -41,7 +41,7 @@
       'use strict';
 
       var socket = io();
-      var room = window.location.pathname;
+      var room = window.SHELLSHARE_ROOM || window.location.pathname;
       var term;
       var currentSize = {};
       var onlineCounter = document.getElementById('online-counter');
