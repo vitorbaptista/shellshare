@@ -3,12 +3,14 @@
 //! Starts a local shellshare server and immediately connects to it,
 //! providing a single command to share your terminal via a local URL.
 
-use super::{http, script, terminal};
+use super::http;
 
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use rand::Rng;
 
 /// Configuration for the serve command
 pub struct ServeArgs {
@@ -22,7 +24,6 @@ const ROOM_NAME: &str = "terminal";
 
 /// Run shellshare in serve mode: start a local server and stream to it
 pub fn run(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
-    // Start a Tokio runtime for the async server
     let runtime = tokio::runtime::Runtime::new()?;
 
     // Spawn the server in the background
@@ -43,12 +44,12 @@ pub fn run(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
     let connect_host = connectable_host(&args.host);
     wait_for_server(connect_host, args.port)?;
 
-    // Build the display URL
+    // Build URLs
     let display_host = display_host(&args.host);
     let base_url = format!("http://{display_host}:{}", args.port);
+    let server_url = format!("http://{connect_host}:{}", args.port);
 
     // Create HTTP client pointing to the local server
-    let server_url = format!("http://{connect_host}:{}", args.port);
     let room_path = format!("r/{ROOM_NAME}");
     let password = generate_internal_password();
     let client = http::Client::new(&server_url, &room_path, &password)?;
@@ -63,41 +64,17 @@ pub fn run(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
         let _ = client_for_cleanup.delete_room();
     })?;
 
-    if args.stdin {
-        // Stdin mode - print to stderr (same as regular client stdin mode)
-        eprintln!("Sharing terminal in {base_url}");
+    // Stream (reuses the shared stdin/script logic from cli module)
+    let result = super::stream_and_cleanup(&client, &running, args.stdin, &base_url);
 
-        super::stream_stdin(&client, &running)?;
-
-        let _ = client.delete_room();
-        eprintln!("End of transmission.");
-    } else {
-        // Script mode (PTY) - print to stdout
-        let size = terminal::get_terminal_size();
-        if size.rows > 30 || size.cols > 160 {
-            println!("Current terminal size is {}x{}.", size.rows, size.cols);
-            println!("It's too big to be viewed on smaller screens.");
-            println!("You can resize it anytime.");
-        }
-
-        println!("Sharing terminal in {base_url}");
-
-        script::run_script_mode(&client, &running)?;
-
-        let _ = client.delete_room();
-        println!("End of transmission.");
-    }
-
-    // Shut down the runtime without blocking
+    // Always shut down the runtime, even on error
     runtime.shutdown_background();
 
-    Ok(())
+    result
 }
 
 /// Generate a random password for internal client-server auth.
-/// Uses a random value since the server may be exposed on the network.
 fn generate_internal_password() -> String {
-    use rand::Rng;
     rand::thread_rng().gen::<u64>().to_string()
 }
 
@@ -174,9 +151,9 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_for_server_fails_on_closed_port() {
-        // Port 1 is almost certainly not listening
-        let result = wait_for_server("127.0.0.1", 1);
+    fn test_wait_for_server_fails_on_unroutable_addr() {
+        // Use a non-routable address with a short timeout to reliably test failure
+        let result = wait_for_server("192.0.2.1", 1);
         assert!(result.is_err());
     }
 }

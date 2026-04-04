@@ -380,16 +380,17 @@ async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
     }
 }
 
-/// GET / in serve mode - serves room.html with the room name injected
-#[allow(clippy::unused_async)] // Must be async for axum Handler trait
-async fn serve_room_index_handler(_headers: HeaderMap, room: String) -> impl IntoResponse {
+/// Render room.html with an optional room override in the config block.
+/// When `room` is `Some`, the JS client joins that room instead of using `location.pathname`.
+fn render_room_page(room: Option<&str>) -> Response<Body> {
     match Templates::get("room.html") {
         Some(content) => {
             let html = String::from_utf8_lossy(&content.data);
-            // Inject the room override before the main script
-            let override_script =
-                format!("<script>window.SHELLSHARE_ROOM=\"/r/{room}\";</script>");
-            let html = html.replacen("<script>", &format!("{override_script}\n  <script>"), 1);
+            let config = room.map_or_else(
+                || r#"{"room": null}"#.to_string(),
+                |r| serde_json::json!({ "room": format!("/r/{r}") }).to_string(),
+            );
+            let html = html.replace("{{ROOM_CONFIG}}", &config);
 
             Response::builder()
                 .status(StatusCode::OK)
@@ -405,20 +406,16 @@ async fn serve_room_index_handler(_headers: HeaderMap, room: String) -> impl Int
     }
 }
 
+/// GET / in serve mode - serves room.html with the room name injected
+#[allow(clippy::unused_async)] // Must be async for axum Handler trait
+async fn serve_room_index_handler(_headers: HeaderMap, room: String) -> impl IntoResponse {
+    render_room_page(Some(&room))
+}
+
 /// GET /r/:room - Room page
+#[allow(clippy::unused_async)] // Must be async for axum Handler trait
 async fn room_page_handler(Path(_room): Path<String>) -> impl IntoResponse {
-    match Templates::get("room.html") {
-        Some(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(Body::from(content.data.into_owned()))
-            .unwrap(),
-        None => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Template not found"))
-            .unwrap(),
-    }
+    render_room_page(None)
 }
 
 /// POST /r/:room - Broadcast message to room

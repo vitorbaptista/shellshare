@@ -36,12 +36,14 @@
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <!-- Load term.js from local vendor -->
   <script src="/javascript/vendor/term.js"></script>
+  <script id="shellshare-config" type="application/json">{{ROOM_CONFIG}}</script>
   <script>
     (function () {
       'use strict';
 
+      var config = JSON.parse(document.getElementById('shellshare-config').textContent);
       var socket = io();
-      var room = window.SHELLSHARE_ROOM || window.location.pathname;
+      var room = config.room || window.location.pathname;
       var term;
       var currentSize = {};
       var onlineCounter = document.getElementById('online-counter');

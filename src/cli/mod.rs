@@ -88,40 +88,41 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
         let _ = client_for_cleanup.delete_room();
     })?;
 
-    if args.stdin {
-        // Stdin mode - print to stderr
-        eprintln!("Sharing terminal in {server}/{room_path}");
+    let url = format!("{server}/{room_path}");
+    stream_and_cleanup(&client, &running, args.stdin, &url)?;
 
-        // Read from stdin and stream to server
-        stream_stdin(&client, &running)?;
+    Ok(())
+}
 
-        // Cleanup
+/// Run the appropriate streaming mode (stdin or PTY), then clean up the room.
+pub fn stream_and_cleanup(
+    client: &http::Client,
+    running: &Arc<AtomicBool>,
+    stdin_mode: bool,
+    sharing_url: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if stdin_mode {
+        eprintln!("Sharing terminal in {sharing_url}");
+        stream_stdin(client, running)?;
         let _ = client.delete_room();
         eprintln!("End of transmission.");
     } else {
-        // Script mode - print to stdout
         let size = terminal::get_terminal_size();
         if size.rows > 30 || size.cols > 160 {
             println!("Current terminal size is {}x{}.", size.rows, size.cols);
             println!("It's too big to be viewed on smaller screens.");
             println!("You can resize it anytime.");
         }
-
-        println!("Sharing terminal in {server}/{room_path}");
-
-        // Run script mode with PTY
-        script::run_script_mode(&client, &running)?;
-
-        // Cleanup
+        println!("Sharing terminal in {sharing_url}");
+        script::run_script_mode(client, running)?;
         let _ = client.delete_room();
         println!("End of transmission.");
     }
-
     Ok(())
 }
 
-/// Stream stdin to the server (for testing)
-pub fn stream_stdin(
+/// Stream stdin to the server
+fn stream_stdin(
     client: &http::Client,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {

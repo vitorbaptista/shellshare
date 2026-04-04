@@ -193,8 +193,8 @@ class TestServeStdinBasic:
             response = urllib.request.urlopen(server_url, timeout=5)
             assert response.status == 200
             content = response.read().decode()
-            # Should contain the room override script
-            assert "SHELLSHARE_ROOM" in content
+            # Should contain the room config with /r/terminal
+            assert "/r/terminal" in content
             # Should contain the terminal container (room page, not home page)
             assert 'id="terminal"' in content
         finally:
