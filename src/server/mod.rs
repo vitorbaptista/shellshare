@@ -122,13 +122,23 @@ struct AppState {
 /// Request body for POST /r/:room - using Value to preserve null vs missing distinction
 type BroadcastRequest = serde_json::Value;
 
+/// Server configuration
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub cleanup_interval_secs: u64,
+    pub room_ttl_secs: u64,
+    /// When set, `GET /` serves the room viewer for this room instead of the home page.
+    /// Used by `shellshare serve` so that `http://localhost:5000` shows the terminal directly.
+    pub serve_room: Option<String>,
+}
+
 /// Run the shellshare server
-pub async fn run(
-    host: &str,
-    port: u16,
-    cleanup_interval_secs: u64,
-    room_ttl_secs: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(config: &ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let host = &config.host;
+    let port = config.port;
+    let cleanup_interval_secs = config.cleanup_interval_secs;
+    let room_ttl_secs = config.room_ttl_secs;
     info!("Starting shellshare server on {}:{}", host, port);
     info!(
         "Room cleanup: interval={}s, TTL={}s",
@@ -161,10 +171,18 @@ pub async fn run(
     // Spawn background cleanup task for abandoned rooms
     spawn_cleanup_task(app_state.clone());
 
-    // Build router
+    // Build router - in serve mode, GET / shows the room viewer directly
+    let index_route = config.serve_room.as_ref().map_or_else(
+        || get(index_handler),
+        |room| {
+            let room = room.clone();
+            get(move |headers| serve_room_index_handler(headers, room.clone()))
+        },
+    );
+
     let app = Router::new()
         // API routes
-        .route("/", get(index_handler))
+        .route("/", index_route)
         .route("/r/{*room}", get(room_page_handler))
         .route("/r/{*room}", post(broadcast_handler))
         .route("/r/{*room}", delete(delete_room_handler))
@@ -347,6 +365,31 @@ async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
                     "{{WINDOWS_CHECKED}}",
                     if os == "windows" { " checked" } else { "" },
                 );
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(html))
+                .unwrap()
+        }
+        None => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Template not found"))
+            .unwrap(),
+    }
+}
+
+/// GET / in serve mode - serves room.html with the room name injected
+#[allow(clippy::unused_async)] // Must be async for axum Handler trait
+async fn serve_room_index_handler(_headers: HeaderMap, room: String) -> impl IntoResponse {
+    match Templates::get("room.html") {
+        Some(content) => {
+            let html = String::from_utf8_lossy(&content.data);
+            // Inject the room override before the main script
+            let override_script =
+                format!("<script>window.SHELLSHARE_ROOM=\"/r/{room}\";</script>");
+            let html = html.replacen("<script>", &format!("{override_script}\n  <script>"), 1);
 
             Response::builder()
                 .status(StatusCode::OK)

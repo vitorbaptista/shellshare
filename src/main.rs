@@ -65,6 +65,21 @@ enum Commands {
         #[arg(long, default_value = "21600")]
         room_ttl: u64,
     },
+
+    /// Start a local server and share your terminal in one command
+    Serve {
+        /// Host to bind to
+        #[arg(short = 'H', long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port to listen on
+        #[arg(short, long, default_value = "5000")]
+        port: u16,
+
+        /// Read from stdin instead of spawning a shell
+        #[arg(long)]
+        stdin: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -85,7 +100,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create runtime only for server mode
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(server::run(&host, port, cleanup_interval, room_ttl))?;
+            let config = server::ServerConfig {
+                host,
+                port,
+                cleanup_interval_secs: cleanup_interval,
+                room_ttl_secs: room_ttl,
+                serve_room: None,
+            };
+            runtime.block_on(server::run(&config))?;
+        }
+        Some(Commands::Serve { host, port, stdin }) => {
+            // Run combined server + client mode
+            let args = cli::serve::ServeArgs { host, port, stdin };
+            cli::serve::run(&args)?;
         }
         None => {
             // Run client mode
