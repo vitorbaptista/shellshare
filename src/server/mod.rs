@@ -12,8 +12,8 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use crate::protocol::{self, EncodedMessage};
 use binaries::BinaryDownloadQuery;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use percent_encoding::percent_decode_str;
 use rust_embed::Embed;
 use socketioxide::{
@@ -45,9 +45,9 @@ struct Templates;
 /// Room data stored in memory
 #[derive(Clone, Debug)]
 struct RoomData {
-    /// Accumulated messages (each is base64 encoded)
-    messages: Vec<String>,
-    /// Terminal size
+    /// Message history in wire format
+    messages: Vec<EncodedMessage>,
+    /// Terminal size, forwarded verbatim to viewers
     size: Option<serde_json::Value>,
     /// Last activity timestamp (broadcast or viewer join)
     last_activity: Instant,
@@ -64,25 +64,9 @@ impl Default for RoomData {
 }
 
 impl RoomData {
-    /// Get accumulated message: decode all base64 messages, join, re-encode
-    fn get_accumulated_message(&self) -> Option<String> {
-        if self.messages.is_empty() {
-            return None;
-        }
-
-        // Decode all messages and concatenate
-        let mut accumulated = Vec::new();
-        for msg in &self.messages {
-            if let Ok(decoded) = BASE64.decode(msg) {
-                accumulated.extend(decoded);
-            }
-        }
-
-        if accumulated.is_empty() {
-            None
-        } else {
-            Some(BASE64.encode(&accumulated))
-        }
+    /// History as a single message, for replaying to late joiners
+    fn get_accumulated_message(&self) -> Option<EncodedMessage> {
+        EncodedMessage::accumulate(&self.messages)
     }
 }
 
@@ -239,7 +223,7 @@ fn setup_socket_handlers(io: &SocketIo) {
 
                     // Then send accumulated message history
                     if let Some(msg) = data.get_accumulated_message() {
-                        if let Err(e) = socket.emit("message", &msg) {
+                        if let Err(e) = socket.emit("message", msg.as_str()) {
                             warn!("Failed to emit message: {:?}", e);
                         }
                     }
@@ -417,21 +401,15 @@ async fn broadcast_handler(
 
         // Handle size FIRST - only if it has valid cols/rows fields
         // This must come before message so the terminal is resized before content arrives
-        if let Some(obj) = body_obj {
-            if let Some(size) = obj.get("size") {
-                // Only store and emit size if it has the expected cols/rows fields
-                // (client ignores size without these fields anyway)
-                if let Some(size_obj) = size.as_object() {
-                    if size_obj.contains_key("cols") && size_obj.contains_key("rows") {
-                        room_data.size = Some(size.clone());
+        if let Some(size) = body_obj.and_then(|o| o.get("size")) {
+            if protocol::size_has_dimensions(size) {
+                room_data.size = Some(size.clone());
 
-                        // Emit size to all clients in room
-                        let io_guard = state.io.read().await;
-                        if let Some(ref io) = *io_guard {
-                            if let Some(ns) = io.of("/") {
-                                let _ = ns.within(room_name.clone()).emit("size", size);
-                            }
-                        }
+                // Emit size to all clients in room
+                let io_guard = state.io.read().await;
+                if let Some(ref io) = *io_guard {
+                    if let Some(ns) = io.of("/") {
+                        let _ = ns.within(room_name.clone()).emit("size", size);
                     }
                 }
             }
@@ -440,7 +418,9 @@ async fn broadcast_handler(
         // Handle message (only if it's a non-null string)
         if let Some(message) = body_obj.and_then(|o| o.get("message")) {
             if let Some(msg_str) = message.as_str() {
-                room_data.messages.push(msg_str.to_string());
+                room_data
+                    .messages
+                    .push(EncodedMessage::from_wire(msg_str.to_string()));
 
                 // Limit history size to prevent unbounded memory growth
                 while room_data.messages.len() > MAX_HISTORY_MESSAGES {

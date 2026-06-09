@@ -5,9 +5,9 @@
 
 #![allow(unsafe_code)] // PTY handling requires unsafe for terminal control
 
-use crate::cli::encoding;
 use crate::cli::http;
-use crate::cli::terminal::{self, TerminalSize};
+use crate::cli::get_terminal_size;
+use crate::protocol::{EncodedMessage, TermSize};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
@@ -101,7 +101,7 @@ pub fn run_script_mode(
     let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
 
     // Get terminal size
-    let size = terminal::get_terminal_size();
+    let size = get_terminal_size();
     let pty_size = PtySize {
         rows: size.rows,
         cols: size.cols,
@@ -158,7 +158,7 @@ pub fn run_script_mode(
                         break;
                     }
                     // Get new terminal size
-                    let new_size = terminal::get_terminal_size();
+                    let new_size = get_terminal_size();
                     // Update shared size atomics
                     cols.store(new_size.cols, Ordering::SeqCst);
                     rows.store(new_size.rows, Ordering::SeqCst);
@@ -212,8 +212,8 @@ pub fn run_script_mode(
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // Channel closed, send remaining data and exit
                     if !send_buffer.is_empty() {
-                        let encoded = encoding::encode_message(&send_buffer);
-                        let size = TerminalSize {
+                        let encoded = EncodedMessage::encode(&send_buffer);
+                        let size = TermSize {
                             cols: http_cols.load(Ordering::SeqCst),
                             rows: http_rows.load(Ordering::SeqCst),
                         };
@@ -228,8 +228,8 @@ pub fn run_script_mode(
                 || (last_send.elapsed() >= SEND_INTERVAL && !send_buffer.is_empty());
 
             if should_send {
-                let encoded = encoding::encode_message(&send_buffer);
-                let size = TerminalSize {
+                let encoded = EncodedMessage::encode(&send_buffer);
+                let size = TermSize {
                     cols: http_cols.load(Ordering::SeqCst),
                     rows: http_rows.load(Ordering::SeqCst),
                 };
