@@ -311,6 +311,9 @@ class SocketListener:
                     self._condition.wait(timeout=remaining)
                 if self._user_counts:
                     return
+        # Don't leak the connected client: this raise typically happens in
+        # fixture setup, where teardown (and its disconnect) never runs
+        self.disconnect()
         raise TimeoutError(
             f"Socket.IO join to room {self.room_id!r} on {self.server_url} "
             f"not confirmed after {attempts} attempts"
