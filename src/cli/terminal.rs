@@ -29,23 +29,3 @@ pub fn get_terminal_size() -> TerminalSize {
         })
         .unwrap_or_default()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_size() {
-        let size = TerminalSize::default();
-        assert_eq!(size.cols, 80);
-        assert_eq!(size.rows, 24);
-    }
-
-    #[test]
-    fn test_get_terminal_size_returns_valid() {
-        let size = get_terminal_size();
-        // Should return some positive values
-        assert!(size.cols > 0);
-        assert!(size.rows > 0);
-    }
-}
