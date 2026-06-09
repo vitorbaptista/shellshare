@@ -10,10 +10,13 @@ This module provides:
 import base64
 
 import random
+import socket
 import string
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -37,6 +40,101 @@ else:
 
 CLI_COMMAND = [str(CLI_PATH)]
 SERVER_URL = "http://localhost:3000"
+
+
+def _server_responds(url, timeout=1):
+    """Check whether a shellshare server answers at the given URL."""
+    try:
+        urllib.request.urlopen(url, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def _free_port():
+    """Ask the OS for a free TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _spawn_server(port, *extra_args):
+    """Spawn a shellshare server process on the given port."""
+    if not CLI_PATH.exists():
+        raise RuntimeError(
+            f"shellshare binary not found at {CLI_PATH}. "
+            "Run `cargo build --release` first."
+        )
+    return subprocess.Popen(
+        [str(CLI_PATH), "server", "--host", "127.0.0.1", "--port", str(port)]
+        + [str(a) for a in extra_args],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def pytest_configure(config):
+    """Start the shared server on :3000 if none is running.
+
+    Runs only in the xdist controller (or in a single-process run), so the
+    server is started exactly once no matter how many workers there are.
+    CI keeps working unchanged: it starts its own server, which we detect
+    and leave alone.
+    """
+    if hasattr(config, "workerinput"):  # xdist worker: controller handles it
+        return
+    config._shellshare_server = None
+    if not _server_responds(SERVER_URL):
+        config._shellshare_server = _spawn_server(3000)
+        wait_for_server(SERVER_URL)
+
+
+def pytest_unconfigure(config):
+    proc = getattr(config, "_shellshare_server", None)
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@dataclass
+class ServerHandle:
+    """A dedicated shellshare server owned by a single test."""
+    port: int
+    proc: subprocess.Popen
+
+    @property
+    def url(self):
+        return f"http://localhost:{self.port}"
+
+
+@pytest.fixture
+def dedicated_server():
+    """Factory fixture: spawn servers with custom flags on free ports.
+
+    Usage:
+        server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
+    """
+    handles = []
+
+    def start(*extra_args):
+        port = _free_port()
+        proc = _spawn_server(port, *extra_args)
+        handle = ServerHandle(port=port, proc=proc)
+        handles.append(handle)
+        wait_for_server(handle.url)
+        return handle
+
+    yield start
+
+    for handle in handles:
+        handle.proc.terminate()
+        try:
+            handle.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            handle.proc.kill()
 
 
 def random_id(length=12):
@@ -98,6 +196,27 @@ def wait_for_server(url, timeout_seconds=30):
         except Exception:
             time.sleep(0.5)
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
+
+
+def http_post_message(server_url, room, password, text, cols=80, rows=24):
+    """POST a broadcast message the way the CLI does. Returns the HTTP status."""
+    import json
+
+    body = json.dumps({
+        "message": encode_message(text),
+        "size": {"cols": cols, "rows": rows},
+    }).encode()
+    req = urllib.request.Request(
+        f"{server_url}/r/{room}",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": password},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
 
 
 def encode_message(text):
