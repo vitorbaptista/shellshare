@@ -395,8 +395,9 @@ def test_resize_rebuilds_browser_terminal():
     def post_with_size(text, cols, rows):
         import base64
         import urllib.parse
+        # safe="" to match the wire-format contract (see conftest.encode_message)
         encoded = base64.b64encode(
-            urllib.parse.quote(text).encode()
+            urllib.parse.quote(text, safe="").encode()
         ).decode()
         body = json.dumps({
             "message": encoded,

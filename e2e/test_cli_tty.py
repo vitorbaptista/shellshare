@@ -54,9 +54,14 @@ class TtyCli:
     """
 
     def __init__(self, room, password, server=SERVER_URL, cols=80, rows=24):
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
         pid, master = pty.fork()
         if pid == 0:  # child: become the CLI
             try:
+                # Set the terminal size BEFORE exec (fd 0 is the PTY
+                # slave here). Doing it from the parent after fork races
+                # the CLI's startup size read.
+                fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
                 env = dict(os.environ)
                 # Predictable, prompt-light shell for the CLI to spawn
                 env["SHELL"] = "/bin/sh"
@@ -75,7 +80,6 @@ class TtyCli:
         self.exit_status = None
         self._screen = b""
         self._lock = threading.Lock()
-        self.resize(cols, rows)
 
         self._reader = threading.Thread(target=self._drain, daemon=True)
         self._reader.start()

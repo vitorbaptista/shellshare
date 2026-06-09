@@ -148,13 +148,16 @@ fn setup_socket_handlers(io: &SocketIo) {
                     warn!("Failed to join room {}: {:?}", room_id, e);
                 }
 
-                // Track this socket's rooms for disconnect handling
+                // Track this socket's rooms for disconnect handling.
+                // Joins are idempotent (clients may re-emit until
+                // confirmed), so deduplicate to keep disconnect from
+                // emitting usersCount more than once per room.
                 {
                     let mut socket_rooms = state.socket_rooms.write().await;
-                    socket_rooms
-                        .entry(socket.id.to_string())
-                        .or_default()
-                        .push(room_name.clone());
+                    let tracked = socket_rooms.entry(socket.id.to_string()).or_default();
+                    if !tracked.contains(&room_name) {
+                        tracked.push(room_name.clone());
+                    }
                 }
 
                 // Catch the viewer up if the room is live

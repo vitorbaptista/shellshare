@@ -45,8 +45,8 @@ SERVER_URL = "http://localhost:3000"
 def _server_responds(url, timeout=1):
     """Check whether a shellshare server answers at the given URL."""
     try:
-        urllib.request.urlopen(url, timeout=timeout)
-        return True
+        with urllib.request.urlopen(url, timeout=timeout):
+            return True
     except Exception:
         return False
 
@@ -287,26 +287,34 @@ class SocketListener:
                 self._condition.notify_all()
 
         self._sio.connect(self.server_url)
-        self._sio.emit('join', f'/r/{self.room_id}')
         self._connected = True
 
-        if wait_for_join:
-            # Wait for usersCount to confirm we've joined. The server sends
-            # it for every join (even to empty rooms), so a timeout means
-            # the connection is broken - fail loudly instead of letting the
-            # test mysteriously miss events later.
-            join_timeout = 15
+        if not wait_for_join:
+            self._sio.emit('join', f'/r/{self.room_id}')
+            return
+
+        # Joining must be confirmed, not fire-and-forget: a bare emit has
+        # no delivery guarantee, and a join lost in transit means the test
+        # silently misses every event afterwards. The server confirms each
+        # join with usersCount, and re-joining is idempotent, so emit and
+        # re-emit until confirmed.
+        attempts = 3
+        per_attempt = 5
+        for _ in range(attempts):
+            self._sio.emit('join', f'/r/{self.room_id}')
             with self._condition:
-                start = time.time()
+                deadline = time.time() + per_attempt
                 while not self._user_counts:
-                    remaining = join_timeout - (time.time() - start)
+                    remaining = deadline - time.time()
                     if remaining <= 0:
-                        raise TimeoutError(
-                            f"Socket.IO join to room {self.room_id!r} on "
-                            f"{self.server_url} not confirmed within "
-                            f"{join_timeout}s"
-                        )
+                        break
                     self._condition.wait(timeout=remaining)
+                if self._user_counts:
+                    return
+        raise TimeoutError(
+            f"Socket.IO join to room {self.room_id!r} on {self.server_url} "
+            f"not confirmed after {attempts} attempts"
+        )
 
     def disconnect(self):
         """Disconnect from the server."""
