@@ -301,8 +301,147 @@ def test_multiple_broadcasts_no_duplication():
         browser.close()
 
 
+def test_late_joiner_sees_history_in_browser():
+    """
+    A viewer who opens the room AFTER content was broadcast must see the
+    accumulated history rendered in the terminal.
+    """
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+    marker_early = f"EARLY_{random_id(6)}"
+    marker_late = f"LATE_{random_id(6)}"
+
+    wait_for_server(SERVER_URL)
+
+    # Start a broadcaster that STAYS alive (the CLI deletes the room when
+    # it exits, so history only exists while the broadcaster is live)
+    proc = subprocess.Popen(
+        CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room_id, "-W", password],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    try:
+        # Broadcast BEFORE any browser is watching
+        proc.stdin.write(f"{marker_early}\n{marker_late}\n")
+        proc.stdin.flush()
+        time.sleep(2)  # let the CLI post the content
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"{SERVER_URL}/r/{room_id}")
+            page.wait_for_selector("#terminal", timeout=10000)
+
+            from playwright.sync_api import expect
+            terminal = page.locator("#terminal")
+            expect(terminal).to_contain_text(marker_early, timeout=10000)
+            expect(terminal).to_contain_text(marker_late, timeout=10000)
+
+            browser.close()
+    finally:
+        proc.stdin.close()
+        proc.wait(timeout=10)
+
+
+def test_unicode_renders_in_browser():
+    """
+    Unicode from the real CLI must survive the whole encoding pipeline
+    (Rust encode -> server -> Socket.IO -> JS decode -> term.js render).
+    """
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+    test_message = "Olá 世界 — ünïcödé"
+
+    wait_for_server(SERVER_URL)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(f"{SERVER_URL}/r/{room_id}")
+        page.wait_for_selector("#terminal", timeout=10000)
+        page.wait_for_function(
+            "document.getElementById('online-counter').textContent !== '0'",
+            timeout=10000
+        )
+
+        returncode, _, stderr = broadcast_with_cli(
+            room_id, test_message, password, SERVER_URL
+        )
+        assert returncode == 0, f"CLI failed: {stderr}"
+
+        from playwright.sync_api import expect
+        expect(page.locator("#terminal")).to_contain_text(
+            test_message, timeout=10000
+        )
+
+        browser.close()
+
+
+def test_resize_rebuilds_browser_terminal():
+    """
+    A size broadcast must rebuild the browser terminal with the new
+    dimensions (term.js renders one child div per row).
+    """
+    import json
+
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+
+    wait_for_server(SERVER_URL)
+
+    def post_with_size(text, cols, rows):
+        import base64
+        import urllib.parse
+        encoded = base64.b64encode(
+            urllib.parse.quote(text).encode()
+        ).decode()
+        body = json.dumps({
+            "message": encoded,
+            "size": {"cols": cols, "rows": rows},
+        }).encode()
+        req = urllib.request.Request(
+            f"{SERVER_URL}/r/{room_id}",
+            data=body,
+            headers={"Content-Type": "application/json", "Authorization": password},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(f"{SERVER_URL}/r/{room_id}")
+        page.wait_for_selector("#terminal", timeout=10000)
+        page.wait_for_function(
+            "document.getElementById('online-counter').textContent !== '0'",
+            timeout=10000
+        )
+
+        post_with_size("sized at 24 rows", cols=80, rows=24)
+        page.wait_for_function(
+            "document.querySelectorAll('#terminal .terminal').length === 1 && "
+            "document.querySelector('#terminal .terminal').children.length === 24",
+            timeout=10000,
+        )
+
+        post_with_size("resized to 30 rows", cols=100, rows=30)
+        page.wait_for_function(
+            "document.querySelectorAll('#terminal .terminal').length === 1 && "
+            "document.querySelector('#terminal .terminal').children.length === 30",
+            timeout=10000,
+        )
+
+        browser.close()
+
+
 if __name__ == "__main__":
     test_happy_path_broadcast_appears_in_browser()
     test_user_counter_shows_in_browser()
     test_terminal_size_updates_in_browser()
     test_multiple_broadcasts_no_duplication()
+    test_late_joiner_sees_history_in_browser()
+    test_unicode_renders_in_browser()
+    test_resize_rebuilds_browser_terminal()
