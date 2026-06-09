@@ -383,6 +383,13 @@ pub fn run_script_mode(
     // Signal threads to stop
     running.store(false, Ordering::SeqCst);
 
+    // Close our copy of the slave BEFORE joining the reader thread.
+    // The child has exited in every path that reaches here, so this is safe
+    // on Windows too (portable-pty issue #4206 only requires the slave to
+    // outlive the child). Without this, the master never sees EOF and the
+    // PTY reader thread can block in read() forever, hanging the join below.
+    drop(pair.slave);
+
     // Wait for threads to finish
     let _ = stream_thread.join();
     let _ = http_thread.join();
@@ -396,11 +403,6 @@ pub fn run_script_mode(
         }
         let _ = handle.join();
     }
-
-    // Note: On Windows, we need to keep pair.slave alive until after child exits
-    // (see portable-pty issue #4206). This is handled automatically since we
-    // don't drop `pair.slave` until here.
-    drop(pair.slave);
 
     Ok(())
 }
