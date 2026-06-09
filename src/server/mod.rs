@@ -137,15 +137,17 @@ fn setup_socket_handlers(io: &SocketIo) {
             |socket: SocketRef, Data::<String>(room), state: SioState<AppState>| async move {
                 let room_id = RoomId::parse(&room);
 
+                // Debug-format the room ids: they are client-controlled and
+                // could otherwise inject control characters into the log
                 info!(
-                    "Client {} joining room: {} (normalized: {})",
+                    "Client {} joining room: {:?} (normalized: {:?})",
                     socket.id, room, room_id
                 );
 
                 // Join the socket to the room
                 let room_name = room_id.as_str().to_string();
                 if let Err(e) = socket.join(room_name.clone()) {
-                    warn!("Failed to join room {}: {:?}", room_id, e);
+                    warn!("Failed to join room {:?}: {:?}", room_id, e);
                 }
 
                 // Track this socket's rooms for disconnect handling.
@@ -214,7 +216,7 @@ fn setup_socket_handlers(io: &SocketIo) {
                     let user_count = io.of("/").map_or(0, |ns| {
                         ns.within(room.clone()).sockets().map_or(0, |s| s.len())
                     });
-                    info!("Room {room} now has {user_count} users");
+                    info!("Room {room:?} now has {user_count} users");
                     // Emit with fresh ns reference
                     if let Some(ns) = io.of("/") {
                         let _ = ns.within(room).emit("usersCount", &user_count);
@@ -236,7 +238,7 @@ async fn broadcast_handler(
     let secret = auth_secret(&headers);
 
     info!(
-        "Broadcast to room: {}, auth present: {}",
+        "Broadcast to room: {:?}, auth present: {}",
         room_id,
         !secret.is_empty()
     );
@@ -295,7 +297,7 @@ async fn delete_room_handler(
     let secret = auth_secret(&headers);
 
     info!(
-        "Delete room: {}, auth present: {}",
+        "Delete room: {:?}, auth present: {}",
         room_id,
         !secret.is_empty()
     );
