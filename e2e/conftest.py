@@ -107,7 +107,10 @@ class ServerHandle:
 
     @property
     def url(self):
-        return f"http://localhost:{self.port}"
+        # 127.0.0.1, not localhost: the server binds IPv4 only, and on
+        # Windows localhost can resolve to ::1 first, making fresh
+        # Socket.IO connections slow or flaky
+        return f"http://127.0.0.1:{self.port}"
 
 
 @pytest.fixture
@@ -220,8 +223,13 @@ def http_post_message(server_url, room, password, text, cols=80, rows=24):
 
 
 def encode_message(text):
-    """Encode a message the same way the CLI does."""
-    quoted = urllib.parse.quote(text)
+    """Encode a message the same way the CLI does.
+
+    safe="" matters: the Rust implementation percent-encodes everything
+    except ASCII alphanumerics and `_.-~`, including `/` (which quote()'s
+    default safe='/' would preserve).
+    """
+    quoted = urllib.parse.quote(text, safe="")
     return base64.b64encode(quoted.encode()).decode()
 
 

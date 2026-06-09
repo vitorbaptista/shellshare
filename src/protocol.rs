@@ -7,9 +7,10 @@
 //! in lockstep with both.
 //!
 //! The encoding is two steps:
-//! 1. URL-encode the bytes like Python's `urllib.parse.quote()` (letters,
-//!    digits and `_.-~` stay unencoded; everything else, including `/`,
-//!    becomes `%XX`)
+//! 1. URL-encode the bytes like Python's `urllib.parse.quote(data, safe="")`
+//!    (letters, digits and `_.-~` stay unencoded; everything else becomes
+//!    `%XX`). Note the empty `safe` set: unlike `quote()`'s default, `/` IS
+//!    encoded.
 //! 2. Base64-encode the result
 //!
 //! The viewer reverses it with `decodeURIComponent(atob(message))`.
@@ -116,12 +117,15 @@ pub fn size_has_dimensions(size: &serde_json::Value) -> bool {
         .is_some_and(|obj| obj.contains_key("cols") && obj.contains_key("rows"))
 }
 
-/// URL-encode a string using Python's `urllib.parse.quote()` defaults.
+/// URL-encode a string like Python's `urllib.parse.quote(s, safe="")`.
 ///
-/// Python's `quote()` with no arguments leaves these characters unencoded:
+/// With an empty `safe` set, `quote()` leaves only these unencoded:
 /// - ASCII letters (a-z, A-Z)
 /// - ASCII digits (0-9)
 /// - '_', '.', '-', '~'
+///
+/// Everything else - including '/', which `quote()`'s default `safe='/'`
+/// would preserve - is percent-encoded.
 fn url_encode_python_style(s: &str) -> String {
     // percent_encoding's NON_ALPHANUMERIC encodes everything except ASCII
     // alphanumeric. We need to also NOT encode: _ . - ~

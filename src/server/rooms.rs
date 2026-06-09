@@ -130,7 +130,9 @@ impl Rooms {
             entry.messages.push(message);
             // Keep only the newest MAX_HISTORY_MESSAGES
             let excess = entry.messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
-            entry.messages.drain(..excess);
+            if excess > 0 {
+                entry.messages.drain(..excess);
+            }
         }
 
         Ok(())
