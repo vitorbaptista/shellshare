@@ -97,6 +97,7 @@ def pytest_unconfigure(config):
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait()  # reap; kill() alone leaves a zombie
 
 
 @dataclass
@@ -138,6 +139,7 @@ def dedicated_server():
             handle.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             handle.proc.kill()
+            handle.proc.wait()  # reap; kill() alone leaves a zombie
 
 
 def random_id(length=12):

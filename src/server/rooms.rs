@@ -102,14 +102,17 @@ impl Rooms {
     ///
     /// A first broadcast claims the room with `secret`, even when it
     /// carries neither size nor message. `size` must already be validated
-    /// by the caller (see `protocol::size_has_dimensions`).
+    /// by the caller (see `protocol::size_has_dimensions`); `message` is
+    /// the wire-format string as received from the broadcasting client.
+    /// Both are borrowed so the caller can keep emitting from the same
+    /// values; the one owned copy is made here, for storage.
     #[allow(clippy::significant_drop_tightening)] // the lock spanning verify+mutate IS the invariant
     pub async fn append(
         &self,
         room: &RoomId,
         secret: &str,
-        size: Option<serde_json::Value>,
-        message: Option<EncodedMessage>,
+        size: Option<&serde_json::Value>,
+        message: Option<&str>,
     ) -> Result<(), Unauthorized> {
         let mut rooms = self.inner.write().await;
         let entry = rooms
@@ -123,11 +126,13 @@ impl Rooms {
         entry.last_activity = Instant::now();
 
         if let Some(size) = size {
-            entry.size = Some(size);
+            entry.size = Some(size.clone());
         }
 
         if let Some(message) = message {
-            entry.messages.push(message);
+            entry
+                .messages
+                .push(EncodedMessage::from_wire(message.to_string()));
             // Keep only the newest MAX_HISTORY_MESSAGES
             let excess = entry.messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
             if excess > 0 {

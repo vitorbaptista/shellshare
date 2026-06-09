@@ -14,7 +14,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use crate::protocol::{self, EncodedMessage};
+use crate::protocol;
 use binaries::BinaryDownloadQuery;
 use rooms::{RoomId, Rooms};
 use socketioxide::{
@@ -154,13 +154,13 @@ fn setup_socket_handlers(io: &SocketIo) {
                 // Joins are idempotent (clients may re-emit until
                 // confirmed), so deduplicate to keep disconnect from
                 // emitting usersCount more than once per room.
-                {
-                    let mut socket_rooms = state.socket_rooms.write().await;
-                    let tracked = socket_rooms.entry(socket.id.to_string()).or_default();
-                    if !tracked.contains(&room_name) {
-                        tracked.push(room_name.clone());
-                    }
+                let mut socket_rooms = state.socket_rooms.write().await;
+                let tracked = socket_rooms.entry(socket.id.to_string()).or_default();
+                if !tracked.contains(&room_name) {
+                    tracked.push(room_name.clone());
                 }
+                // Release before the room snapshot below takes its own lock
+                drop(socket_rooms);
 
                 // Catch the viewer up if the room is live
                 if let Some(snapshot) = state.rooms.snapshot(&room_id).await {
@@ -243,22 +243,21 @@ async fn broadcast_handler(
         !secret.is_empty()
     );
 
-    // Extract the broadcastable parts of the body: a size carrying
-    // dimensions, and a string message (both optional)
+    // Borrow the broadcastable parts of the body: a size carrying
+    // dimensions, and a wire-format message string (both optional)
     let body_obj = body.as_object();
     let size = body_obj
         .and_then(|o| o.get("size"))
-        .filter(|s| protocol::size_has_dimensions(s))
-        .cloned();
+        .filter(|s| protocol::size_has_dimensions(s));
     let message = body_obj
         .and_then(|o| o.get("message"))
-        .and_then(|m| m.as_str())
-        .map(|m| EncodedMessage::from_wire(m.to_string()));
+        .and_then(|m| m.as_str());
 
-    // Claim/verify the room and store - atomically
+    // Claim/verify the room and store - atomically, and BEFORE emitting,
+    // so a viewer joining mid-broadcast can't miss the message entirely
     if state
         .rooms
-        .append(&room_id, secret, size.clone(), message.clone())
+        .append(&room_id, secret, size, message)
         .await
         .is_err()
     {
@@ -267,22 +266,23 @@ async fn broadcast_handler(
 
     // Forward to viewers: size FIRST, so the terminal is resized before
     // content arrives
-    let io_guard = state.io.read().await;
-    if let Some(io) = io_guard.as_ref() {
-        let room_name = room_id.as_str().to_string();
-        if let Some(ref size) = size {
-            if let Some(ns) = io.of("/") {
-                let _ = ns.within(room_name.clone()).emit("size", size);
+    {
+        let io_guard = state.io.read().await;
+        if let Some(io) = io_guard.as_ref() {
+            let room_name = room_id.as_str().to_string();
+            if let Some(size) = size {
+                if let Some(ns) = io.of("/") {
+                    let _ = ns.within(room_name.clone()).emit("size", size);
+                }
             }
-        }
-        // Emit ONLY the new message; accumulated history is sent on join
-        if let Some(ref message) = message {
-            if let Some(ns) = io.of("/") {
-                let _ = ns.within(room_name).emit("message", message.as_str());
+            // Emit ONLY the new message; accumulated history is sent on join
+            if let Some(message) = message {
+                if let Some(ns) = io.of("/") {
+                    let _ = ns.within(room_name).emit("message", message);
+                }
             }
         }
     }
-    drop(io_guard);
 
     plain_response(StatusCode::OK, "OK")
 }
