@@ -291,13 +291,21 @@ class SocketListener:
         self._connected = True
 
         if wait_for_join:
-            # Wait for usersCount to confirm we've joined
+            # Wait for usersCount to confirm we've joined. The server sends
+            # it for every join (even to empty rooms), so a timeout means
+            # the connection is broken - fail loudly instead of letting the
+            # test mysteriously miss events later.
+            join_timeout = 15
             with self._condition:
                 start = time.time()
                 while not self._user_counts:
-                    remaining = 5 - (time.time() - start)
+                    remaining = join_timeout - (time.time() - start)
                     if remaining <= 0:
-                        break
+                        raise TimeoutError(
+                            f"Socket.IO join to room {self.room_id!r} on "
+                            f"{self.server_url} not confirmed within "
+                            f"{join_timeout}s"
+                        )
                     self._condition.wait(timeout=remaining)
 
     def disconnect(self):
