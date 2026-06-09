@@ -249,8 +249,7 @@ fn setup_socket_handlers(io: &SocketIo) {
                 let user_count = socket
                     .within(room_name.clone())
                     .sockets()
-                    .map(|s| s.len())
-                    .unwrap_or(0);
+                    .map_or(0, |s| s.len());
 
                 // Send user count directly to this client (guaranteed delivery)
                 if let Err(e) = socket.emit("usersCount", &user_count) {
@@ -281,10 +280,7 @@ fn setup_socket_handlers(io: &SocketIo) {
                 for room in rooms {
                     // Count remaining users in room (this socket is already removed)
                     let user_count = io.of("/").map_or(0, |ns| {
-                        ns.within(room.clone())
-                            .sockets()
-                            .map(|s| s.len())
-                            .unwrap_or(0)
+                        ns.within(room.clone()).sockets().map_or(0, |s| s.len())
                     });
                     info!("Room {room} now has {user_count} users");
                     // Emit with fresh ns reference
