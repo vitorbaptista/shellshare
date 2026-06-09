@@ -21,7 +21,9 @@ cargo run -- server --port 8080 --host 127.0.0.1
 cargo run -- --server http://localhost:3000  # Run client
 
 # E2E tests (Python + Playwright)
-cd e2e && uv sync && uv run pytest
+# Requires a release binary: the suite starts its own servers from it
+cargo build --release
+cd e2e && uv sync && uv run pytest -n 10
 ```
 
 ## Architecture
@@ -36,17 +38,16 @@ Multi-threaded design ensures network latency never blocks terminal display:
 - **Signal handler** (Unix): Handles SIGWINCH for terminal resize
 
 Key files:
-- `mod.rs`: Entry point, room ID generation, server URL handling
+- `mod.rs`: Entry point, room ID generation, server URL handling, terminal size
 - `script.rs`: PTY lifecycle, raw terminal mode, shell spawning
 - `http.rs`: HTTP client with retry logic
-- `encoding.rs`: Python-compatible URL+Base64 encoding
 
-### Server (`src/server/mod.rs`)
+### Server (`src/server/`)
 Async Tokio + Axum web server with Socket.IO for real-time updates:
-- In-memory room state with RwLock concurrency
-- Per-room message history (max 100 messages)
-- Static assets embedded at compile time (public/, templates/)
-- Self-serving binary at `/bin/shellshare`
+- `mod.rs`: Router and HTTP/Socket.IO handlers - thin translators that delegate to the modules below
+- `rooms.rs`: All room lifecycle behind one interface - first-caller-wins password claiming, message history (max 100), canonical room names (`RoomId`), activity tracking and TTL eviction. One map, one lock: authorization and mutation are a single critical section
+- `pages.rs`: Home page (OS detection for the install command), viewer page, embedded static assets
+- `binaries.rs`: Platform detection and binary downloads at `/bin/shellshare`
 
 Routes:
 - `GET /` - Home page with OS detection for install command
@@ -54,8 +55,14 @@ Routes:
 - `POST /r/:room` - Broadcast message (first POST claims room with password)
 - `DELETE /r/:room` - Cleanup room
 
-### Encoding Protocol
-Messages are encoded matching the original Python CLI: URL-encode (Python urllib.parse.quote style) then Base64. This ensures compatibility.
+### Wire Protocol (`src/protocol.rs`)
+The single home for the cross-language compatibility constraint, used by
+both client and server. Messages are encoded matching the original Python
+CLI: URL-encode (Python urllib.parse.quote style) then Base64; the browser
+decodes with `decodeURIComponent(atob(...))`. The `EncodedMessage` newtype
+keeps raw and wire-format strings apart; history accumulation for late
+joiners lives here too. Must stay in lockstep with
+`public/javascript/room.js` and `e2e/conftest.py`.
 
 ## Cross-Platform Notes
 
@@ -64,7 +71,9 @@ Messages are encoded matching the original Python CLI: URL-encode (Python urllib
 
 ## Testing
 
-E2E tests in `e2e/` use Python pytest + Playwright for browser automation. Tests cover HTTP API, Socket.IO events, and full CLI-to-browser integration.
+E2E tests are the single source of truth - there are no Rust unit tests by design. The implementation is free to change as long as the e2e suite stays green.
+
+The suite in `e2e/` uses Python pytest + Playwright and manages its own servers: a shared one on :3000 (started automatically if none is running) plus per-test dedicated servers with custom flags (e.g. short `--room-ttl` for eviction tests). Coverage spans the HTTP API, Socket.IO events, full CLI-to-browser integration, real-TTY CLI sessions (`test_cli_tty.py`: resize/SIGWINCH, Ctrl+C handling, cleanup on exit), room TTL eviction, and binary downloads.
 
 # Additional instructions
 
