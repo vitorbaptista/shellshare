@@ -11,10 +11,20 @@ from conftest import SocketListener, http_post_message, poll_until, random_id
 
 
 def _room_has_history(server_url, room, marker, settle=1.0):
-    """Join the room as a late viewer and report whether history contains marker."""
+    """Join the room as a late viewer and report whether history contains marker.
+
+    The join must be confirmed (usersCount received) before the verdict
+    counts: history is emitted before usersCount on join, so a confirmed
+    join with no marker means the room really has no history - not that
+    we were too slow connecting (a real risk on Windows CI runners).
+    """
     listener = SocketListener(room, server_url=server_url)
-    listener.connect()
+    listener.connect()  # waits for join confirmation (usersCount)
     try:
+        if not poll_until(lambda: listener.get_last_user_count() >= 1, timeout=15):
+            raise TimeoutError(
+                f"Socket.IO join to {server_url} was never confirmed"
+            )
         deadline = time.time() + settle
         while time.time() < deadline:
             if marker in listener.get_accumulated_messages():

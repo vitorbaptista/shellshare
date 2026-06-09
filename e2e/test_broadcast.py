@@ -43,7 +43,8 @@ def broadcast_with_cli(room_id, message, password, server_url):
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
+        encoding="utf-8",  # Windows pipes default to cp1252, breaking unicode
     )
     stdout, stderr = proc.communicate(input=message, timeout=10)
     return proc.returncode, stdout, stderr
