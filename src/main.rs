@@ -10,6 +10,7 @@
 mod cli;
 mod protocol;
 mod server;
+mod themes;
 
 use clap::{Parser, Subcommand};
 use tracing::Level;
@@ -55,6 +56,24 @@ struct Cli {
     /// Read from stdin instead of spawning a shell
     #[arg(long, global = true)]
     stdin: bool,
+
+    /// Color theme viewers see the broadcast in (default: viewer's default colors)
+    #[arg(short, long, global = true, value_parser = parse_theme)]
+    theme: Option<String>,
+}
+
+/// Validate `--theme` against the embedded theme list, so a typo fails
+/// before the room is claimed and the shell spawns.
+fn parse_theme(name: &str) -> Result<String, String> {
+    let names = themes::names();
+    if names.iter().any(|n| n == name) {
+        Ok(name.to_string())
+    } else {
+        Err(format!(
+            "unknown theme '{name}'. Available themes: {}",
+            names.join(", ")
+        ))
+    }
 }
 
 #[derive(Subcommand)]
@@ -220,6 +239,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                theme: cli.theme,
             };
             cli::run(args)?;
         }
@@ -230,6 +250,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                theme: cli.theme,
             };
             cli::run(args)?;
         }

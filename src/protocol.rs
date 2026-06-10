@@ -58,6 +58,10 @@ impl MessageHistory {
 /// Terminal dimensions, as carried in the `size` control message of
 /// broadcast transports and the `size` Socket.IO event the viewer
 /// listens for.
+///
+/// The client may attach extra fields next to `cols`/`rows` - today a
+/// `theme` name (see `themes.rs`) - which ride along verbatim to the
+/// viewer without the server knowing about them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct TermSize {
     pub cols: u16,
