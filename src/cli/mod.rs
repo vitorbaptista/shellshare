@@ -3,16 +3,27 @@
 //! This module provides the client functionality for streaming terminal
 //! output to a shellshare server.
 
-mod encoding;
 mod http;
 mod script;
-mod terminal;
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crate::protocol::{EncodedMessage, TermSize};
 use rand::Rng;
+
+/// Get the current terminal size using ioctl (TIOCGWINSZ) via `term_size`.
+/// Falls back to 80x24 when not attached to a terminal.
+#[allow(clippy::cast_possible_truncation)] // Terminal dimensions always fit in u16
+fn get_terminal_size() -> TermSize {
+    term_size::dimensions()
+        .map(|(cols, rows)| TermSize {
+            cols: cols as u16,
+            rows: rows as u16,
+        })
+        .unwrap_or_default()
+}
 
 /// Client configuration arguments
 pub struct ClientArgs {
@@ -99,7 +110,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("End of transmission.");
     } else {
         // Script mode - print to stdout
-        let size = terminal::get_terminal_size();
+        let size = get_terminal_size();
         if size.rows > 30 || size.cols > 160 {
             println!("Current terminal size is {}x{}.", size.rows, size.cols);
             println!("It's too big to be viewed on smaller screens.");
@@ -138,8 +149,8 @@ fn stream_stdin(
         }
 
         let data = &buffer[..bytes_read];
-        let encoded = encoding::encode_message(data);
-        let size = terminal::get_terminal_size();
+        let encoded = EncodedMessage::encode(data);
+        let size = get_terminal_size();
 
         if let Err(e) = client.post_message(&encoded, size) {
             eprintln!("\r\nERROR: {e}");

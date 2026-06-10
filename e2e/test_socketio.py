@@ -115,7 +115,7 @@ class TestSocketIOConnection:
 
         sio.connect(SERVER_URL)
 
-        assert connected.wait(timeout=5), "Failed to connect"
+        assert connected.wait(timeout=15), "Failed to connect"
 
         sio.disconnect()
 
@@ -137,7 +137,7 @@ class TestSocketIOConnection:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for usersCount event to confirm join
-        assert user_count_received.wait(timeout=5), "Join failed - no usersCount received"
+        assert user_count_received.wait(timeout=15), "Join failed - no usersCount received"
 
         sio.disconnect()
 
@@ -171,14 +171,14 @@ class TestSocketIOMessages:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for join to complete
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast a message via HTTP
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
 
         # Wait for message
-        assert message_received.wait(timeout=5), "Message not received"
+        assert message_received.wait(timeout=15), "Message not received"
 
         # Verify message content
         assert len(received_messages) > 0, "No messages received"
@@ -213,14 +213,14 @@ class TestSocketIOMessages:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for join to complete
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast a message with size
         status = broadcast_message(room_id, "Test", password, size=expected_size)
         assert status == 200, f"Broadcast failed: {status}"
 
         # Wait for size
-        assert size_received.wait(timeout=5), "Size not received"
+        assert size_received.wait(timeout=15), "Size not received"
 
         # Verify size
         assert len(received_sizes) > 0, "No size received"
@@ -255,7 +255,7 @@ class TestSocketIOMessages:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for existing data
-        assert message_received.wait(timeout=5), "Existing message not received"
+        assert message_received.wait(timeout=15), "Existing message not received"
 
         # Verify we got the existing message
         assert len(received_messages) > 0, "No messages received"
@@ -287,7 +287,7 @@ class TestSocketIOUserCount:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for user count
-        assert count_received.wait(timeout=5), "User count not received"
+        assert count_received.wait(timeout=15), "User count not received"
 
         # Should be 1 (ourselves)
         assert len(user_counts) > 0, "No user count received"
@@ -317,7 +317,7 @@ class TestSocketIOUserCount:
 
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id}')
-        assert count1_received.wait(timeout=5), "First client didn't receive count=1"
+        assert count1_received.wait(timeout=15), "First client didn't receive count=1"
 
         # Second client
         sio2 = socketio.Client()
@@ -329,10 +329,10 @@ class TestSocketIOUserCount:
 
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id}')
-        assert sio2_joined.wait(timeout=5), "Second client didn't join"
+        assert sio2_joined.wait(timeout=15), "Second client didn't join"
 
         # Client 1 should have received count=2
-        assert count2_received.wait(timeout=5), f"Expected count 2, got counts: {user_counts1}"
+        assert count2_received.wait(timeout=15), f"Expected count 2, got counts: {user_counts1}"
 
         sio1.disconnect()
         sio2.disconnect()
@@ -362,7 +362,7 @@ class TestSocketIOUserCount:
 
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id}')
-        assert count1_received.wait(timeout=5), "First client didn't receive count=1"
+        assert count1_received.wait(timeout=15), "First client didn't receive count=1"
 
         # Second client (will disconnect)
         sio2 = socketio.Client()
@@ -374,14 +374,14 @@ class TestSocketIOUserCount:
 
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id}')
-        assert sio2_joined.wait(timeout=5), "Second client didn't join"
-        assert count2_received.wait(timeout=5), "First client didn't receive count=2"
+        assert sio2_joined.wait(timeout=15), "Second client didn't join"
+        assert count2_received.wait(timeout=15), "First client didn't receive count=2"
 
         # Disconnect second client
         sio2.disconnect()
 
         # Client 1 should have received count=1 after client 2 disconnected
-        assert count_back_to_1.wait(timeout=5), f"Expected final count 1, got: {user_counts1}"
+        assert count_back_to_1.wait(timeout=15), f"Expected final count 1, got: {user_counts1}"
 
         sio1.disconnect()
 
@@ -414,7 +414,7 @@ class TestSocketIOMultipleRooms:
 
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id1}')
-        assert sio1_joined.wait(timeout=5), "Client 1 didn't join"
+        assert sio1_joined.wait(timeout=15), "Client 1 didn't join"
 
         # Client 2 in room 2
         sio2 = socketio.Client()
@@ -431,14 +431,14 @@ class TestSocketIOMultipleRooms:
 
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id2}')
-        assert sio2_joined.wait(timeout=5), "Client 2 didn't join"
+        assert sio2_joined.wait(timeout=15), "Client 2 didn't join"
 
         # Broadcast to room 1 only
         test_message = f"Room1Only-{random_id()}"
         broadcast_message(room_id1, test_message, password)
 
         # Wait for client 1 to receive the message
-        assert sio1_msg_received.wait(timeout=5), "Client 1 should receive message"
+        assert sio1_msg_received.wait(timeout=15), "Client 1 should receive message"
 
         # Client 1 should have received the message
         assert len(messages1) > 0, "Client 1 should receive message"
@@ -486,7 +486,7 @@ class TestSocketIOMessageAccumulation:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for existing data
-        assert message_received.wait(timeout=5), "No messages received"
+        assert message_received.wait(timeout=15), "No messages received"
 
         # Decode and verify all messages are present
         assert len(received_messages) > 0, "No messages received"
@@ -580,14 +580,14 @@ class TestSocketIOJoinEdgeCases:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for join to complete
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast via HTTP
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
 
         # Should definitely receive message
-        assert message_received.wait(timeout=5), "Message not received with full path"
+        assert message_received.wait(timeout=15), "Message not received with full path"
 
         assert len(received_messages) > 0, "No messages received"
         decoded = decode_message(received_messages[-1])
@@ -612,7 +612,7 @@ class TestSocketIOJoinEdgeCases:
             error_occurred.set()
 
         sio.connect(SERVER_URL)
-        assert connected.wait(timeout=5), "Failed to connect"
+        assert connected.wait(timeout=15), "Failed to connect"
 
         # Join with empty string - should not crash
         sio.emit('join', '')
@@ -695,7 +695,7 @@ class TestSocketIOMultipleRoomJoin:
         sio.emit('join', f'/r/{room_id1}')
         sio.emit('join', f'/r/{room_id2}')
 
-        assert joins_complete.wait(timeout=5), "Failed to join both rooms"
+        assert joins_complete.wait(timeout=15), "Failed to join both rooms"
 
         # Broadcast to room 1
         broadcast_message(room_id1, msg1, password)
@@ -704,8 +704,8 @@ class TestSocketIOMultipleRoomJoin:
         broadcast_message(room_id2, msg2, password)
 
         # Wait for both messages
-        assert msg1_received.wait(timeout=5), "Should receive message from room 1"
-        assert msg2_received.wait(timeout=5), "Should receive message from room 2"
+        assert msg1_received.wait(timeout=15), "Should receive message from room 1"
+        assert msg2_received.wait(timeout=15), "Should receive message from room 2"
 
         sio.disconnect()
 
@@ -728,7 +728,7 @@ class TestSocketIOMultipleRoomJoin:
 
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id1}')
-        assert sio1_joined.wait(timeout=5), "Client 1 didn't join"
+        assert sio1_joined.wait(timeout=15), "Client 1 didn't join"
 
         # Client 2 joins room 2 only
         sio2 = socketio.Client()
@@ -742,7 +742,7 @@ class TestSocketIOMultipleRoomJoin:
 
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id2}')
-        assert sio2_joined.wait(timeout=5), "Client 2 didn't join"
+        assert sio2_joined.wait(timeout=15), "Client 2 didn't join"
 
         # Each room should show 1 user, not 2
         assert counts1[-1] == 1, f"Room 1 should have 1 user, got {counts1}"
@@ -774,7 +774,7 @@ class TestSocketIOReconnection:
 
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id}')
-        assert sio1_joined.wait(timeout=5), "First join failed"
+        assert sio1_joined.wait(timeout=15), "First join failed"
 
         assert 1 in counts1, f"First join should show 1 user"
 
@@ -793,7 +793,7 @@ class TestSocketIOReconnection:
 
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id}')
-        assert sio2_joined.wait(timeout=5), "Rejoin failed"
+        assert sio2_joined.wait(timeout=15), "Rejoin failed"
 
         # Should be 1 user again (previous client fully disconnected)
         assert counts2[-1] == 1, f"Rejoin should show 1 user, got {counts2}"
@@ -825,7 +825,7 @@ class TestSocketIOReconnection:
         sio1.connect(SERVER_URL)
         sio1.emit('join', f'/r/{room_id}')
 
-        assert msg_received1.wait(timeout=5), "First client should receive message"
+        assert msg_received1.wait(timeout=15), "First client should receive message"
         sio1.disconnect()
 
         # Second client connects later - should still get the message
@@ -841,7 +841,7 @@ class TestSocketIOReconnection:
         sio2.connect(SERVER_URL)
         sio2.emit('join', f'/r/{room_id}')
 
-        assert msg_received2.wait(timeout=5), "Second client should receive message"
+        assert msg_received2.wait(timeout=15), "Second client should receive message"
 
         decoded = decode_message(messages2[0])
         assert test_message in decoded, "Message should persist across reconnects"
@@ -877,7 +877,7 @@ class TestSocketIOEdgeCases:
 
         # Join same room twice
         sio.emit('join', f'/r/{room_id}')
-        assert first_join.wait(timeout=5), "First join failed"
+        assert first_join.wait(timeout=15), "First join failed"
 
         sio.emit('join', f'/r/{room_id}')
         second_join.wait(timeout=2)  # May or may not get a second event
@@ -917,13 +917,13 @@ class TestSocketIOEdgeCases:
         # Use encoded room for Socket.IO too (server uses req.url which keeps encoding)
         sio.emit('join', f'/r/{encoded_room_id}')
 
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast to unicode room (use encoded version for HTTP)
         status = broadcast_message(encoded_room_id, test_message, password)
         assert status == 200, f"Broadcast to unicode room failed: {status}"
 
-        assert msg_received.wait(timeout=5), "Should receive message in unicode room"
+        assert msg_received.wait(timeout=15), "Should receive message in unicode room"
 
         decoded = decode_message(messages[-1])
         assert test_message in decoded, "Message content should match"
@@ -984,13 +984,13 @@ class TestSocketIOEdgeCases:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast to room with special chars
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
 
-        assert msg_received.wait(timeout=5), "Should receive message"
+        assert msg_received.wait(timeout=15), "Should receive message"
 
         decoded = decode_message(messages[-1])
         assert test_message in decoded, "Message content should match"
@@ -1044,12 +1044,12 @@ class TestSocketIOEdgeCases:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
 
-        assert msg_received.wait(timeout=5), "Should receive message"
+        assert msg_received.wait(timeout=15), "Should receive message"
 
         decoded = decode_message(messages[-1])
         # The exact characters should be preserved through encoding/decoding
@@ -1102,7 +1102,7 @@ class TestSocketIOEventOrder:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert all_received.wait(timeout=5), f"Not all events received: {events}"
+        assert all_received.wait(timeout=15), f"Not all events received: {events}"
 
         # Document the order of events
         event_types = [e[0] for e in events]
@@ -1141,7 +1141,7 @@ class TestSocketIOEventOrder:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert size_received.wait(timeout=5), "Size not received"
+        assert size_received.wait(timeout=15), "Size not received"
 
         # The size should match the LAST broadcast
         assert sizes[-1] == final_size, f"Expected {final_size}, got {sizes[-1]}"
@@ -1181,7 +1181,7 @@ class TestSocketIOEmptyRoom:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for usersCount (always sent)
-        assert events_done.wait(timeout=5), "usersCount not received"
+        assert events_done.wait(timeout=15), "usersCount not received"
 
         # Give brief time for any spurious events
         time.sleep(0.3)
@@ -1233,7 +1233,7 @@ class TestSocketIOEmptyRoom:
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for usersCount
-        assert count_received.wait(timeout=5), "usersCount not received"
+        assert count_received.wait(timeout=15), "usersCount not received"
 
         # Give brief time for any message event
         time.sleep(0.3)
@@ -1282,13 +1282,13 @@ class TestSocketIOSizePassthrough:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast with custom size
         status = broadcast_message(room_id, "test", password, size=custom_size)
         assert status == 200, f"Broadcast failed: {status}"
 
-        assert size_received.wait(timeout=5), "Size not received"
+        assert size_received.wait(timeout=15), "Size not received"
 
         # Size should match exactly
         assert sizes[-1] == custom_size, f"Expected {custom_size}, got {sizes[-1]}"
@@ -1323,7 +1323,7 @@ class TestSocketIOSizePassthrough:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast with null size - should succeed but not emit size event
         status = broadcast_message(room_id, "test", password, size=None)
@@ -1364,13 +1364,13 @@ class TestSocketIOMessageFormat:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         # Broadcast
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
 
-        assert message_received.wait(timeout=5), "Message not received"
+        assert message_received.wait(timeout=15), "Message not received"
 
         # Verify raw message is base64
         raw = raw_messages[-1]
@@ -1408,7 +1408,7 @@ class TestSocketIOMessageFormat:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert message_received.wait(timeout=5), "Message not received"
+        assert message_received.wait(timeout=15), "Message not received"
 
         # Decode the accumulated message
         decoded = decode_message(messages[0])
@@ -1470,7 +1470,7 @@ class TestSocketIOStripPrefix:
 
         # One joins with /r/ prefix
         sio1.emit('join', f'/r/{room_id}')
-        assert sio1_joined.wait(timeout=5), "Client 1 didn't join"
+        assert sio1_joined.wait(timeout=15), "Client 1 didn't join"
 
         # One joins without prefix (server has /r/ as roomPrefix)
         sio2.emit('join', f'/{room_id}')
@@ -1480,7 +1480,7 @@ class TestSocketIOStripPrefix:
         status = broadcast_message(room_id, test_message, password)
         assert status == 200, f"Broadcast failed: {status}"
 
-        assert msg1_received.wait(timeout=5), "Client 1 should receive message"
+        assert msg1_received.wait(timeout=15), "Client 1 should receive message"
         msg2_received.wait(timeout=2)
 
         # Client with /r/ prefix should definitely receive
@@ -1523,7 +1523,7 @@ class TestSocketIOLargeMessage:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert user_count_received.wait(timeout=5), "Join failed"
+        assert user_count_received.wait(timeout=15), "Join failed"
 
         status = broadcast_message(room_id, large_message, password)
         assert status == 200, f"Broadcast failed: {status}"
@@ -1581,7 +1581,7 @@ class TestSocketIOMultipleClients:
 
         # Wait for all clients to join
         for i, evt in enumerate(join_events):
-            assert evt.wait(timeout=5), f"Client {i} did not join"
+            assert evt.wait(timeout=15), f"Client {i} did not join"
 
         # Broadcast
         status = broadcast_message(room_id, test_message, password)
@@ -1589,7 +1589,7 @@ class TestSocketIOMultipleClients:
 
         # All clients should receive
         for i, evt in enumerate(message_events):
-            assert evt.wait(timeout=5), f"Client {i} did not receive message"
+            assert evt.wait(timeout=15), f"Client {i} did not receive message"
 
         for i, messages in enumerate(message_lists):
             assert len(messages) > 0, f"Client {i} has no messages"
@@ -1633,7 +1633,7 @@ class TestSocketIOLateJoinerHistory:
         sio.emit('join', f'/r/{room_id}')
 
         # Should receive the historical message
-        assert message_received.wait(timeout=5), "Late joiner did not receive history"
+        assert message_received.wait(timeout=15), "Late joiner did not receive history"
 
         assert len(received_messages) > 0, "No messages received"
         decoded = decode_message(received_messages[0])
@@ -1668,7 +1668,7 @@ class TestSocketIOLateJoinerHistory:
         sio.emit('join', f'/r/{room_id}')
 
         # Should receive the accumulated history
-        assert message_received.wait(timeout=5), "Late joiner did not receive history"
+        assert message_received.wait(timeout=15), "Late joiner did not receive history"
 
         # Decode and verify all messages are present in order
         decoded = decode_message(received_messages[0])
@@ -1714,7 +1714,7 @@ class TestSocketIOLateJoinerHistory:
         live_viewer.emit('join', f'/r/{room_id}')
 
         # Wait for live viewer to be ready
-        assert live_ready.wait(timeout=5), "Live viewer failed to join"
+        assert live_ready.wait(timeout=15), "Live viewer failed to join"
 
         # Broadcast messages while live viewer is watching
         for msg in messages_sent:
@@ -1722,7 +1722,7 @@ class TestSocketIOLateJoinerHistory:
             assert status == 200, f"Broadcast failed: {status}"
 
         # Wait for live viewer to receive all messages
-        assert live_msg_received.wait(timeout=5), "Live viewer didn't receive all messages"
+        assert live_msg_received.wait(timeout=15), "Live viewer didn't receive all messages"
 
         # Late joiner connects
         late_joiner = socketio.Client()
@@ -1738,7 +1738,7 @@ class TestSocketIOLateJoinerHistory:
         late_joiner.emit('join', f'/r/{room_id}')
 
         # Wait for late joiner to receive history
-        assert late_received.wait(timeout=5), "Late joiner did not receive history"
+        assert late_received.wait(timeout=15), "Late joiner did not receive history"
 
         # Compare content: live viewer should have accumulated all messages
         live_content = ''.join(live_messages)
@@ -1778,7 +1778,7 @@ class TestSocketIOLateJoinerHistory:
         sio.emit('join', f'/r/{room_id}')
 
         # Should receive the size
-        assert size_received.wait(timeout=5), "Late joiner did not receive size"
+        assert size_received.wait(timeout=15), "Late joiner did not receive size"
 
         assert len(received_sizes) > 0, "No size received"
         assert received_sizes[0] == expected_size, \
@@ -1821,7 +1821,7 @@ class TestSocketIOLateJoinerHistory:
         sio.connect(SERVER_URL)
         sio.emit('join', f'/r/{room_id}')
 
-        assert all_received.wait(timeout=5), f"Not all events received: {events}"
+        assert all_received.wait(timeout=15), f"Not all events received: {events}"
 
         # Verify size comes before message
         event_types = [e[0] for e in events]

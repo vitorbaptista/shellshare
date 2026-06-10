@@ -3,88 +3,30 @@
 //! This module contains the server implementation using axum + socketioxide.
 
 mod binaries;
+mod pages;
+mod rooms;
 
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{header, HeaderMap, Method, Request, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
+use crate::protocol;
 use binaries::BinaryDownloadQuery;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use percent_encoding::percent_decode_str;
-use rust_embed::Embed;
+use rooms::{RoomId, Rooms};
 use socketioxide::{
     extract::{Data, SocketRef, State as SioState},
     SocketIo,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
-
-/// Maximum number of messages to store per room for late joiners.
-/// This prevents unbounded memory growth while keeping enough history
-/// for a good late-joiner experience.
-const MAX_HISTORY_MESSAGES: usize = 100;
-
-/// Embedded static files from the public directory
-#[derive(Embed, Clone)]
-#[folder = "public/"]
-struct StaticAssets;
-
-/// Embedded view templates
-#[derive(Embed, Clone)]
-#[folder = "templates/"]
-struct Templates;
-
-/// Room data stored in memory
-#[derive(Clone, Debug)]
-struct RoomData {
-    /// Accumulated messages (each is base64 encoded)
-    messages: Vec<String>,
-    /// Terminal size
-    size: Option<serde_json::Value>,
-    /// Last activity timestamp (broadcast or viewer join)
-    last_activity: Instant,
-}
-
-impl Default for RoomData {
-    fn default() -> Self {
-        Self {
-            messages: Vec::new(),
-            size: None,
-            last_activity: Instant::now(),
-        }
-    }
-}
-
-impl RoomData {
-    /// Get accumulated message: decode all base64 messages, join, re-encode
-    fn get_accumulated_message(&self) -> Option<String> {
-        if self.messages.is_empty() {
-            return None;
-        }
-
-        // Decode all messages and concatenate
-        let mut accumulated = Vec::new();
-        for msg in &self.messages {
-            if let Ok(decoded) = BASE64.decode(msg) {
-                accumulated.extend(decoded);
-            }
-        }
-
-        if accumulated.is_empty() {
-            None
-        } else {
-            Some(BASE64.encode(&accumulated))
-        }
-    }
-}
 
 /// Room cleanup configuration
 #[derive(Clone, Debug)]
@@ -107,10 +49,8 @@ impl Default for CleanupConfig {
 /// Shared application state
 #[derive(Default, Clone)]
 struct AppState {
-    /// Authorization cache: room -> secret
-    auth_cache: Arc<RwLock<HashMap<String, String>>>,
-    /// Room data cache: room -> data
-    rooms: Arc<RwLock<HashMap<String, RoomData>>>,
+    /// All live rooms (state, passwords, history, eviction)
+    rooms: Rooms,
     /// Socket.IO instance - wrapped in Arc<RwLock> so handlers see updates
     io: Arc<RwLock<Option<SocketIo>>>,
     /// Track which rooms each socket is in (for disconnect handling)
@@ -164,14 +104,14 @@ pub async fn run(
     // Build router
     let app = Router::new()
         // API routes
-        .route("/", get(index_handler))
-        .route("/r/{*room}", get(room_page_handler))
+        .route("/", get(pages::index_handler))
+        .route("/r/{*room}", get(pages::room_page_handler))
         .route("/r/{*room}", post(broadcast_handler))
         .route("/r/{*room}", delete(delete_room_handler))
         // Binary download (serves embedded binaries or self)
         .route("/bin/shellshare", get(serve_binary))
         // Static files - fallback
-        .fallback(serve_static)
+        .fallback(pages::serve_static)
         // State and middleware
         .with_state(app_state)
         .layer(sio_layer)
@@ -195,51 +135,45 @@ fn setup_socket_handlers(io: &SocketIo) {
         socket.on(
             "join",
             |socket: SocketRef, Data::<String>(room), state: SioState<AppState>| async move {
-                // Normalize room name - strip /r/ prefix if present
-                let room_name = normalize_room_name(&room);
+                let room_id = RoomId::parse(&room);
 
+                // Debug-format the room ids: they are client-controlled and
+                // could otherwise inject control characters into the log
                 info!(
-                    "Client {} joining room: {} (normalized: {})",
-                    socket.id, room, room_name
+                    "Client {} joining room: {:?} (normalized: {:?})",
+                    socket.id, room, room_id
                 );
 
                 // Join the socket to the room
+                let room_name = room_id.as_str().to_string();
                 if let Err(e) = socket.join(room_name.clone()) {
-                    warn!("Failed to join room {}: {:?}", room_name, e);
+                    warn!("Failed to join room {:?}: {:?}", room_id, e);
                 }
 
-                // Track this socket's rooms for disconnect handling
-                {
-                    let mut socket_rooms = state.socket_rooms.write().await;
-                    socket_rooms
-                        .entry(socket.id.to_string())
-                        .or_default()
-                        .push(room_name.clone());
+                // Track this socket's rooms for disconnect handling.
+                // Joins are idempotent (clients may re-emit until
+                // confirmed), so deduplicate to keep disconnect from
+                // emitting usersCount more than once per room.
+                let mut socket_rooms = state.socket_rooms.write().await;
+                let tracked = socket_rooms.entry(socket.id.to_string()).or_default();
+                if !tracked.contains(&room_name) {
+                    tracked.push(room_name.clone());
                 }
+                // Release before the room snapshot below takes its own lock
+                drop(socket_rooms);
 
-                // Get room data and update activity timestamp
-                let room_data = {
-                    let mut rooms = state.rooms.write().await;
-                    if let Some(room_data) = rooms.get_mut(&room_name) {
-                        room_data.last_activity = Instant::now();
-                        Some(room_data.clone())
-                    } else {
-                        None
-                    }
-                };
-
-                // Send existing room data if any
-                if let Some(data) = room_data {
+                // Catch the viewer up if the room is live
+                if let Some(snapshot) = state.rooms.snapshot(&room_id).await {
                     // Send size FIRST - terminal must be sized before receiving content
-                    if let Some(ref size) = data.size {
+                    if let Some(ref size) = snapshot.size {
                         if let Err(e) = socket.emit("size", size) {
                             warn!("Failed to emit size: {:?}", e);
                         }
                     }
 
                     // Then send accumulated message history
-                    if let Some(msg) = data.get_accumulated_message() {
-                        if let Err(e) = socket.emit("message", &msg) {
+                    if let Some(msg) = snapshot.history {
+                        if let Err(e) = socket.emit("message", msg.as_str()) {
                             warn!("Failed to emit message: {:?}", e);
                         }
                     }
@@ -249,8 +183,7 @@ fn setup_socket_handlers(io: &SocketIo) {
                 let user_count = socket
                     .within(room_name.clone())
                     .sockets()
-                    .map(|s| s.len())
-                    .unwrap_or(0);
+                    .map_or(0, |s| s.len());
 
                 // Send user count directly to this client (guaranteed delivery)
                 if let Err(e) = socket.emit("usersCount", &user_count) {
@@ -281,12 +214,9 @@ fn setup_socket_handlers(io: &SocketIo) {
                 for room in rooms {
                     // Count remaining users in room (this socket is already removed)
                     let user_count = io.of("/").map_or(0, |ns| {
-                        ns.within(room.clone())
-                            .sockets()
-                            .map(|s| s.len())
-                            .unwrap_or(0)
+                        ns.within(room.clone()).sockets().map_or(0, |s| s.len())
                     });
-                    info!("Room {room} now has {user_count} users");
+                    info!("Room {room:?} now has {user_count} users");
                     // Emit with fresh ns reference
                     if let Some(ns) = io.of("/") {
                         let _ = ns.within(room).emit("usersCount", &user_count);
@@ -297,177 +227,64 @@ fn setup_socket_handlers(io: &SocketIo) {
     });
 }
 
-/// Normalize room name by stripping /r/ prefix and URL-decoding
-fn normalize_room_name(room: &str) -> String {
-    let room = room.trim_start_matches('/');
-    let room = room.strip_prefix("r/").unwrap_or(room);
-    // URL-decode to handle encoded characters from Socket.IO
-    // (Axum auto-decodes HTTP paths, but Socket.IO sends raw strings)
-    // Use strict UTF-8 decoding to avoid conflating invalid UTF-8 with
-    // valid inputs that contain the replacement character.
-    percent_decode_str(room)
-        .decode_utf8()
-        .map_or_else(|_| room.to_string(), std::borrow::Cow::into_owned)
-}
-
-/// Detect OS from User-Agent header
-fn detect_os_from_user_agent(user_agent: &str) -> &'static str {
-    let ua = user_agent.to_lowercase();
-    if ua.contains("windows") {
-        "windows"
-    } else if ua.contains("mac") {
-        "macos"
-    } else {
-        "linux" // default
-    }
-}
-
-/// GET / - Home page
-async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
-    match Templates::get("index.html") {
-        Some(content) => {
-            let user_agent = headers
-                .get(header::USER_AGENT)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-
-            let os = detect_os_from_user_agent(user_agent);
-
-            let html = String::from_utf8_lossy(&content.data);
-            let html = html
-                .replace(
-                    "{{LINUX_CHECKED}}",
-                    if os == "linux" { " checked" } else { "" },
-                )
-                .replace(
-                    "{{MACOS_CHECKED}}",
-                    if os == "macos" { " checked" } else { "" },
-                )
-                .replace(
-                    "{{WINDOWS_CHECKED}}",
-                    if os == "windows" { " checked" } else { "" },
-                );
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-                .body(Body::from(html))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Template not found"))
-            .unwrap(),
-    }
-}
-
-/// GET /r/:room - Room page
-async fn room_page_handler(Path(_room): Path<String>) -> impl IntoResponse {
-    match Templates::get("room.html") {
-        Some(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(Body::from(content.data.into_owned()))
-            .unwrap(),
-        None => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Template not found"))
-            .unwrap(),
-    }
-}
-
 /// POST /r/:room - Broadcast message to room
-#[allow(clippy::significant_drop_tightening)] // Lock must span room_data mutations
 async fn broadcast_handler(
     Path(room_path): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<BroadcastRequest>,
 ) -> impl IntoResponse {
-    let room_name = normalize_room_name(&room_path);
-
-    let auth_header = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let room_id = RoomId::parse(&room_path);
+    let secret = auth_secret(&headers);
 
     info!(
-        "Broadcast to room: {}, auth present: {}",
-        room_name,
-        !auth_header.is_empty()
+        "Broadcast to room: {:?}, auth present: {}",
+        room_id,
+        !secret.is_empty()
     );
 
-    // Check authorization
-    if !check_authorization(&state, &room_name, auth_header).await {
-        return Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Unauthorized"))
-            .unwrap();
-    }
+    // Borrow the broadcastable parts of the body: a size carrying
+    // dimensions, and a wire-format message string (both optional)
+    let body_obj = body.as_object();
+    let size = body_obj
+        .and_then(|o| o.get("size"))
+        .filter(|s| protocol::size_has_dimensions(s));
+    let message = body_obj
+        .and_then(|o| o.get("message"))
+        .and_then(|m| m.as_str());
 
-    // Store message and emit to Socket.IO clients
+    // Claim/verify the room and store - atomically, and BEFORE emitting,
+    // so a viewer joining mid-broadcast can't miss the message entirely
+    if state
+        .rooms
+        .append(&room_id, secret, size, message)
+        .await
+        .is_err()
     {
-        let mut rooms = state.rooms.write().await;
-        let room_data = rooms.entry(room_name.clone()).or_default();
+        return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
 
-        // Update activity timestamp
-        room_data.last_activity = Instant::now();
-
-        // Extract message and size from body (preserving null vs missing)
-        let body_obj = body.as_object();
-
-        // Handle size FIRST - only if it has valid cols/rows fields
-        // This must come before message so the terminal is resized before content arrives
-        if let Some(obj) = body_obj {
-            if let Some(size) = obj.get("size") {
-                // Only store and emit size if it has the expected cols/rows fields
-                // (client ignores size without these fields anyway)
-                if let Some(size_obj) = size.as_object() {
-                    if size_obj.contains_key("cols") && size_obj.contains_key("rows") {
-                        room_data.size = Some(size.clone());
-
-                        // Emit size to all clients in room
-                        let io_guard = state.io.read().await;
-                        if let Some(ref io) = *io_guard {
-                            if let Some(ns) = io.of("/") {
-                                let _ = ns.within(room_name.clone()).emit("size", size);
-                            }
-                        }
-                    }
+    // Forward to viewers: size FIRST, so the terminal is resized before
+    // content arrives
+    {
+        let io_guard = state.io.read().await;
+        if let Some(io) = io_guard.as_ref() {
+            let room_name = room_id.as_str().to_string();
+            if let Some(size) = size {
+                if let Some(ns) = io.of("/") {
+                    let _ = ns.within(room_name.clone()).emit("size", size);
                 }
             }
-        }
-
-        // Handle message (only if it's a non-null string)
-        if let Some(message) = body_obj.and_then(|o| o.get("message")) {
-            if let Some(msg_str) = message.as_str() {
-                room_data.messages.push(msg_str.to_string());
-
-                // Limit history size to prevent unbounded memory growth
-                while room_data.messages.len() > MAX_HISTORY_MESSAGES {
-                    room_data.messages.remove(0); // Remove oldest
-                }
-
-                // Emit ONLY the new message to all clients in room
-                // (accumulated message is only sent when a new client joins)
-                let io_guard = state.io.read().await;
-                if let Some(ref io) = *io_guard {
-                    if let Some(ns) = io.of("/") {
-                        let _ = ns.within(room_name.clone()).emit("message", msg_str);
-                    }
+            // Emit ONLY the new message; accumulated history is sent on join
+            if let Some(message) = message {
+                if let Some(ns) = io.of("/") {
+                    let _ = ns.within(room_name).emit("message", message);
                 }
             }
         }
     }
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(Body::from("OK"))
-        .unwrap()
+    plain_response(StatusCode::OK, "OK")
 }
 
 /// DELETE /r/:room - Delete room
@@ -476,63 +293,37 @@ async fn delete_room_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let room_name = normalize_room_name(&room_path);
-
-    let auth_header = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let room_id = RoomId::parse(&room_path);
+    let secret = auth_secret(&headers);
 
     info!(
-        "Delete room: {}, auth present: {}",
-        room_name,
-        !auth_header.is_empty()
+        "Delete room: {:?}, auth present: {}",
+        room_id,
+        !secret.is_empty()
     );
 
-    // Check authorization
-    if !check_authorization(&state, &room_name, auth_header).await {
-        return Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Unauthorized"))
-            .unwrap();
+    if state.rooms.delete(&room_id, secret).await.is_err() {
+        return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
 
-    // Remove room data
-    {
-        let mut rooms = state.rooms.write().await;
-        rooms.remove(&room_name);
-    }
-    {
-        let mut auth = state.auth_cache.write().await;
-        auth.remove(&room_name);
-    }
-
-    Response::builder()
-        .status(StatusCode::ACCEPTED)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(Body::from("Accepted"))
-        .unwrap()
+    plain_response(StatusCode::ACCEPTED, "Accepted")
 }
 
-/// Check if the given authorization is valid for the room
-async fn check_authorization(state: &AppState, room: &str, secret: &str) -> bool {
-    let auth_cache = state.auth_cache.read().await;
+/// The room password carried in the Authorization header
+fn auth_secret(headers: &HeaderMap) -> &str {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+}
 
-    if let Some(existing_secret) = auth_cache.get(room) {
-        // Room exists, check if secret matches
-        existing_secret == secret
-    } else {
-        // Room doesn't exist, claim it with this secret
-        drop(auth_cache);
-        let mut auth_cache = state.auth_cache.write().await;
-        // Double-check in case another request claimed it
-        if let Some(existing_secret) = auth_cache.get(room) {
-            return existing_secret == secret;
-        }
-        auth_cache.insert(room.to_string(), secret.to_string());
-        true
-    }
+/// Build a plain-text response
+fn plain_response(status: StatusCode, body: &'static str) -> Response {
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from(body))
+        .unwrap()
 }
 
 /// Spawn background task to clean up abandoned rooms
@@ -541,42 +332,15 @@ fn spawn_cleanup_task(state: AppState) {
         let mut interval = tokio::time::interval(state.cleanup_config.interval);
         loop {
             interval.tick().await;
-            cleanup_abandoned_rooms(&state).await;
+            let evicted = state
+                .rooms
+                .evict_stale(state.cleanup_config.inactive_ttl)
+                .await;
+            if evicted > 0 {
+                info!("Cleaned up {} abandoned rooms", evicted);
+            }
         }
     });
-}
-
-/// Remove rooms that have been inactive for longer than the TTL
-async fn cleanup_abandoned_rooms(state: &AppState) {
-    let now = Instant::now();
-    let ttl = state.cleanup_config.inactive_ttl;
-
-    // Collect rooms to delete (inactive for > TTL)
-    let rooms_to_delete: Vec<String> = {
-        let rooms = state.rooms.read().await;
-        rooms
-            .iter()
-            .filter(|(_, data)| now.duration_since(data.last_activity) > ttl)
-            .map(|(name, _)| name.clone())
-            .collect()
-    };
-
-    // Delete rooms
-    if !rooms_to_delete.is_empty() {
-        info!("Cleaning up {} abandoned rooms", rooms_to_delete.len());
-        {
-            let mut rooms = state.rooms.write().await;
-            for room in &rooms_to_delete {
-                rooms.remove(room);
-            }
-        }
-        {
-            let mut auth = state.auth_cache.write().await;
-            for room in &rooms_to_delete {
-                auth.remove(room);
-            }
-        }
-    }
 }
 
 /// Serve platform-specific binary or fallback to self
@@ -588,38 +352,4 @@ async fn serve_binary(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     binaries::serve_binary(query, headers).await
-}
-
-/// Serve embedded static files
-async fn serve_static(req: Request<Body>) -> impl IntoResponse {
-    let path = req.uri().path().trim_start_matches('/');
-    let method = req.method();
-
-    match StaticAssets::get(path) {
-        Some(content) => {
-            // Only allow GET and HEAD for existing static files
-            if method != Method::GET && method != Method::HEAD {
-                return Response::builder()
-                    .status(StatusCode::METHOD_NOT_ALLOWED)
-                    .header(header::ALLOW, "GET, HEAD")
-                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                    .body(Body::from("Method Not Allowed"))
-                    .unwrap();
-            }
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            let etag = format!("\"{}\"", hex::encode(content.metadata.sha256_hash()));
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime.as_ref())
-                .header(header::CACHE_CONTROL, "public, no-cache")
-                .header(header::ETAG, etag)
-                .body(Body::from(content.data.into_owned()))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Not Found"))
-            .unwrap(),
-    }
 }

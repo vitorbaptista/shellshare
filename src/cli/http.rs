@@ -2,7 +2,7 @@
 //!
 //! Handles communication with the shellshare server.
 
-use crate::cli::terminal::TerminalSize;
+use crate::protocol::{EncodedMessage, TermSize};
 use reqwest::blocking::Client as ReqwestClient;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -67,17 +67,18 @@ impl Client {
     }
 
     /// POST a message to the server with retry logic
-    pub fn post_message(&self, message: &str, size: TerminalSize) -> Result<(), HttpError> {
+    pub fn post_message(
+        &self,
+        message: &EncodedMessage,
+        size: TermSize,
+    ) -> Result<(), HttpError> {
         const MAX_RETRIES: u32 = 3;
         const RETRY_DELAY: Duration = Duration::from_millis(500);
 
         let url = format!("{}/{}", self.server_url, self.room_path);
         let body = json!({
-            "message": message,
-            "size": {
-                "cols": size.cols,
-                "rows": size.rows
-            }
+            "message": message.as_str(),
+            "size": size,
         });
 
         let mut last_error = None;

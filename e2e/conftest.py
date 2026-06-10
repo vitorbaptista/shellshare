@@ -10,10 +10,13 @@ This module provides:
 import base64
 
 import random
+import socket
 import string
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -36,7 +39,112 @@ else:
     CLI_PATH = _DEBUG_PATH
 
 CLI_COMMAND = [str(CLI_PATH)]
-SERVER_URL = "http://localhost:3000"
+# 127.0.0.1, not localhost: on Windows localhost can resolve to ::1 first
+# while the server listens on IPv4 (see ServerHandle.url)
+SERVER_URL = "http://127.0.0.1:3000"
+
+
+def _server_responds(url, timeout=1):
+    """Check whether a shellshare server answers at the given URL."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        # An HTTP error response still means a server is up
+        return True
+    except Exception:
+        return False
+
+
+def _free_port():
+    """Ask the OS for a free TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _spawn_server(port, *extra_args):
+    """Spawn a shellshare server process on the given port."""
+    if not CLI_PATH.exists():
+        raise RuntimeError(
+            f"shellshare binary not found at {CLI_PATH}. "
+            "Run `cargo build --release` first."
+        )
+    return subprocess.Popen(
+        [str(CLI_PATH), "server", "--host", "127.0.0.1", "--port", str(port)]
+        + [str(a) for a in extra_args],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def pytest_configure(config):
+    """Start the shared server on :3000 if none is running.
+
+    Runs only in the xdist controller (or in a single-process run), so the
+    server is started exactly once no matter how many workers there are.
+    CI keeps working unchanged: it starts its own server, which we detect
+    and leave alone.
+    """
+    if hasattr(config, "workerinput"):  # xdist worker: controller handles it
+        return
+    config._shellshare_server = None
+    if not _server_responds(SERVER_URL):
+        config._shellshare_server = _spawn_server(3000)
+        wait_for_server(SERVER_URL)
+
+
+def pytest_unconfigure(config):
+    proc = getattr(config, "_shellshare_server", None)
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()  # reap; kill() alone leaves a zombie
+
+
+@dataclass
+class ServerHandle:
+    """A dedicated shellshare server owned by a single test."""
+    port: int
+    proc: subprocess.Popen
+
+    @property
+    def url(self):
+        # 127.0.0.1, not localhost: the server binds IPv4 only, and on
+        # Windows localhost can resolve to ::1 first, making fresh
+        # Socket.IO connections slow or flaky
+        return f"http://127.0.0.1:{self.port}"
+
+
+@pytest.fixture
+def dedicated_server():
+    """Factory fixture: spawn servers with custom flags on free ports.
+
+    Usage:
+        server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
+    """
+    handles = []
+
+    def start(*extra_args):
+        port = _free_port()
+        proc = _spawn_server(port, *extra_args)
+        handle = ServerHandle(port=port, proc=proc)
+        handles.append(handle)
+        wait_for_server(handle.url)
+        return handle
+
+    yield start
+
+    for handle in handles:
+        handle.proc.terminate()
+        try:
+            handle.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            handle.proc.kill()
+            handle.proc.wait()  # reap; kill() alone leaves a zombie
 
 
 def random_id(length=12):
@@ -100,9 +208,35 @@ def wait_for_server(url, timeout_seconds=30):
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
+def http_post_message(server_url, room, password, text, cols=80, rows=24):
+    """POST a broadcast message the way the CLI does. Returns the HTTP status."""
+    import json
+
+    body = json.dumps({
+        "message": encode_message(text),
+        "size": {"cols": cols, "rows": rows},
+    }).encode()
+    req = urllib.request.Request(
+        f"{server_url}/r/{room}",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": password},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def encode_message(text):
-    """Encode a message the same way the CLI does."""
-    quoted = urllib.parse.quote(text)
+    """Encode a message the same way the CLI does.
+
+    safe="" matters: the Rust implementation percent-encodes everything
+    except ASCII alphanumerics and `_.-~`, including `/` (which quote()'s
+    default safe='/' would preserve).
+    """
+    quoted = urllib.parse.quote(text, safe="")
     return base64.b64encode(quoted.encode()).decode()
 
 
@@ -160,18 +294,37 @@ class SocketListener:
                 self._condition.notify_all()
 
         self._sio.connect(self.server_url)
-        self._sio.emit('join', f'/r/{self.room_id}')
         self._connected = True
 
-        if wait_for_join:
-            # Wait for usersCount to confirm we've joined
+        if not wait_for_join:
+            self._sio.emit('join', f'/r/{self.room_id}')
+            return
+
+        # Joining must be confirmed, not fire-and-forget: a bare emit has
+        # no delivery guarantee, and a join lost in transit means the test
+        # silently misses every event afterwards. The server confirms each
+        # join with usersCount, and re-joining is idempotent, so emit and
+        # re-emit until confirmed.
+        attempts = 3
+        per_attempt = 5
+        for _ in range(attempts):
+            self._sio.emit('join', f'/r/{self.room_id}')
             with self._condition:
-                start = time.time()
+                deadline = time.time() + per_attempt
                 while not self._user_counts:
-                    remaining = 5 - (time.time() - start)
+                    remaining = deadline - time.time()
                     if remaining <= 0:
                         break
                     self._condition.wait(timeout=remaining)
+                if self._user_counts:
+                    return
+        # Don't leak the connected client: this raise typically happens in
+        # fixture setup, where teardown (and its disconnect) never runs
+        self.disconnect()
+        raise TimeoutError(
+            f"Socket.IO join to room {self.room_id!r} on {self.server_url} "
+            f"not confirmed after {attempts} attempts"
+        )
 
     def disconnect(self):
         """Disconnect from the server."""

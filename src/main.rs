@@ -7,6 +7,7 @@
 //! - `shellshare` - Run the client (share your terminal)
 
 mod cli;
+mod protocol;
 mod server;
 
 use clap::{Parser, Subcommand};

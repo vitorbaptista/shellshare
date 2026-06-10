@@ -13,7 +13,13 @@ jobs:
   e2e:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            workers: 10
+          # macOS runners have 3 cores; 10 workers oversubscribes them
+          # enough that Socket.IO joins flake on 5-15s timeouts
+          - os: macos-latest
+            workers: 4
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 
@@ -70,6 +76,6 @@ jobs:
       - name: Run E2E tests
         run: |
           cd e2e
-          uv run pytest -n 10
+          uv run pytest -n ${{ matrix.workers }}
         env:
           CI: true
