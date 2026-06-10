@@ -307,7 +307,11 @@ fn setup_socket_handlers(io: &SocketIo) {
 /// Always answers 410 Gone with an upgrade prompt, whatever the body:
 /// only pre-WebSocket clients still POST here, and a clear rejection
 /// beats silently dropping their output.
-async fn broadcast_handler(Path(room_path): Path<String>) -> impl IntoResponse {
+///
+/// The body is extracted (and thereby drained) even though it's unused:
+/// answering with unread request bytes in flight makes Windows abort
+/// the connection (WSAECONNABORTED) before the client reads the 410.
+async fn broadcast_handler(Path(room_path): Path<String>, _body: Bytes) -> impl IntoResponse {
     debug!("Legacy POST broadcast to room {:?} rejected", RoomId::parse(&room_path));
     plain_response(StatusCode::GONE, LEGACY_CLIENT_MESSAGE)
 }
