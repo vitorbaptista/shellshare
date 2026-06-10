@@ -3,14 +3,14 @@
 //! This module provides the client functionality for streaming terminal
 //! output to a shellshare server.
 
-mod http;
 mod script;
+mod ws;
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::protocol::{EncodedMessage, TermSize};
+use crate::protocol::TermSize;
 use rand::Rng;
 
 /// Get the current terminal size using ioctl (TIOCGWINSZ) via `term_size`.
@@ -31,9 +31,6 @@ pub struct ClientArgs {
     pub room: Option<String>,
     pub password: Option<String>,
     pub stdin: bool,
-    /// Claim the room before sharing starts (used by `serve` so nobody
-    /// can take the name between server start and the first broadcast)
-    pub claim_room: bool,
 }
 
 /// Generate a random 18-character alphanumeric room ID
@@ -85,27 +82,24 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Build room path (r/{room})
     let room_path = format!("r/{room}");
 
-    // Create HTTP client
-    let client = http::Client::new(&server, &room_path, &password)?;
-
-    if args.claim_room {
-        if let Err(e) = client.claim_room() {
-            eprintln!("ERROR: could not claim room: {e}");
+    // Connecting claims the room (or fails on a password mismatch), so
+    // a broadcast that can never work is reported before the terminal
+    // is handed over to the shell
+    let size = get_terminal_size();
+    let transport = match ws::Transport::connect(&server, &room_path, &password, size) {
+        Ok(transport) => transport,
+        Err(e) => {
+            eprintln!("ERROR: {e}");
             std::process::exit(1);
         }
-    }
+    };
 
-    // Setup Ctrl+C handler for cleanup
+    // Ctrl+C only flips the flag; the sending thread owns the transport
+    // and performs cleanup (flush, room deletion) when it stops
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
-
-    // We need to clone values for the ctrlc handler
-    let client_for_cleanup = client.clone();
-
     ctrlc::set_handler(move || {
         running_clone.store(false, Ordering::SeqCst);
-        // Send DELETE request on Ctrl+C
-        let _ = client_for_cleanup.delete_room();
     })?;
 
     if args.stdin {
@@ -113,14 +107,11 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Sharing terminal in {server}/{room_path}");
 
         // Read from stdin and stream to server
-        stream_stdin(&client, &running)?;
+        stream_stdin(transport, &running)?;
 
-        // Cleanup
-        let _ = client.delete_room();
         eprintln!("End of transmission.");
     } else {
         // Script mode - print to stdout
-        let size = get_terminal_size();
         if size.rows > 30 || size.cols > 160 {
             println!("Current terminal size is {}x{}.", size.rows, size.cols);
             println!("It's too big to be viewed on smaller screens.");
@@ -130,10 +121,8 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
         println!("Sharing terminal in {server}/{room_path}");
 
         // Run script mode with PTY
-        script::run_script_mode(&client, &running)?;
+        script::run_script_mode(transport, &running)?;
 
-        // Cleanup
-        let _ = client.delete_room();
         println!("End of transmission.");
     }
 
@@ -142,7 +131,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Stream stdin to the server (for testing)
 fn stream_stdin(
-    client: &http::Client,
+    mut transport: ws::Transport,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = [0u8; 4096];
@@ -158,16 +147,18 @@ fn stream_stdin(
             break;
         }
 
-        let data = &buffer[..bytes_read];
-        let encoded = EncodedMessage::encode(data);
+        let data = buffer[..bytes_read].to_vec();
         let size = get_terminal_size();
 
-        if let Err(e) = client.post_message(&encoded, size) {
+        if let Err(e) = transport.send(data, size) {
             eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
-            break;
+            // The room belongs to someone else now; it is not ours to
+            // delete, so skip the shutdown cleanup
+            return Ok(());
         }
     }
 
+    transport.shutdown_and_delete();
     Ok(())
 }

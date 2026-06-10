@@ -240,10 +240,10 @@ def encode_message(text):
     return base64.b64encode(quoted.encode()).decode()
 
 
-def decode_message(encoded):
-    """Decode a base64 + URL-encoded message."""
-    decoded_b64 = base64.b64decode(encoded).decode('ascii')
-    return urllib.parse.unquote(decoded_b64)
+def decode_message(data):
+    """Decode a received message: raw terminal bytes, sent as a Socket.IO
+    binary attachment."""
+    return bytes(data).decode("utf-8", errors="replace")
 
 
 @dataclass
@@ -364,11 +364,17 @@ class SocketListener:
     def get_accumulated_messages(self) -> str:
         """Get all messages concatenated together (decoded)."""
         with self._condition:
-            return ''.join(decode_message(m) for m in self._messages)
+            return self.get_accumulated_messages_unlocked()
 
     def get_accumulated_messages_unlocked(self) -> str:
-        """Get all messages concatenated together (decoded). Caller must hold lock."""
-        return ''.join(decode_message(m) for m in self._messages)
+        """Get all messages concatenated together (decoded). Caller must hold lock.
+
+        Concatenates at the byte level before decoding, so a UTF-8
+        sequence split across two messages still decodes correctly.
+        """
+        return b"".join(bytes(m) for m in self._messages).decode(
+            "utf-8", errors="replace"
+        )
 
     def wait_for_user_count(self, expected_count, timeout=5) -> bool:
         """Wait for a specific user count."""

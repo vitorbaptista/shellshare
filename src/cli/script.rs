@@ -5,9 +5,9 @@
 
 #![allow(unsafe_code)] // PTY handling requires unsafe for terminal control
 
-use crate::cli::http;
 use crate::cli::get_terminal_size;
-use crate::protocol::{EncodedMessage, TermSize};
+use crate::cli::ws;
+use crate::protocol::TermSize;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
@@ -82,18 +82,10 @@ impl RawModeGuard {
     fn new() -> Self { Self }
 }
 
-/// Outcome of one attempt to pull data from the PTY-output channel,
-/// unifying `try_recv` and `recv_timeout` results for the sender loop.
-enum Recv {
-    Data(Vec<u8>),
-    Empty,
-    Closed,
-}
-
 /// Run script mode - spawn a shell in a PTY and stream output to server
 #[allow(clippy::too_many_lines)] // Complex PTY setup with multiple threads
 pub fn run_script_mode(
-    client: &http::Client,
+    transport: ws::Transport,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Enable raw mode BEFORE spawning shell
@@ -183,11 +175,10 @@ pub fn run_script_mode(
         Some(handle)
     };
 
-    // Channel for sending PTY output to HTTP sender thread (non-blocking)
+    // Channel for sending PTY output to the sender thread (non-blocking)
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
     // Clone for threads
-    let client_clone = client.clone();
     let running_clone = running.clone();
     let running_http = running.clone();
 
@@ -195,97 +186,55 @@ pub fn run_script_mode(
     let http_cols = current_cols;
     let http_rows = current_rows;
 
-    // Spawn HTTP sender thread - handles all network I/O separately
-    // This ensures network latency never blocks terminal display
+    // Spawn the sender thread - it owns the transport and handles all
+    // network I/O, so network latency never blocks terminal display
     let http_thread = thread::spawn(move || {
-        // Latency-first sending: output is flushed as soon as it appears,
-        // with MIN_SEND_INTERVAL pacing the request rate. A chatty PTY
-        // batches naturally - whatever accumulates while pacing (or while
-        // the previous request is in flight) goes out as one request.
-        const MIN_SEND_INTERVAL: Duration = Duration::from_millis(15);
-        // Per-request payload cap. Worst-case wire expansion is 4x (3x
-        // percent-encoding, then 4/3 Base64), so 64KB raw stays under the
-        // server's 300KB body limit no matter what the bytes are.
-        const MAX_BUFFER_SIZE: usize = 64 * 1024;
+        // Bound on one frame's payload; chunks queued beyond this are
+        // simply sent as further frames on the same connection
+        const MAX_BATCH: usize = 64 * 1024;
 
-        let mut send_buffer: Vec<u8> = Vec::with_capacity(8192);
-        let mut last_send: Option<Instant> = None;
-        let mut disconnected = false;
-
-        // Encode and POST the first MAX_BUFFER_SIZE bytes of the buffer,
-        // keeping any remainder for the next request. The cap lives here,
-        // not in the receive loop, so no burst of channel chunks can push
-        // a request over the server's body limit.
-        let send_chunk = |send_buffer: &mut Vec<u8>| -> Result<(), http::HttpError> {
-            let send_len = send_buffer.len().min(MAX_BUFFER_SIZE);
-            let encoded = EncodedMessage::encode(&send_buffer[..send_len]);
+        let mut transport = transport;
+        loop {
+            if !running_http.load(Ordering::SeqCst) {
+                break;
+            }
             let size = TermSize {
                 cols: http_cols.load(Ordering::SeqCst),
                 rows: http_rows.load(Ordering::SeqCst),
             };
-            client_clone.post_message(&encoded, size)?;
-            send_buffer.drain(..send_len);
-            Ok(())
-        };
 
-        while !disconnected && running_http.load(Ordering::SeqCst) {
-            // Wait for the first chunk
-            if send_buffer.is_empty() {
-                match rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(data) => send_buffer.extend(data),
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        disconnected = true;
-                        break;
+            let result = match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(data) => {
+                    // Coalesce whatever else is already queued into one
+                    // frame, then send immediately - frames are cheap,
+                    // so there is no pacing
+                    let mut batch = data;
+                    while batch.len() < MAX_BATCH {
+                        match rx.try_recv() {
+                            Ok(more) => batch.extend(more),
+                            Err(_) => break,
+                        }
                     }
+                    transport.send(batch, size)
                 }
-            }
+                // Idle: let the transport retry buffered data/reconnects
+                Err(mpsc::RecvTimeoutError::Timeout) => transport.tick(size),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
 
-            // Honor pacing, batching anything that arrives while waiting;
-            // then drain whatever else is already queued. A full buffer
-            // sends immediately - the backlog must not grow unbounded.
-            while send_buffer.len() < MAX_BUFFER_SIZE {
-                let wait = last_send
-                    .map_or(Duration::ZERO, |t| MIN_SEND_INTERVAL.saturating_sub(t.elapsed()));
-                let received = if wait.is_zero() {
-                    match rx.try_recv() {
-                        Ok(data) => Recv::Data(data),
-                        Err(mpsc::TryRecvError::Empty) => Recv::Empty,
-                        Err(mpsc::TryRecvError::Disconnected) => Recv::Closed,
-                    }
-                } else {
-                    match rx.recv_timeout(wait) {
-                        Ok(data) => Recv::Data(data),
-                        Err(mpsc::RecvTimeoutError::Timeout) => Recv::Empty,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => Recv::Closed,
-                    }
-                };
-                match received {
-                    Recv::Data(data) => send_buffer.extend(data),
-                    // Pacing satisfied and nothing queued: send now
-                    Recv::Empty if wait.is_zero() => break,
-                    // Pacing wait elapsed: loop once more to drain the queue
-                    Recv::Empty => {}
-                    Recv::Closed => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-
-            if let Err(e) = send_chunk(&mut send_buffer) {
+            if let Err(e) = result {
+                // The room belongs to someone else now; it is not ours
+                // to delete, so stop without the shutdown cleanup
                 eprintln!("\r\nERROR: {e}");
                 eprintln!("\rERROR: Exit shellshare and try again later.");
                 running_http.store(false, Ordering::SeqCst);
                 return;
             }
-            last_send = Some(Instant::now());
         }
 
-        // Channel closed: flush whatever is left
-        if disconnected {
-            while !send_buffer.is_empty() && send_chunk(&mut send_buffer).is_ok() {}
-        }
+        // Normal end (shell exit or Ctrl+C): flush pending output and
+        // delete the room
+        transport.shutdown_and_delete();
     });
 
     // Spawn PTY reader thread - reads from PTY, displays locally, sends to channel

@@ -44,6 +44,10 @@
       var room = window.location.pathname;
       var term;
       var currentSize = {};
+      // Messages are binary: raw terminal bytes, decoded as one
+      // continuous UTF-8 stream (sequences may split across messages)
+      var decoder = new TextDecoder('utf-8');
+      var joinedBefore = false;
       var onlineCounter = document.getElementById('online-counter');
       var onlineCounterPlural = document.getElementById('online-counter-plural');
       var terminalContainer = document.getElementById('terminal');
@@ -57,7 +61,24 @@
       // Init terminal with a default size.
       onSize({cols: 80, rows: 30});
 
-      socket.emit('join', room);
+      // Join on every connect: socket.io reconnects by itself after a
+      // network blip, but room membership is lost server-side, so a
+      // viewer that doesn't re-join goes silently dead.
+      socket.on('connect', function () {
+        if (joinedBefore) {
+          // The server replays the room history on join; start from a
+          // clean terminal instead of appending a duplicate
+          if (term) {
+            term.destroy();
+            term = null;
+          }
+          currentSize = {};
+          decoder = new TextDecoder('utf-8');
+          onSize({cols: 80, rows: 30});
+        }
+        joinedBefore = true;
+        socket.emit('join', room);
+      });
       socket.on('usersCount', function (onlineUsers) {
         onlineCounter.innerHTML = onlineUsers;
         if (onlineUsers == 1) {
@@ -68,8 +89,7 @@
       });
       socket.on('message', function (message) {
         if (term && message) {
-          var decoded_message = decodeURIComponent(atob(message));
-          term.write(decoded_message);
+          term.write(decoder.decode(message, {stream: true}));
         }
       });
       socket.on('size', onSize);

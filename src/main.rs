@@ -212,12 +212,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 bare_host.to_string()
             };
+            // Connecting the client claims the room immediately, so
+            // nobody can take the name between server start and the
+            // first broadcast
             let args = cli::ClientArgs {
                 server: format!("http://{url_host}:{}", addr.port()),
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
-                claim_room: true,
             };
             cli::run(args)?;
         }
@@ -228,7 +230,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
-                claim_room: false,
             };
             cli::run(args)?;
         }

@@ -8,13 +8,17 @@ mod rooms;
 
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
+        DefaultBodyLimit, Path, Query, State,
+    },
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
 use crate::protocol;
+use bytes::Bytes;
 use binaries::BinaryDownloadQuery;
 use rooms::{RoomId, Rooms};
 use socketioxide::{
@@ -159,6 +163,8 @@ pub async fn serve_on(
         .route("/r/{*room}", get(pages::room_page_handler))
         .route("/r/{*room}", post(broadcast_handler))
         .route("/r/{*room}", delete(delete_room_handler))
+        // WebSocket ingest - the fast path for broadcasting clients
+        .route("/ws/r/{*room}", get(ws_ingest_handler))
         // Binary download (serves embedded binaries or self)
         .route("/bin/shellshare", get(serve_binary))
         // Static files - fallback
@@ -227,9 +233,10 @@ fn setup_socket_handlers(io: &SocketIo) {
                         }
                     }
 
-                    // Then send accumulated message history
-                    if let Some(msg) = snapshot.history {
-                        if let Err(e) = socket.emit("message", msg.as_str()) {
+                    // Then send accumulated message history as one
+                    // binary attachment
+                    if let Some(history) = snapshot.history {
+                        if let Err(e) = socket.emit("message", &history) {
                             warn!("Failed to emit message: {:?}", e);
                         }
                     }
@@ -298,29 +305,44 @@ async fn broadcast_handler(
         !secret.is_empty()
     );
 
-    // Borrow the broadcastable parts of the body: a size carrying
-    // dimensions, and a wire-format message string (both optional)
+    // Extract the broadcastable parts of the body: a size carrying
+    // dimensions, and a legacy wire-format message decoded to raw bytes
+    // right here at the edge (both optional)
     let body_obj = body.as_object();
     let size = body_obj
         .and_then(|o| o.get("size"))
         .filter(|s| protocol::size_has_dimensions(s));
     let message = body_obj
         .and_then(|o| o.get("message"))
-        .and_then(|m| m.as_str());
+        .and_then(|m| m.as_str())
+        .and_then(protocol::decode_wire);
 
-    // Claim/verify the room and store - atomically, and BEFORE emitting,
-    // so a viewer joining mid-broadcast can't miss the message entirely
-    if state
-        .rooms
-        .append(&room_id, secret, size, message)
+    if ingest(&state, &room_id, secret, size, message.as_ref())
         .await
         .is_err()
     {
         return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
 
-    // Forward to viewers: size FIRST, so the terminal is resized before
-    // content arrives
+    plain_response(StatusCode::OK, "OK")
+}
+
+/// Store a broadcast and forward it to viewers - the single ingest path
+/// shared by the HTTP and WebSocket transports.
+///
+/// The room is claimed/verified and mutated atomically, BEFORE emitting,
+/// so a viewer joining mid-broadcast can't miss the message entirely.
+/// Size is forwarded FIRST, so the terminal is resized before content
+/// arrives.
+async fn ingest(
+    state: &AppState,
+    room_id: &RoomId,
+    secret: &str,
+    size: Option<&serde_json::Value>,
+    message: Option<&Bytes>,
+) -> Result<(), rooms::Unauthorized> {
+    state.rooms.append(room_id, secret, size, message).await?;
+
     if let Some(io) = state.io.get() {
         let room_name = room_id.as_str().to_string();
         if let Some(size) = size {
@@ -328,7 +350,8 @@ async fn broadcast_handler(
                 let _ = ns.within(room_name.clone()).emit("size", size);
             }
         }
-        // Emit ONLY the new message; accumulated history is sent on join
+        // Emit ONLY the new message - as a binary attachment - and let
+        // joins deliver the accumulated history
         if let Some(message) = message {
             if let Some(ns) = io.of("/") {
                 let _ = ns.within(room_name).emit("message", message);
@@ -336,7 +359,100 @@ async fn broadcast_handler(
         }
     }
 
-    plain_response(StatusCode::OK, "OK")
+    Ok(())
+}
+
+/// GET /ws/r/:room - WebSocket ingest for broadcasting clients.
+///
+/// The fast path: binary frames carry raw terminal bytes; text frames
+/// carry JSON control messages (`{"size": {...}}` to resize,
+/// `{"delete": true}` to delete the room on exit). The room is claimed -
+/// or the password verified - at upgrade time, so an unauthorized client
+/// is rejected with 401 before the connection is established.
+async fn ws_ingest_handler(
+    Path(room_path): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let room_id = RoomId::parse(&room_path);
+    let secret = auth_secret(&headers).to_string();
+
+    if state
+        .rooms
+        .append(&room_id, &secret, None, None)
+        .await
+        .is_err()
+    {
+        return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+
+    info!("WS ingest connected for room {:?}", room_id);
+    ws.on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret))
+}
+
+/// Receive loop for one broadcasting WebSocket connection.
+///
+/// Every stored binary frame is acknowledged with the cumulative byte
+/// count received on this connection (`{"ack": n}`), so the client can
+/// release its replay buffer only for data that actually arrived - a
+/// TCP write succeeding proves nothing once the connection dies.
+///
+/// Delivery is at-least-once: around a reconnect, a frame whose ack was
+/// lost in flight is replayed, and a stale loop for the previous
+/// connection may briefly overlap with the new one. Viewers can see a
+/// short duplicate render in that window; the alternative (fencing old
+/// connections) would make two broadcasters sharing a password kick
+/// each other in an endless reconnect fight.
+///
+/// Ends on close, error, or when the room's password no longer matches
+/// (possible if the room was evicted for inactivity and re-claimed by
+/// someone else); the client reconnects and is then rejected at upgrade.
+async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId, secret: String) {
+    let mut received_bytes: u64 = 0;
+    while let Some(Ok(msg)) = socket.recv().await {
+        let result = match msg {
+            WsMessage::Binary(bytes) => {
+                let frame_len = bytes.len() as u64;
+                let result = ingest(&state, &room_id, &secret, None, Some(&bytes)).await;
+                if result.is_ok() {
+                    received_bytes += frame_len;
+                    let ack = format!("{{\"ack\":{received_bytes}}}");
+                    if socket.send(WsMessage::Text(ack.into())).await.is_err() {
+                        break;
+                    }
+                }
+                result
+            }
+            WsMessage::Text(text) => {
+                let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                if body.get("delete").and_then(serde_json::Value::as_bool) == Some(true) {
+                    let _ = state.rooms.delete(&room_id, &secret).await;
+                    break;
+                }
+                let size = body
+                    .get("size")
+                    .filter(|s| protocol::size_has_dimensions(s));
+                match size {
+                    Some(size) => ingest(&state, &room_id, &secret, Some(size), None).await,
+                    None => Ok(()),
+                }
+            }
+            // axum answers pings itself; a ping still refreshes the room
+            // so an idle-but-connected broadcast isn't evicted
+            WsMessage::Ping(_) | WsMessage::Pong(_) => {
+                state.rooms.append(&room_id, &secret, None, None).await
+            }
+            WsMessage::Close(_) => break,
+        };
+        if result.is_err() {
+            warn!("WS ingest for room {:?} lost the room; closing", room_id);
+            break;
+        }
+    }
+    info!("WS ingest disconnected for room {:?}", room_id);
 }
 
 /// DELETE /r/:room - Delete room
