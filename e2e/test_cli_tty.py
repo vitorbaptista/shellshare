@@ -294,6 +294,13 @@ class TestTtySignals:
     ):
         cli = tty_cli(unique_room, unique_password)
         assert cli.wait_for_screen("Sharing terminal in")
+        # Wait for the shell PROMPT, not just the banner: a Ctrl+C that
+        # lands while the shell is still starting kills it outright
+        # (SIGINT default disposition) instead of exercising the
+        # double-tap force-quit path
+        assert cli.wait_for_screen("$ "), (
+            f"Shell prompt never appeared. Screen: {cli.screen!r}"
+        )
 
         # Two Ctrl+C keypresses in quick succession (separate reads:
         # the CLI detects the double-tap across reads within 500ms)
