@@ -34,7 +34,7 @@ cd e2e && uv sync && uv run pytest -n 10
 ### Client (`src/cli/`)
 Multi-threaded design ensures network latency never blocks terminal display:
 - **PTY reader thread**: Captures shell output, displays locally, sends to HTTP sender
-- **HTTP sender thread**: Batches and rate-limits uploads (100ms intervals, 4KB buffer)
+- **HTTP sender thread**: Sends output as soon as it appears, paced at 15ms between requests; whatever accumulates while pacing or mid-request goes out as one batch (up to 64KB raw)
 - **Stdin forwarder thread**: Routes user input to PTY
 - **Signal handler** (Unix): Handles SIGWINCH for terminal resize
 

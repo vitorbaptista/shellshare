@@ -42,8 +42,8 @@ impl std::error::Error for HttpError {}
 #[derive(Clone)]
 pub struct Client {
     inner: ReqwestClient,
-    server_url: String,
-    room_path: String,
+    /// Full room URL (`{server}/{room_path}`), shared by every request
+    room_url: String,
     password: String,
 }
 
@@ -56,12 +56,14 @@ impl Client {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let inner = ReqwestClient::builder()
             .timeout(Duration::from_secs(30))
+            // Broadcasts are many small POSTs on a kept-alive connection;
+            // Nagle's algorithm would only add latency
+            .tcp_nodelay(true)
             .build()?;
 
         Ok(Self {
             inner,
-            server_url: server_url.to_string(),
-            room_path: room_path.to_string(),
+            room_url: format!("{server_url}/{room_path}"),
             password: password.to_string(),
         })
     }
@@ -72,8 +74,7 @@ impl Client {
     /// password (first caller wins), closing the window where someone
     /// else could take the name between server start and first output.
     pub fn claim_room(&self) -> Result<(), HttpError> {
-        let url = format!("{}/{}", self.server_url, self.room_path);
-        self.do_post(&url, &json!({}))
+        self.do_post(&json!({}))
     }
 
     /// POST a message to the server with retry logic
@@ -85,7 +86,6 @@ impl Client {
         const MAX_RETRIES: u32 = 3;
         const RETRY_DELAY: Duration = Duration::from_millis(500);
 
-        let url = format!("{}/{}", self.server_url, self.room_path);
         let body = json!({
             "message": message.as_str(),
             "size": size,
@@ -98,7 +98,7 @@ impl Client {
                 thread::sleep(RETRY_DELAY);
             }
 
-            match self.do_post(&url, &body) {
+            match self.do_post(&body) {
                 Ok(()) => return Ok(()),
                 Err(HttpError::Unauthorized) => return Err(HttpError::Unauthorized),
                 Err(HttpError::RequestTooLarge) => return Err(HttpError::RequestTooLarge),
@@ -113,10 +113,10 @@ impl Client {
     }
 
     /// Perform a single POST request
-    fn do_post(&self, url: &str, body: &serde_json::Value) -> Result<(), HttpError> {
+    fn do_post(&self, body: &serde_json::Value) -> Result<(), HttpError> {
         let response = self
             .inner
-            .post(url)
+            .post(&self.room_url)
             .header("Content-Type", "application/json")
             .header("Authorization", &self.password)
             .json(body)
@@ -135,11 +135,9 @@ impl Client {
 
     /// Send a DELETE request to clean up the room
     pub fn delete_room(&self) -> Result<(), HttpError> {
-        let url = format!("{}/{}", self.server_url, self.room_path);
-
         let response = self
             .inner
-            .delete(&url)
+            .delete(&self.room_url)
             .header("Authorization", &self.password)
             .send()
             .map_err(|e| HttpError::NetworkError(e.to_string()))?;

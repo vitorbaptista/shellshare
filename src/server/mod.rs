@@ -23,11 +23,11 @@ use socketioxide::{
 };
 use std::collections::HashMap;
 use std::future::IntoFuture;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Room cleanup configuration
 #[derive(Clone, Debug)]
@@ -52,8 +52,9 @@ impl Default for CleanupConfig {
 struct AppState {
     /// All live rooms (state, passwords, history, eviction)
     rooms: Rooms,
-    /// Socket.IO instance - wrapped in Arc<RwLock> so handlers see updates
-    io: Arc<RwLock<Option<SocketIo>>>,
+    /// Socket.IO instance - set once at startup, lock-free to read on the
+    /// broadcast hot path
+    io: Arc<OnceLock<SocketIo>>,
     /// Track which rooms each socket is in (for disconnect handling)
     socket_rooms: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Cleanup configuration for abandoned rooms
@@ -146,10 +147,7 @@ pub async fn serve_on(
     setup_socket_handlers(&io);
 
     // Store io in shared state (handlers will see this via Arc)
-    {
-        let mut io_lock = app_state.io.write().await;
-        *io_lock = Some(io);
-    }
+    let _ = app_state.io.set(io);
 
     // Spawn background cleanup task for abandoned rooms
     spawn_cleanup_task(app_state.clone());
@@ -267,8 +265,7 @@ fn setup_socket_handlers(io: &SocketIo) {
             info!("Socket {} was in rooms: {:?}", socket_id, rooms);
 
             // Update user counts for each room
-            let io_guard = state.io.read().await;
-            if let Some(ref io) = *io_guard {
+            if let Some(io) = state.io.get() {
                 for room in rooms {
                     // Count remaining users in room (this socket is already removed)
                     let user_count = io.of("/").map_or(0, |ns| {
@@ -295,7 +292,7 @@ async fn broadcast_handler(
     let room_id = RoomId::parse(&room_path);
     let secret = auth_secret(&headers);
 
-    info!(
+    debug!(
         "Broadcast to room: {:?}, auth present: {}",
         room_id,
         !secret.is_empty()
@@ -324,20 +321,17 @@ async fn broadcast_handler(
 
     // Forward to viewers: size FIRST, so the terminal is resized before
     // content arrives
-    {
-        let io_guard = state.io.read().await;
-        if let Some(io) = io_guard.as_ref() {
-            let room_name = room_id.as_str().to_string();
-            if let Some(size) = size {
-                if let Some(ns) = io.of("/") {
-                    let _ = ns.within(room_name.clone()).emit("size", size);
-                }
+    if let Some(io) = state.io.get() {
+        let room_name = room_id.as_str().to_string();
+        if let Some(size) = size {
+            if let Some(ns) = io.of("/") {
+                let _ = ns.within(room_name.clone()).emit("size", size);
             }
-            // Emit ONLY the new message; accumulated history is sent on join
-            if let Some(message) = message {
-                if let Some(ns) = io.of("/") {
-                    let _ = ns.within(room_name).emit("message", message);
-                }
+        }
+        // Emit ONLY the new message; accumulated history is sent on join
+        if let Some(message) = message {
+            if let Some(ns) = io.of("/") {
+                let _ = ns.within(room_name).emit("message", message);
             }
         }
     }

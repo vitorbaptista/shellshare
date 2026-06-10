@@ -16,50 +16,36 @@
 //! The viewer reverses it with `decodeURIComponent(atob(message))`.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use std::collections::VecDeque;
+
+/// Characters Python's `urllib.parse.quote(s, safe="")` leaves unencoded:
+/// ASCII alphanumerics plus `_ . - ~`. Everything else - including `/`,
+/// which `quote()`'s default `safe='/'` would preserve - is
+/// percent-encoded.
+const PYTHON_QUOTE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'-')
+    .remove(b'~');
 
 /// A message in wire format (URL-encoded then Base64-encoded).
 ///
 /// The only ways to obtain one are [`EncodedMessage::encode`] (from raw
-/// bytes) and [`EncodedMessage::from_wire`] (from a string that is already
-/// in wire format, e.g. received in a broadcast request). This keeps raw
-/// and encoded strings from being confused at compile time.
+/// bytes) and [`MessageHistory::accumulated`] (from stored history). This
+/// keeps raw and encoded strings from being confused at compile time.
 #[derive(Clone, Debug)]
 pub struct EncodedMessage(String);
 
 impl EncodedMessage {
     /// Encode raw bytes into wire format.
-    #[allow(clippy::option_if_let_else)] // if-let is more readable here
+    ///
+    /// Percent-encoding operates on raw bytes, so invalid UTF-8 needs no
+    /// special casing: every byte is encoded exactly as Python's `quote()`
+    /// would encode it.
     pub fn encode(data: &[u8]) -> Self {
-        // First, try to interpret as UTF-8 string for URL encoding.
-        // If it's not valid UTF-8, we encode each byte.
-        let url_encoded = if let Ok(s) = std::str::from_utf8(data) {
-            url_encode_python_style(s)
-        } else {
-            data.iter()
-                .map(|&b| {
-                    if b.is_ascii_alphanumeric()
-                        || b == b'_'
-                        || b == b'.'
-                        || b == b'-'
-                        || b == b'~'
-                    {
-                        (b as char).to_string()
-                    } else {
-                        format!("%{b:02X}")
-                    }
-                })
-                .collect::<String>()
-        };
-
-        Self(BASE64.encode(url_encoded.as_bytes()))
-    }
-
-    /// Wrap a string that is already in wire format (as received from a
-    /// broadcasting client). No validation: the server forwards messages
-    /// verbatim and the viewer is the one that decodes them.
-    pub const fn from_wire(wire: String) -> Self {
-        Self(wire)
+        let url_encoded: String = percent_encode(data, PYTHON_QUOTE).collect();
+        Self(BASE64.encode(url_encoded))
     }
 
     /// The wire-format string, as sent over HTTP and Socket.IO.
@@ -67,29 +53,57 @@ impl EncodedMessage {
         &self.0
     }
 
-    /// Concatenate many wire messages into a single one, for replaying
-    /// history to late joiners.
-    ///
-    /// Works at the Base64 layer: each message decodes to URL-encoded
-    /// bytes, which concatenate cleanly and re-encode as one message.
-    /// Messages that fail to decode are skipped.
-    pub fn accumulate(messages: &[Self]) -> Option<Self> {
-        if messages.is_empty() {
+}
+
+/// Bounded message history for replaying to late joiners.
+///
+/// Messages are kept base64-decoded (i.e. as URL-encoded bytes): they
+/// concatenate cleanly at that layer, so producing a joiner's catch-up
+/// message is one concatenation and one Base64 encode, instead of
+/// re-decoding the entire history on every join. Eviction is O(1).
+pub struct MessageHistory {
+    chunks: VecDeque<Vec<u8>>,
+    max_messages: usize,
+}
+
+impl MessageHistory {
+    /// An empty history holding at most `max_messages` messages.
+    pub const fn new(max_messages: usize) -> Self {
+        Self {
+            chunks: VecDeque::new(),
+            max_messages,
+        }
+    }
+
+    /// Append a wire-format message, evicting the oldest when full.
+    /// Messages that fail to decode (the viewer could not have decoded
+    /// them either) or carry no content are dropped rather than allowed
+    /// to evict real history.
+    pub fn push(&mut self, wire: &str) {
+        let Ok(decoded) = BASE64.decode(wire) else {
+            return;
+        };
+        if decoded.is_empty() {
+            return;
+        }
+        if self.chunks.len() == self.max_messages {
+            self.chunks.pop_front();
+        }
+        self.chunks.push_back(decoded);
+    }
+
+    /// The whole history as a single wire message, or `None` when there
+    /// is no content to replay.
+    pub fn accumulated(&self) -> Option<EncodedMessage> {
+        let total: usize = self.chunks.iter().map(Vec::len).sum();
+        if total == 0 {
             return None;
         }
-
-        let mut accumulated = Vec::new();
-        for msg in messages {
-            if let Ok(decoded) = BASE64.decode(&msg.0) {
-                accumulated.extend(decoded);
-            }
+        let mut all = Vec::with_capacity(total);
+        for chunk in &self.chunks {
+            all.extend_from_slice(chunk);
         }
-
-        if accumulated.is_empty() {
-            None
-        } else {
-            Some(Self(BASE64.encode(&accumulated)))
-        }
+        Some(EncodedMessage(BASE64.encode(&all)))
     }
 }
 
@@ -115,26 +129,4 @@ impl Default for TermSize {
 pub fn size_has_dimensions(size: &serde_json::Value) -> bool {
     size.as_object()
         .is_some_and(|obj| obj.contains_key("cols") && obj.contains_key("rows"))
-}
-
-/// URL-encode a string like Python's `urllib.parse.quote(s, safe="")`.
-///
-/// With an empty `safe` set, `quote()` leaves only these unencoded:
-/// - ASCII letters (a-z, A-Z)
-/// - ASCII digits (0-9)
-/// - '_', '.', '-', '~'
-///
-/// Everything else - including '/', which `quote()`'s default `safe='/'`
-/// would preserve - is percent-encoded.
-fn url_encode_python_style(s: &str) -> String {
-    // percent_encoding's NON_ALPHANUMERIC encodes everything except ASCII
-    // alphanumeric. We need to also NOT encode: _ . - ~
-    let encoded = percent_encode(s.as_bytes(), NON_ALPHANUMERIC).to_string();
-
-    // Decode the safe characters that Python's quote() doesn't encode
-    encoded
-        .replace("%5F", "_")
-        .replace("%2E", ".")
-        .replace("%2D", "-")
-        .replace("%7E", "~")
 }

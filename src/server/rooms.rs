@@ -12,7 +12,7 @@
 //!   behind one lock, so authorization and mutation cannot race - claims,
 //!   appends, deletions, and eviction are each a single critical section.
 
-use crate::protocol::EncodedMessage;
+use crate::protocol::{EncodedMessage, MessageHistory};
 use percent_encoding::percent_decode_str;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -71,8 +71,8 @@ pub struct RoomSnapshot {
 struct Room {
     /// The password that claimed this room
     password: String,
-    /// Message history in wire format, capped at [`MAX_HISTORY_MESSAGES`]
-    messages: Vec<EncodedMessage>,
+    /// Message history, capped at [`MAX_HISTORY_MESSAGES`]
+    messages: MessageHistory,
     /// Terminal size, forwarded verbatim to viewers
     size: Option<serde_json::Value>,
     /// Last activity (broadcast or viewer join), drives eviction
@@ -83,7 +83,7 @@ impl Room {
     fn new(password: &str) -> Self {
         Self {
             password: password.to_string(),
-            messages: Vec::new(),
+            messages: MessageHistory::new(MAX_HISTORY_MESSAGES),
             size: None,
             last_activity: Instant::now(),
         }
@@ -130,14 +130,7 @@ impl Rooms {
         }
 
         if let Some(message) = message {
-            entry
-                .messages
-                .push(EncodedMessage::from_wire(message.to_string()));
-            // Keep only the newest MAX_HISTORY_MESSAGES
-            let excess = entry.messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
-            if excess > 0 {
-                entry.messages.drain(..excess);
-            }
+            entry.messages.push(message);
         }
 
         Ok(())
@@ -152,7 +145,7 @@ impl Rooms {
         entry.last_activity = Instant::now();
         Some(RoomSnapshot {
             size: entry.size.clone(),
-            history: EncodedMessage::accumulate(&entry.messages),
+            history: entry.messages.accumulated(),
         })
     }
 

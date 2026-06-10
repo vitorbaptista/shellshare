@@ -20,5 +20,8 @@ __pycache__/
 e2e/.venv/
 e2e/.pytest_cache/
 
+# Benchmark results (machine-specific snapshots)
+e2e/bench-*.json
+
 # Misc
 ecosystem.json5
