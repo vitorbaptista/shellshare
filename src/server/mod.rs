@@ -15,7 +15,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
-    Json, Router,
+    Router,
 };
 use crate::protocol;
 use bytes::Bytes;
@@ -65,8 +65,13 @@ struct AppState {
     cleanup_config: CleanupConfig,
 }
 
-/// Request body for POST /r/:room - using Value to preserve null vs missing distinction
-type BroadcastRequest = serde_json::Value;
+/// What `POST /r/:room` answers since the WebSocket transport replaced
+/// it. Old clients land here when they try to broadcast; the body is the
+/// closest thing to an upgrade prompt we can give them (some print it,
+/// the rest at least fail loudly with the 410).
+const LEGACY_CLIENT_MESSAGE: &str = "This shellshare server no longer supports broadcasting \
+    over HTTP POST. Your client is too old: download the latest from this server's home page \
+    (it serves the binary at /bin/shellshare) and share again.";
 
 /// Run the shellshare server
 pub async fn run(
@@ -289,42 +294,14 @@ fn setup_socket_handlers(io: &SocketIo) {
     });
 }
 
-/// POST /r/:room - Broadcast message to room
-async fn broadcast_handler(
-    Path(room_path): Path<String>,
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    Json(body): Json<BroadcastRequest>,
-) -> impl IntoResponse {
-    let room_id = RoomId::parse(&room_path);
-    let secret = auth_secret(&headers);
-
-    debug!(
-        "Broadcast to room: {:?}, auth present: {}",
-        room_id,
-        !secret.is_empty()
-    );
-
-    // Extract the broadcastable parts of the body: a size carrying
-    // dimensions, and a legacy wire-format message decoded to raw bytes
-    // right here at the edge (both optional)
-    let body_obj = body.as_object();
-    let size = body_obj
-        .and_then(|o| o.get("size"))
-        .filter(|s| protocol::size_has_dimensions(s));
-    let message = body_obj
-        .and_then(|o| o.get("message"))
-        .and_then(|m| m.as_str())
-        .and_then(protocol::decode_wire);
-
-    if ingest(&state, &room_id, secret, size, message.as_ref())
-        .await
-        .is_err()
-    {
-        return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
-    }
-
-    plain_response(StatusCode::OK, "OK")
+/// POST /r/:room - The retired HTTP broadcast endpoint.
+///
+/// Always answers 410 Gone with an upgrade prompt, whatever the body:
+/// only pre-WebSocket clients still POST here, and a clear rejection
+/// beats silently dropping their output.
+async fn broadcast_handler(Path(room_path): Path<String>) -> impl IntoResponse {
+    debug!("Legacy POST broadcast to room {:?} rejected", RoomId::parse(&room_path));
+    plain_response(StatusCode::GONE, LEGACY_CLIENT_MESSAGE)
 }
 
 /// Store a broadcast and forward it to viewers - the single ingest path
@@ -411,18 +388,17 @@ async fn ws_ingest_handler(
 async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId, secret: String) {
     let mut received_bytes: u64 = 0;
     while let Some(Ok(msg)) = socket.recv().await {
-        let result = match msg {
+        // Every stored frame is acked; size frames add no bytes, so
+        // their ack repeats the current count (a no-op for the client's
+        // buffer, but it lets a sender await durability of a resize)
+        let (result, ack) = match msg {
             WsMessage::Binary(bytes) => {
                 let frame_len = bytes.len() as u64;
                 let result = ingest(&state, &room_id, &secret, None, Some(&bytes)).await;
                 if result.is_ok() {
                     received_bytes += frame_len;
-                    let ack = format!("{{\"ack\":{received_bytes}}}");
-                    if socket.send(WsMessage::Text(ack.into())).await.is_err() {
-                        break;
-                    }
                 }
-                result
+                (result, true)
             }
             WsMessage::Text(text) => {
                 let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -436,20 +412,26 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
                     .get("size")
                     .filter(|s| protocol::size_has_dimensions(s));
                 match size {
-                    Some(size) => ingest(&state, &room_id, &secret, Some(size), None).await,
-                    None => Ok(()),
+                    Some(size) => (ingest(&state, &room_id, &secret, Some(size), None).await, true),
+                    None => (Ok(()), false),
                 }
             }
             // axum answers pings itself; a ping still refreshes the room
             // so an idle-but-connected broadcast isn't evicted
             WsMessage::Ping(_) | WsMessage::Pong(_) => {
-                state.rooms.append(&room_id, &secret, None, None).await
+                (state.rooms.append(&room_id, &secret, None, None).await, false)
             }
             WsMessage::Close(_) => break,
         };
         if result.is_err() {
             warn!("WS ingest for room {:?} lost the room; closing", room_id);
             break;
+        }
+        if ack {
+            let frame = format!("{{\"ack\":{received_bytes}}}");
+            if socket.send(WsMessage::Text(frame.into())).await.is_err() {
+                break;
+            }
         }
     }
     info!("WS ingest disconnected for room {:?}", room_id);

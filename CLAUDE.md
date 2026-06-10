@@ -53,8 +53,8 @@ Async Tokio + Axum web server with Socket.IO for real-time updates:
 Routes:
 - `GET /` - Home page with OS detection for install command
 - `GET /r/:room` - Viewer page
-- `GET /ws/r/:room` - WebSocket ingest (what the CLI uses): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked
-- `POST /r/:room` - Broadcast message in the legacy wire format, decoded to raw bytes at the edge (first POST claims room with password)
+- `GET /ws/r/:room` - WebSocket ingest (the only broadcast transport): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked
+- `POST /r/:room` - Retired: always 410 Gone with an upgrade message, so pre-WebSocket clients fail loudly instead of silently
 - `DELETE /r/:room` - Cleanup room
 
 ### Wire Protocol (`src/protocol.rs`)
@@ -62,10 +62,8 @@ Terminal output is **raw bytes** end to end: binary WebSocket frames from
 the CLI, raw bytes in room history, binary Socket.IO attachments to
 viewers, decoded in the browser by a streaming `TextDecoder` (the viewer
 script is inline in `templates/room.html`). History accumulation for late
-joiners lives here too. One legacy door remains: `POST /r/:room` accepts
-the original format (URL-encode Python `quote(data, safe="")` style, then
-Base64), converted to raw bytes at ingest by `decode_wire`. Must stay in
-lockstep with `templates/room.html` and `e2e/conftest.py`.
+joiners lives here too. Must stay in lockstep with `templates/room.html`
+and `e2e/conftest.py`.
 
 ## Cross-Platform Notes
 

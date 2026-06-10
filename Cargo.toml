@@ -50,9 +50,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Socket.IO (server)
 socketioxide = { version = "0.15", features = ["state"] }
 
-# Base64 encoding
-base64 = "0.22"
-
 # URL encoding/decoding
 percent-encoding = "2.3"
 

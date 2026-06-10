@@ -8,11 +8,13 @@ server spawned from the release binary. Not a pytest test: run it directly.
     cd e2e && uv run python benchmark.py --label optimized --out bench-optimized.json --compare bench-baseline.json
 
 Scenarios:
-- http_post_rtt:      POST /r/:room round-trip time (the client's send unit)
-- broadcast_latency:  POST start -> Socket.IO message received by a viewer
+- ingest_ack_rtt:     binary frame -> server ack round-trip on one
+                      WebSocket connection (the client's send unit)
+- broadcast_latency:  frame sent -> Socket.IO message received by a viewer
 - cli_latency:        byte written to the CLI's PTY -> received by a viewer
-                      (the headline number: includes the client's batching)
-- http_throughput:    sequential 4KB POSTs, as the client sends them
+                      (the headline number: the full real pipeline)
+- ingest_throughput:  4KB frames streamed on one connection until the
+                      final ack confirms everything is stored
 - cli_throughput:     ~2MB of shell output through the full pipeline
 - join_catchup:       late-joiner join -> full 100-message history received
 """
@@ -33,10 +35,10 @@ from conftest import (
     _free_port,
     _spawn_server,
     decode_message,
-    http_post_message,
     random_id,
     wait_for_content,
     wait_for_server,
+    ws_connect_room,
 )
 
 
@@ -53,22 +55,27 @@ def percentiles(samples_ms):
     }
 
 
-def bench_http_post_rtt(url, iters=300):
+def bench_ingest_ack_rtt(url, iters=300):
     room, password = f"bench-{random_id()}", random_id()
-    samples = []
-    for i in range(iters + 20):
-        t0 = time.perf_counter()
-        status = http_post_message(url, room, password, f"rtt-{i} " * 8)
-        dt = (time.perf_counter() - t0) * 1000
-        assert status == 200, f"POST failed with {status}"
-        if i >= 20:  # warmup
-            samples.append(dt)
-    return percentiles(samples)
+    ws = ws_connect_room(url, room, password)
+    try:
+        samples = []
+        for i in range(iters + 20):
+            payload = f"rtt-{i} ".encode() * 8
+            t0 = time.perf_counter()
+            ws.send_binary(payload)
+            ws.recv()  # the server's ack: the frame is stored
+            dt = (time.perf_counter() - t0) * 1000
+            if i >= 20:  # warmup
+                samples.append(dt)
+        return percentiles(samples)
+    finally:
+        ws.close()
 
 
 def bench_broadcast_latency(url, iters=200):
     room, password = f"bench-{random_id()}", random_id()
-    http_post_message(url, room, password, "warm")  # claim room first
+    ws = ws_connect_room(url, room, password)
     listener = SocketListener(room, server_url=url)
     listener.connect()
     try:
@@ -76,14 +83,16 @@ def bench_broadcast_latency(url, iters=200):
         for i in range(iters + 10):
             marker = f"lat-{i}-{random_id(6)}"
             t0 = time.perf_counter()
-            http_post_message(url, room, password, marker)
+            ws.send_binary(marker.encode())
             ok = wait_for_content(listener, lambda acc, m=marker: m in acc, timeout=5)
             dt = (time.perf_counter() - t0) * 1000
             assert ok, f"marker {marker} never arrived"
+            ws.recv()  # consume the ack outside the timed window
             if i >= 10:
                 samples.append(dt)
         return percentiles(samples)
     finally:
+        ws.close()
         listener.disconnect()
 
 
@@ -156,21 +165,29 @@ def bench_cli_latency(url, iters=30):
         listener.disconnect()
 
 
-def bench_http_throughput(url, iters=300, chunk_size=4096):
+def bench_ingest_throughput(url, iters=300, chunk_size=4096):
     room, password = f"bench-{random_id()}", random_id()
-    chunk = "x" * chunk_size
-    t0 = time.perf_counter()
-    for _ in range(iters):
-        status = http_post_message(url, room, password, chunk)
-        assert status == 200
-    elapsed = time.perf_counter() - t0
-    total_mb = iters * chunk_size / 1e6
+    chunk = b"x" * chunk_size
+    total = iters * chunk_size
+    ws = ws_connect_room(url, room, password, timeout=60)
+    try:
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            ws.send_binary(chunk)
+        # Acks are cumulative bytes; the run is done when the final ack
+        # confirms every frame is stored
+        while json.loads(ws.recv())["ack"] < total:
+            pass
+        elapsed = time.perf_counter() - t0
+    finally:
+        ws.close()
+    total_mb = total / 1e6
     return {
         "n": iters,
         "total_mb": round(total_mb, 2),
         "elapsed_s": round(elapsed, 3),
         "mb_per_s": round(total_mb / elapsed, 2),
-        "req_per_s": round(iters / elapsed, 1),
+        "frames_per_s": round(iters / elapsed, 1),
     }
 
 
@@ -227,10 +244,14 @@ def bench_cli_throughput(url, total_bytes=2_000_000):
 
 def bench_join_catchup(url, iters=10, history_messages=100, message_size=2048):
     room, password = f"bench-{random_id()}", random_id()
-    payload = "h" * message_size
-    for i in range(history_messages):
-        status = http_post_message(url, room, password, f"{i:03d}:{payload}")
-        assert status == 200
+    payload = "h" * (message_size - 4)
+    ws = ws_connect_room(url, room, password)
+    try:
+        for i in range(history_messages):
+            ws.send_binary(f"{i:03d}:{payload}".encode())
+            ws.recv()  # ack: stored before the joins are timed
+    finally:
+        ws.close()
 
     samples = []
     for _ in range(iters):
@@ -250,10 +271,10 @@ def bench_join_catchup(url, iters=10, history_messages=100, message_size=2048):
 
 
 SCENARIOS = {
-    "http_post_rtt": bench_http_post_rtt,
+    "ingest_ack_rtt": bench_ingest_ack_rtt,
     "broadcast_latency": bench_broadcast_latency,
     "cli_latency": bench_cli_latency,
-    "http_throughput": bench_http_throughput,
+    "ingest_throughput": bench_ingest_throughput,
     "cli_throughput": bench_cli_throughput,
     "join_catchup": bench_join_catchup,
 }
@@ -265,7 +286,7 @@ def print_comparison(results, baseline):
         before = baseline["results"].get(name)
         if not before:
             continue
-        for key in ("p50_ms", "p95_ms", "mb_per_s"):
+        for key in ("p50_ms", "p95_ms", "p99_ms", "mb_per_s"):
             if key in current and key in before and before[key]:
                 change = (current[key] - before[key]) / before[key] * 100
                 better = change < 0 if key.endswith("_ms") else change > 0

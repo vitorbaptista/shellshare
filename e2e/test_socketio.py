@@ -51,12 +51,6 @@ def wait_for_server(url, timeout_seconds=30):
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
-def encode_message(text):
-    """Encode a message for the legacy POST ingest format."""
-    quoted = urllib.parse.quote(text)
-    return base64.b64encode(quoted.encode()).decode()
-
-
 def decode_message(data):
     """Decode a received message: raw terminal bytes, sent as a Socket.IO
     binary attachment."""
@@ -68,35 +62,18 @@ _UNSET = object()  # Sentinel for distinguishing None from unset
 
 
 def broadcast_message(room_id, message, password, size=_UNSET):
-    """Broadcast a message via HTTP POST.
-    
+    """Broadcast a message over the WebSocket ingest.
+
     Args:
         size: If not provided, defaults to {"rows": 24, "cols": 80}.
-              Pass None explicitly to send null in JSON.
+              Pass None explicitly to send no size at all; invalid
+              values are forwarded to exercise the server's leniency.
     """
-    import http.client
-    
+    from conftest import broadcast_message as ws_broadcast
+
     if size is _UNSET:
         size = _DEFAULT_SIZE
-    
-    parsed = urllib.parse.urlparse(SERVER_URL)
-    conn = http.client.HTTPConnection(parsed.netloc)
-    
-    body = json.dumps({
-        "message": encode_message(message),
-        "size": size
-    }).encode()
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": password
-    }
-    
-    conn.request('POST', f'/r/{room_id}', body=body, headers=headers)
-    response = conn.getresponse()
-    status = response.status
-    conn.close()
-    return status
+    return ws_broadcast(SERVER_URL, room_id, password, message, size=size)
 
 
 class TestSocketIOConnection:

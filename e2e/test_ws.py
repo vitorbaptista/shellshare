@@ -25,7 +25,7 @@ from conftest import (
     SocketListener,
     _free_port,
     _spawn_server,
-    http_post_message,
+    broadcast_message,
     random_id,
     wait_for_content,
     wait_for_server,
@@ -77,13 +77,13 @@ class TestWsIngest:
         try:
             # The handshake claimed the room: another password is rejected,
             # the claiming password is accepted
-            assert http_post_message(SERVER_URL, unique_room, "other-password", "x") == 401
-            assert http_post_message(SERVER_URL, unique_room, unique_password, "x") == 200
+            assert broadcast_message(SERVER_URL, unique_room, "other-password", "x") == 401
+            assert broadcast_message(SERVER_URL, unique_room, unique_password, "x") == 200
         finally:
             ws.close()
 
     def test_wrong_password_rejected_at_handshake(self, unique_room, unique_password):
-        assert http_post_message(SERVER_URL, unique_room, unique_password, "claimed") == 200
+        assert broadcast_message(SERVER_URL, unique_room, unique_password, "claimed") == 200
 
         with pytest.raises(websocket.WebSocketBadStatusException) as excinfo:
             ws_connect(unique_room, "wrong-password")
@@ -113,7 +113,7 @@ class TestWsIngest:
             assert late.wait_for_message(timeout=2, containing="to be deleted") is None
         finally:
             late.disconnect()
-        assert http_post_message(SERVER_URL, unique_room, "another-password", "x") == 200
+        assert broadcast_message(SERVER_URL, unique_room, "another-password", "x") == 200
 
     def test_utf8_sequence_split_across_frames(self, unique_room, unique_password, socket_listener):
         # 'é' is two bytes; send one per frame. Viewers decode the stream,
@@ -223,7 +223,7 @@ class TestReliability:
                 )
 
                 # Hyphenated marker: term.js renders spaces as &nbsp;
-                assert http_post_message(url, room, password, "first-message") == 200
+                assert broadcast_message(url, room, password, "first-message") == 200
                 page.wait_for_function(
                     "document.getElementById('terminal').innerText.includes('first-message')",
                     timeout=10000,
@@ -239,7 +239,7 @@ class TestReliability:
                 deadline = time.time() + 20
                 seen = False
                 while time.time() < deadline and not seen:
-                    http_post_message(url, room, password, "second-message;")
+                    broadcast_message(url, room, password, "second-message;")
                     seen = page.evaluate(
                         "document.getElementById('terminal').innerText.includes('second-message')"
                     )

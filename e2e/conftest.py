@@ -7,8 +7,7 @@ This module provides:
 - Pytest fixtures for unique rooms, passwords, and socket listeners
 """
 
-import base64
-
+import json
 import random
 import socket
 import string
@@ -24,6 +23,7 @@ from pathlib import Path
 
 import pytest
 import socketio
+import websocket
 
 # Constants
 # Use the Rust binary from target/release (or target/debug for development)
@@ -208,36 +208,48 @@ def wait_for_server(url, timeout_seconds=30):
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
-def http_post_message(server_url, room, password, text, cols=80, rows=24):
-    """POST a broadcast message the way the CLI does. Returns the HTTP status."""
-    import json
+_UNSET = object()  # Sentinel for distinguishing None from unset
 
-    body = json.dumps({
-        "message": encode_message(text),
-        "size": {"cols": cols, "rows": rows},
-    }).encode()
-    req = urllib.request.Request(
-        f"{server_url}/r/{room}",
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": password},
-        method="POST",
+
+def ws_connect_room(server_url, room, password, timeout=5):
+    """Open a broadcasting WebSocket the way the CLI does. The room is
+    claimed (or its password verified) at the handshake; a mismatch
+    raises websocket.WebSocketBadStatusException with status 401."""
+    return websocket.create_connection(
+        f"{server_url.replace('http://', 'ws://')}/ws/r/{room}",
+        header={"Authorization": password},
+        timeout=timeout,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status
-    except urllib.error.HTTPError as e:
-        return e.code
 
 
-def encode_message(text):
-    """Encode a message the same way the CLI does.
+def broadcast_message(server_url, room, password, text=None, size=_UNSET):
+    """Broadcast over the WebSocket ingest the way the CLI does.
 
-    safe="" matters: the Rust implementation percent-encodes everything
-    except ASCII alphanumerics and `_.-~`, including `/` (which quote()'s
-    default safe='/' would preserve).
+    Returns an HTTP-like status so call sites read naturally: 200 when
+    stored (the server's ack is awaited, so the data is durable when
+    this returns), or the handshake's status (e.g. 401) when rejected.
+
+    size: defaults to 80x24; pass None to send no size at all, or any
+    JSON value to exercise the server's leniency (invalid sizes are
+    forwarded but produce no ack and no event).
     """
-    quoted = urllib.parse.quote(text, safe="")
-    return base64.b64encode(quoted.encode()).decode()
+    if size is _UNSET:
+        size = {"cols": 80, "rows": 24}
+    try:
+        ws = ws_connect_room(server_url, room, password)
+    except websocket.WebSocketBadStatusException as e:
+        return e.status_code
+    try:
+        if size is not None:
+            ws.send(json.dumps({"size": size}))
+            if isinstance(size, dict) and "cols" in size and "rows" in size:
+                ws.recv()  # ack: the size is stored before we return
+        if text:
+            ws.send_binary(text.encode())
+            ws.recv()  # ack: the message is stored before we return
+        return 200
+    finally:
+        ws.close()
 
 
 def decode_message(data):

@@ -5,25 +5,9 @@
 //! receive binary Socket.IO attachments which the browser decodes with a
 //! streaming `TextDecoder` (`templates/room.html`). The Python e2e
 //! helpers (`e2e/conftest.py`) must stay in lockstep.
-//!
-//! One legacy door remains: `POST /r/:room` accepts messages in the
-//! original wire format (URL-encoded like Python's
-//! `urllib.parse.quote(data, safe="")`, then Base64). [`decode_wire`]
-//! converts those to raw bytes at the edge; everything past ingest is
-//! raw.
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bytes::Bytes;
-use percent_encoding::percent_decode;
 use std::collections::VecDeque;
-
-/// Decode a legacy wire-format message (URL-encoded then Base64) into
-/// raw bytes. Returns `None` when the Base64 layer is invalid; stray
-/// `%` sequences pass through verbatim, like Python's `unquote`.
-pub fn decode_wire(wire: &str) -> Option<Bytes> {
-    let url_encoded = BASE64.decode(wire).ok()?;
-    Some(percent_decode(&url_encoded).collect::<Vec<u8>>().into())
-}
 
 /// Bounded message history for replaying to late joiners.
 ///
