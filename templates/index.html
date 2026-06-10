@@ -27,7 +27,7 @@
     <div class="main">
       <section class="instructions">
         <div class="download">
-          <code>
+          <code title="Click to copy">
             <span class="macos">curl -sLo shellshare <a href="https://get.shellshare.net/?os=mac">https://get.shellshare.net/?os=mac</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
             <span class="linux">wget -qO shellshare <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a> &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
             <span class="windows">iwr <a href="https://get.shellshare.net/?os=windows">https://get.shellshare.net/?os=windows</a> -OutFile shellshare.exe; .\shellshare.exe</span>
@@ -95,5 +95,19 @@ PS&gt; exit</span>
       <p>Made by <a href="http://vitorbaptista.com">Vitor Baptista</a>.</p>
     </footer>
   </div>
+  <script>
+    document.querySelector('.download code').addEventListener('click', function (event) {
+      if (event.target.closest('a')) return;
+      var visible = Array.prototype.find.call(this.children, function (span) {
+        return span.offsetParent !== null;
+      });
+      if (!visible || !navigator.clipboard) return;
+      var code = this;
+      navigator.clipboard.writeText(visible.textContent.trim()).then(function () {
+        code.classList.add('copied');
+        setTimeout(function () { code.classList.remove('copied'); }, 1500);
+      });
+    });
+  </script>
 </body>
 </html>

@@ -74,6 +74,21 @@ pre {
   -o-border-radius: 41px;
   border-radius: 41px;
   padding: 1em 2em;
+  position: relative;
+  cursor: pointer;
+}
+
+.download code.copied::after {
+  content: "Copied!";
+  position: absolute;
+  top: -1.8em;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #222;
+  color: #F0F0F0;
+  font-size: 0.8em;
+  padding: 0.2em 0.8em;
+  border-radius: 10px;
 }
 
 .shell-output {
