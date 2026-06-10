@@ -89,7 +89,10 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
     let client = http::Client::new(&server, &room_path, &password)?;
 
     if args.claim_room {
-        client.claim_room()?;
+        if let Err(e) = client.claim_room() {
+            eprintln!("ERROR: could not claim room: {e}");
+            std::process::exit(1);
+        }
     }
 
     // Setup Ctrl+C handler for cleanup

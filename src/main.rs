@@ -179,12 +179,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // bind() accepts both "::1" and "[::1]"; strip brackets so
             // the loopback check and the URL see the same host
-            let bare_host = host.trim_start_matches('[').trim_end_matches(']');
+            let bare_host = host
+                .strip_prefix('[')
+                .and_then(|h| h.strip_suffix(']'))
+                .unwrap_or(&host);
+            let parsed_ip = bare_host.parse::<std::net::IpAddr>().ok();
             let is_loopback = bare_host.eq_ignore_ascii_case("localhost")
-                || bare_host
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback());
-            let is_wildcard = matches!(bare_host, "0.0.0.0" | "::");
+                || parsed_ip.is_some_and(|ip| ip.is_loopback());
+            let is_wildcard = parsed_ip.is_some_and(|ip| ip.is_unspecified());
             if !is_loopback {
                 eprintln!(
                     "WARNING: binding a non-loopback address; anyone who can reach this machine \
