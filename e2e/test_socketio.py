@@ -51,16 +51,10 @@ def wait_for_server(url, timeout_seconds=30):
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
-def encode_message(text):
-    """Encode a message the same way the CLI does."""
-    quoted = urllib.parse.quote(text)
-    return base64.b64encode(quoted.encode()).decode()
-
-
-def decode_message(encoded):
-    """Decode a base64 + URL-encoded message."""
-    decoded_b64 = base64.b64decode(encoded).decode('ascii')
-    return urllib.parse.unquote(decoded_b64)
+def decode_message(data):
+    """Decode a received message: raw terminal bytes, sent as a Socket.IO
+    binary attachment."""
+    return bytes(data).decode("utf-8", errors="replace")
 
 
 _DEFAULT_SIZE = {"rows": 24, "cols": 80}
@@ -68,35 +62,18 @@ _UNSET = object()  # Sentinel for distinguishing None from unset
 
 
 def broadcast_message(room_id, message, password, size=_UNSET):
-    """Broadcast a message via HTTP POST.
-    
+    """Broadcast a message over the WebSocket ingest.
+
     Args:
         size: If not provided, defaults to {"rows": 24, "cols": 80}.
-              Pass None explicitly to send null in JSON.
+              Pass None explicitly to send no size at all; invalid
+              values are forwarded to exercise the server's leniency.
     """
-    import http.client
-    
+    from conftest import broadcast_message as ws_broadcast
+
     if size is _UNSET:
         size = _DEFAULT_SIZE
-    
-    parsed = urllib.parse.urlparse(SERVER_URL)
-    conn = http.client.HTTPConnection(parsed.netloc)
-    
-    body = json.dumps({
-        "message": encode_message(message),
-        "size": size
-    }).encode()
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": password
-    }
-    
-    conn.request('POST', f'/r/{room_id}', body=body, headers=headers)
-    response = conn.getresponse()
-    status = response.status
-    conn.close()
-    return status
+    return ws_broadcast(SERVER_URL, room_id, password, message, size=size)
 
 
 class TestSocketIOConnection:
@@ -1346,8 +1323,8 @@ class TestSocketIOSizePassthrough:
 class TestSocketIOMessageFormat:
     """Tests for message format and encoding."""
 
-    def test_message_exact_base64_format(self):
-        """Message should be in base64(url_encode(text)) format."""
+    def test_message_binary_format(self):
+        """Messages reach viewers as binary attachments of raw bytes."""
         wait_for_server(SERVER_URL)
 
         room_id = f"test-{random_id()}"
@@ -1379,13 +1356,10 @@ class TestSocketIOMessageFormat:
 
         assert message_received.wait(timeout=15), "Message not received"
 
-        # Verify raw message is base64
+        # Verify raw message is binary: exactly the broadcast bytes
         raw = raw_messages[-1]
-        assert isinstance(raw, str), f"Message should be string, got {type(raw)}"
-
-        # Decode and verify
-        decoded = decode_message(raw)
-        assert test_message in decoded, f"Expected '{test_message}' in '{decoded}'"
+        assert isinstance(raw, bytes), f"Message should be bytes, got {type(raw)}"
+        assert raw == test_message.encode(), f"Expected {test_message!r}, got {raw!r}"
 
         sio.disconnect()
 

@@ -12,7 +12,8 @@
 //!   behind one lock, so authorization and mutation cannot race - claims,
 //!   appends, deletions, and eviction are each a single critical section.
 
-use crate::protocol::EncodedMessage;
+use crate::protocol::MessageHistory;
+use bytes::Bytes;
 use percent_encoding::percent_decode_str;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,16 +64,16 @@ pub struct Unauthorized;
 pub struct RoomSnapshot {
     /// Current terminal size; must be applied before the history
     pub size: Option<serde_json::Value>,
-    /// Accumulated message history as a single wire message
-    pub history: Option<EncodedMessage>,
+    /// Accumulated message history as one contiguous byte payload
+    pub history: Option<Bytes>,
 }
 
 /// One broadcasting session's state
 struct Room {
     /// The password that claimed this room
     password: String,
-    /// Message history in wire format, capped at [`MAX_HISTORY_MESSAGES`]
-    messages: Vec<EncodedMessage>,
+    /// Message history, capped at [`MAX_HISTORY_MESSAGES`]
+    messages: MessageHistory,
     /// Terminal size, forwarded verbatim to viewers
     size: Option<serde_json::Value>,
     /// Last activity (broadcast or viewer join), drives eviction
@@ -83,7 +84,7 @@ impl Room {
     fn new(password: &str) -> Self {
         Self {
             password: password.to_string(),
-            messages: Vec::new(),
+            messages: MessageHistory::new(MAX_HISTORY_MESSAGES),
             size: None,
             last_activity: Instant::now(),
         }
@@ -103,16 +104,15 @@ impl Rooms {
     /// A first broadcast claims the room with `secret`, even when it
     /// carries neither size nor message. `size` must already be validated
     /// by the caller (see `protocol::size_has_dimensions`); `message` is
-    /// the wire-format string as received from the broadcasting client.
-    /// Both are borrowed so the caller can keep emitting from the same
-    /// values; the one owned copy is made here, for storage.
+    /// raw terminal bytes (`Bytes` clones share the buffer, so the caller
+    /// keeps emitting from the same payload without copying).
     #[allow(clippy::significant_drop_tightening)] // the lock spanning verify+mutate IS the invariant
     pub async fn append(
         &self,
         room: &RoomId,
         secret: &str,
         size: Option<&serde_json::Value>,
-        message: Option<&str>,
+        message: Option<&Bytes>,
     ) -> Result<(), Unauthorized> {
         let mut rooms = self.inner.write().await;
         let entry = rooms
@@ -130,14 +130,7 @@ impl Rooms {
         }
 
         if let Some(message) = message {
-            entry
-                .messages
-                .push(EncodedMessage::from_wire(message.to_string()));
-            // Keep only the newest MAX_HISTORY_MESSAGES
-            let excess = entry.messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
-            if excess > 0 {
-                entry.messages.drain(..excess);
-            }
+            entry.messages.push(message.clone());
         }
 
         Ok(())
@@ -152,7 +145,7 @@ impl Rooms {
         entry.last_activity = Instant::now();
         Some(RoomSnapshot {
             size: entry.size.clone(),
-            history: EncodedMessage::accumulate(&entry.messages),
+            history: entry.messages.accumulated(),
         })
     }
 

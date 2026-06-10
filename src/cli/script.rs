@@ -5,9 +5,9 @@
 
 #![allow(unsafe_code)] // PTY handling requires unsafe for terminal control
 
-use crate::cli::http;
 use crate::cli::get_terminal_size;
-use crate::protocol::{EncodedMessage, TermSize};
+use crate::cli::ws;
+use crate::protocol::TermSize;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
@@ -85,7 +85,7 @@ impl RawModeGuard {
 /// Run script mode - spawn a shell in a PTY and stream output to server
 #[allow(clippy::too_many_lines)] // Complex PTY setup with multiple threads
 pub fn run_script_mode(
-    client: &http::Client,
+    transport: ws::Transport,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Enable raw mode BEFORE spawning shell
@@ -175,11 +175,10 @@ pub fn run_script_mode(
         Some(handle)
     };
 
-    // Channel for sending PTY output to HTTP sender thread (non-blocking)
+    // Channel for sending PTY output to the sender thread (non-blocking)
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
     // Clone for threads
-    let client_clone = client.clone();
     let running_clone = running.clone();
     let running_http = running.clone();
 
@@ -187,63 +186,55 @@ pub fn run_script_mode(
     let http_cols = current_cols;
     let http_rows = current_rows;
 
-    // Spawn HTTP sender thread - handles all network I/O separately
-    // This ensures network latency never blocks terminal display
+    // Spawn the sender thread - it owns the transport and handles all
+    // network I/O, so network latency never blocks terminal display
     let http_thread = thread::spawn(move || {
-        const SEND_INTERVAL: Duration = Duration::from_millis(100);
-        const MAX_BUFFER_SIZE: usize = 4096;
+        // Bound on one frame's payload; chunks queued beyond this are
+        // simply sent as further frames on the same connection
+        const MAX_BATCH: usize = 64 * 1024;
 
-        let mut send_buffer: Vec<u8> = Vec::with_capacity(8192);
-        let mut last_send = Instant::now();
-
+        let mut transport = transport;
         loop {
             if !running_http.load(Ordering::SeqCst) {
                 break;
             }
+            let size = TermSize {
+                cols: http_cols.load(Ordering::SeqCst),
+                rows: http_rows.load(Ordering::SeqCst),
+            };
 
-            // Try to receive data with timeout
-            match rx.recv_timeout(Duration::from_millis(50)) {
+            let result = match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(data) => {
-                    send_buffer.extend(data);
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // No data received, check if we should flush buffer
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    // Channel closed, send remaining data and exit
-                    if !send_buffer.is_empty() {
-                        let encoded = EncodedMessage::encode(&send_buffer);
-                        let size = TermSize {
-                            cols: http_cols.load(Ordering::SeqCst),
-                            rows: http_rows.load(Ordering::SeqCst),
-                        };
-                        let _ = client_clone.post_message(&encoded, size);
+                    // Coalesce whatever else is already queued into one
+                    // frame, then send immediately - frames are cheap,
+                    // so there is no pacing
+                    let mut batch = data;
+                    while batch.len() < MAX_BATCH {
+                        match rx.try_recv() {
+                            Ok(more) => batch.extend(more),
+                            Err(_) => break,
+                        }
                     }
-                    break;
+                    transport.send(batch, size)
                 }
-            }
+                // Idle: let the transport retry buffered data/reconnects
+                Err(mpsc::RecvTimeoutError::Timeout) => transport.tick(size),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
 
-            // Send if buffer is large enough OR enough time has passed
-            let should_send = send_buffer.len() >= MAX_BUFFER_SIZE
-                || (last_send.elapsed() >= SEND_INTERVAL && !send_buffer.is_empty());
-
-            if should_send {
-                let encoded = EncodedMessage::encode(&send_buffer);
-                let size = TermSize {
-                    cols: http_cols.load(Ordering::SeqCst),
-                    rows: http_rows.load(Ordering::SeqCst),
-                };
-
-                if let Err(e) = client_clone.post_message(&encoded, size) {
-                    eprintln!("\r\nERROR: {e}");
-                    eprintln!("\rERROR: Exit shellshare and try again later.");
-                    running_http.store(false, Ordering::SeqCst);
-                    break;
-                }
-                send_buffer.clear();
-                last_send = Instant::now();
+            if let Err(e) = result {
+                // The room belongs to someone else now; it is not ours
+                // to delete, so stop without the shutdown cleanup
+                eprintln!("\r\nERROR: {e}");
+                eprintln!("\rERROR: Exit shellshare and try again later.");
+                running_http.store(false, Ordering::SeqCst);
+                return;
             }
         }
+
+        // Normal end (shell exit or Ctrl+C): flush pending output and
+        // delete the room
+        transport.shutdown_and_delete();
     });
 
     // Spawn PTY reader thread - reads from PTY, displays locally, sends to channel

@@ -39,7 +39,7 @@ from conftest import (
     CLI_PATH,
     SERVER_URL,
     SocketListener,
-    http_post_message,
+    broadcast_message,
     poll_until,
     wait_for_content,
 )
@@ -200,7 +200,7 @@ class TestTtyBroadcast:
         assert cli.wait_exit()
 
         # The room was deleted: a different password can claim it again
-        status = http_post_message(
+        status = broadcast_message(
             SERVER_URL, unique_room, f"other-{unique_password}", "claimed"
         )
         assert status == 200, (
@@ -282,7 +282,7 @@ class TestTtySignals:
         assert cli.wait_exit(), "CLI did not exit on SIGINT"
         # The Ctrl+C handler deletes the room: it can be claimed anew
         assert poll_until(
-            lambda: http_post_message(
+            lambda: broadcast_message(
                 SERVER_URL, unique_room, f"other-{unique_password}", "x"
             )
             == 200,

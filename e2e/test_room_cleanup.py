@@ -7,7 +7,7 @@ dedicated_server fixture instead of using the shared one on :3000.
 
 import time
 
-from conftest import SocketListener, http_post_message, poll_until, random_id
+from conftest import SocketListener, broadcast_message, poll_until, random_id
 
 
 def _room_has_history(server_url, room, marker, settle=1.0):
@@ -40,7 +40,7 @@ class TestRoomTtlCleanup:
         server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
         room = f"ttl-{random_id()}"
 
-        assert http_post_message(server.url, room, "pass-a", "ephemeral-data") == 200
+        assert broadcast_message(server.url, room, "pass-a", "ephemeral-data") == 200
         assert _room_has_history(server.url, room, "ephemeral-data")
         # NOTE: checking history joins the room, which itself refreshes
         # last_activity - so wait passively and check exactly once.
@@ -53,13 +53,13 @@ class TestRoomTtlCleanup:
         server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
         room = f"ttl-{random_id()}"
 
-        assert http_post_message(server.url, room, "original-pass", "x") == 200
+        assert broadcast_message(server.url, room, "original-pass", "x") == 200
         # Wrong password is rejected while the room is alive
-        assert http_post_message(server.url, room, "other-pass", "y") == 401
+        assert broadcast_message(server.url, room, "other-pass", "y") == 401
 
         # After eviction, a different password can claim the room
         assert poll_until(
-            lambda: http_post_message(server.url, room, "other-pass", "y") == 200,
+            lambda: broadcast_message(server.url, room, "other-pass", "y") == 200,
             timeout=15,
         ), "Password was not released after room eviction"
 
@@ -67,13 +67,13 @@ class TestRoomTtlCleanup:
         server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 3)
         room = f"ttl-{random_id()}"
 
-        assert http_post_message(server.url, room, "pass-a", "persistent-data") == 200
+        assert broadcast_message(server.url, room, "pass-a", "persistent-data") == 200
 
         # Keep the room active well past several cleanup cycles
         for _ in range(6):
             time.sleep(1)
-            assert http_post_message(server.url, room, "pass-a", "tick") == 200
+            assert broadcast_message(server.url, room, "pass-a", "tick") == 200
 
         # Still owned by the original password, history intact
-        assert http_post_message(server.url, room, "other-pass", "steal") == 401
+        assert broadcast_message(server.url, room, "other-pass", "steal") == 401
         assert _room_has_history(server.url, room, "persistent-data")

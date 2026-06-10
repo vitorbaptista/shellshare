@@ -383,7 +383,7 @@ def test_resize_rebuilds_browser_terminal():
     A size broadcast must rebuild the browser terminal with the new
     dimensions (term.js renders one child div per row).
     """
-    import json
+    from conftest import broadcast_message
 
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
@@ -391,24 +391,11 @@ def test_resize_rebuilds_browser_terminal():
     wait_for_server(SERVER_URL)
 
     def post_with_size(text, cols, rows):
-        import base64
-        import urllib.parse
-        # safe="" to match the wire-format contract (see conftest.encode_message)
-        encoded = base64.b64encode(
-            urllib.parse.quote(text, safe="").encode()
-        ).decode()
-        body = json.dumps({
-            "message": encoded,
-            "size": {"cols": cols, "rows": rows},
-        }).encode()
-        req = urllib.request.Request(
-            f"{SERVER_URL}/r/{room_id}",
-            data=body,
-            headers={"Content-Type": "application/json", "Authorization": password},
-            method="POST",
+        status = broadcast_message(
+            SERVER_URL, room_id, password, text,
+            size={"cols": cols, "rows": rows},
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            assert resp.status == 200
+        assert status == 200
 
     with sync_playwright() as p:
         browser = p.chromium.launch()

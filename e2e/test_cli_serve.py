@@ -22,7 +22,7 @@ from conftest import (
     CLI_PATH,
     SocketListener,
     _free_port,
-    http_post_message,
+    broadcast_message,
     poll_until,
     random_id,
     wait_for_server,
@@ -259,7 +259,7 @@ class TestRoomClaiming:
             line = proc.stderr.readline()
             assert f"/r/{room}" in line, f"unexpected first stderr line: {line!r}"
 
-            status = http_post_message(
+            status = broadcast_message(
                 f"http://127.0.0.1:{port}", room, "wrong-password", "hijack"
             )
             assert status == 401, (

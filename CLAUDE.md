@@ -33,15 +33,15 @@ cd e2e && uv sync && uv run pytest -n 10
 
 ### Client (`src/cli/`)
 Multi-threaded design ensures network latency never blocks terminal display:
-- **PTY reader thread**: Captures shell output, displays locally, sends to HTTP sender
-- **HTTP sender thread**: Batches and rate-limits uploads (100ms intervals, 4KB buffer)
+- **PTY reader thread**: Captures shell output, displays locally, sends to the sender thread
+- **Sender thread**: Owns the WebSocket transport; coalesces whatever is queued and sends immediately (no pacing - frames are cheap)
 - **Stdin forwarder thread**: Routes user input to PTY
 - **Signal handler** (Unix): Handles SIGWINCH for terminal resize
 
 Key files:
-- `mod.rs`: Entry point, room ID generation, server URL handling, terminal size
+- `mod.rs`: Entry point, room ID generation, server URL handling, terminal size. Connecting the transport claims the room, so auth failures surface before the shell spawns
 - `script.rs`: PTY lifecycle, raw terminal mode, shell spawning
-- `http.rs`: HTTP client with retry logic
+- `ws.rs`: WebSocket transport. Binary frames carry raw terminal bytes; JSON text frames carry control messages (`size`, `delete`). Reliability: output stays in a bounded replay buffer until the server acks it (`{"ack": n}`, cumulative per-connection bytes); on failure the client reconnects with backoff and replays everything unacked (at-least-once delivery). Only authorization errors are fatal
 
 ### Server (`src/server/`)
 Async Tokio + Axum web server with Socket.IO for real-time updates:
@@ -53,17 +53,17 @@ Async Tokio + Axum web server with Socket.IO for real-time updates:
 Routes:
 - `GET /` - Home page with OS detection for install command
 - `GET /r/:room` - Viewer page
-- `POST /r/:room` - Broadcast message (first POST claims room with password)
+- `GET /ws/r/:room` - WebSocket ingest (the only broadcast transport): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked
+- `POST /r/:room` - Retired: always 410 Gone with an upgrade message, so pre-WebSocket clients fail loudly instead of silently
 - `DELETE /r/:room` - Cleanup room
 
 ### Wire Protocol (`src/protocol.rs`)
-The single home for the cross-language compatibility constraint, used by
-both client and server. Messages are encoded matching the original Python
-CLI: URL-encode (Python urllib.parse.quote style) then Base64; the browser
-decodes with `decodeURIComponent(atob(...))`. The `EncodedMessage` newtype
-keeps raw and wire-format strings apart; history accumulation for late
-joiners lives here too. Must stay in lockstep with
-`public/javascript/room.js` and `e2e/conftest.py`.
+Terminal output is **raw bytes** end to end: binary WebSocket frames from
+the CLI, raw bytes in room history, binary Socket.IO attachments to
+viewers, decoded in the browser by a streaming `TextDecoder` (the viewer
+script is inline in `templates/room.html`). History accumulation for late
+joiners lives here too. Must stay in lockstep with `templates/room.html`
+and `e2e/conftest.py`.
 
 ## Cross-Platform Notes
 
