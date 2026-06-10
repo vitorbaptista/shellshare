@@ -23,6 +23,21 @@ header {
   overflow: hidden;
 }
 
+/* Terminals wider than the page scroll horizontally instead of
+   wrapping or clipping */
+#terminal {
+  overflow-x: auto;
+}
+
+.terminal {
+  width: max-content;
+  max-width: none;
+}
+
+.terminal > div {
+  white-space: nowrap;
+}
+
 .reverse-video {
   color: #000000;
   background: #ccc;
