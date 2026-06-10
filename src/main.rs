@@ -17,6 +17,8 @@ use tracing_subscriber::FmtSubscriber;
 
 /// Default public server the client broadcasts to
 const DEFAULT_SERVER_URL: &str = "https://shellshare.net";
+/// Default port the server listens on, shared by `server` and `serve`
+const DEFAULT_PORT: &str = "3000";
 /// How often the server sweeps for abandoned rooms
 const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 3600;
 /// How long a room may stay inactive before being removed
@@ -64,7 +66,7 @@ enum Commands {
         host: String,
 
         /// Port to listen on
-        #[arg(short, long, default_value = "3000", env = "PORT")]
+        #[arg(short, long, default_value = DEFAULT_PORT, env = "PORT")]
         port: u16,
 
         /// Room cleanup interval in seconds (default: 3600 = 1 hour)
@@ -82,7 +84,7 @@ enum Commands {
         host: String,
 
         /// Port for the local server
-        #[arg(short, long, default_value = "8000")]
+        #[arg(short, long, default_value = DEFAULT_PORT)]
         port: u16,
     },
 }

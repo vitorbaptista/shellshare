@@ -152,10 +152,10 @@ class TestBroadcasting:
 class TestConfiguration:
     """Host and port are configurable via the CLI."""
 
-    def test_default_port_is_8000(self):
-        """Without --port, serve binds localhost:8000."""
-        if port_open(8000):
-            pytest.skip("port 8000 already in use on this machine")
+    def test_default_port_is_3000(self):
+        """Without --port, serve binds localhost:3000."""
+        if port_open(3000):
+            pytest.skip("port 3000 already in use on this machine")
         proc = subprocess.Popen(
             [str(CLI_PATH), "serve", "--stdin", "-r", "default-port", "-W", "pw"],
             stdin=subprocess.PIPE,
@@ -164,13 +164,13 @@ class TestConfiguration:
             text=True,
         )
         try:
-            assert poll_until(lambda: port_open(8000), timeout=10), (
-                "serve did not bind the default port 8000"
+            assert poll_until(lambda: port_open(3000), timeout=10), (
+                "serve did not bind the default port 3000"
             )
         finally:
             returncode, _, stderr = finish(proc)
         assert returncode == 0, f"CLI failed: {stderr}"
-        assert "http://localhost:8000/r/default-port" in stderr
+        assert "http://localhost:3000/r/default-port" in stderr
 
     def test_custom_host(self):
         """--host 127.0.0.1 binds and is used in the share URL."""
