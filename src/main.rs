@@ -106,14 +106,14 @@ fn start_local_server(host: &str, port: u16) -> Result<std::net::SocketAddr, Str
             }
         };
         runtime.block_on(async {
-            let listener = match server::bind(&bind_host, port).await {
-                Ok(listener) => listener,
+            let listeners = match server::bind(&bind_host, port).await {
+                Ok(listeners) => listeners,
                 Err(e) => {
                     let _ = ready_tx.send(Err(e.to_string()));
                     return;
                 }
             };
-            match listener.local_addr() {
+            match listeners[0].local_addr() {
                 Ok(addr) => {
                     let _ = ready_tx.send(Ok(addr));
                 }
@@ -123,7 +123,7 @@ fn start_local_server(host: &str, port: u16) -> Result<std::net::SocketAddr, Str
                 }
             }
             if let Err(e) = server::serve_on(
-                listener,
+                listeners,
                 DEFAULT_CLEANUP_INTERVAL_SECS,
                 DEFAULT_ROOM_TTL_SECS,
             )

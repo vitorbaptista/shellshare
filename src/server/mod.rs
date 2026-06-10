@@ -22,6 +22,7 @@ use socketioxide::{
     SocketIo,
 };
 use std::collections::HashMap;
+use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -69,26 +70,59 @@ pub async fn run(
     cleanup_interval_secs: u64,
     room_ttl_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = bind(host, port).await?;
-    serve_on(listener, cleanup_interval_secs, room_ttl_secs).await
+    let listeners = bind(host, port).await?;
+    serve_on(listeners, cleanup_interval_secs, room_ttl_secs).await
 }
 
-/// Bind the server's TCP listener.
+/// Bind the server's TCP listeners.
 ///
 /// Separated from [`serve_on`] so callers (e.g. `shellshare serve`) can
 /// report bind failures before handing the terminal over to the client.
-pub async fn bind(host: &str, port: u16) -> std::io::Result<tokio::net::TcpListener> {
-    tokio::net::TcpListener::bind(format!("{host}:{port}")).await
+///
+/// A hostname like `localhost` can resolve to several addresses (127.0.0.1
+/// and `::1`). `TcpListener::bind` would silently settle for whichever one is
+/// free, leaving another service answering on the same name and port, so we
+/// bind every resolved address and fail if any of them is taken. With
+/// `--port 0` the OS-picked port from the first bind is reused for the rest
+/// so all listeners share one port.
+pub async fn bind(host: &str, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    // A literal IP (possibly bracketed, like `[::1]`) needs no resolver
+    let bare_host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = bare_host.parse::<std::net::IpAddr>() {
+        return Ok(vec![tokio::net::TcpListener::bind((ip, port)).await?]);
+    }
+
+    let mut addrs: Vec<_> = tokio::net::lookup_host((host, port)).await?.collect();
+    addrs.dedup();
+    let mut listeners = Vec::with_capacity(addrs.len());
+    let mut bound_port = port;
+    for mut addr in addrs {
+        addr.set_port(bound_port);
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        bound_port = listener.local_addr()?.port();
+        listeners.push(listener);
+    }
+    if listeners.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("{host} did not resolve to any address"),
+        ));
+    }
+    Ok(listeners)
 }
 
-/// Serve the shellshare app on an already-bound listener
+/// Serve the shellshare app on already-bound listeners
 pub async fn serve_on(
-    listener: tokio::net::TcpListener,
+    listeners: Vec<tokio::net::TcpListener>,
     cleanup_interval_secs: u64,
     room_ttl_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = listener.local_addr()?;
-    info!("Starting shellshare server on {}", addr);
+    for listener in &listeners {
+        info!("Starting shellshare server on {}", listener.local_addr()?);
+    }
     info!(
         "Room cleanup: interval={}s, TTL={}s",
         cleanup_interval_secs, room_ttl_secs
@@ -137,9 +171,15 @@ pub async fn serve_on(
         .layer(DefaultBodyLimit::max(300 * 1024)) // 300KB limit
         .layer(TraceLayer::new_for_http());
 
-    // Run server
-    info!("Listening on {}", addr);
-    axum::serve(listener, app).await?;
+    // Run a server per listener; the first to fail brings the whole thing down
+    let mut servers = Vec::with_capacity(listeners.len());
+    for listener in listeners {
+        info!("Listening on {}", listener.local_addr()?);
+        servers.push(tokio::spawn(axum::serve(listener, app.clone()).into_future()));
+    }
+    for server in servers {
+        server.await??;
+    }
 
     Ok(())
 }
