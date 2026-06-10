@@ -66,6 +66,16 @@ impl Client {
         })
     }
 
+    /// Claim the room without sharing any output yet.
+    ///
+    /// A POST with neither message nor size claims the room with our
+    /// password (first caller wins), closing the window where someone
+    /// else could take the name between server start and first output.
+    pub fn claim_room(&self) -> Result<(), HttpError> {
+        let url = format!("{}/{}", self.server_url, self.room_path);
+        self.do_post(&url, &json!({}))
+    }
+
     /// POST a message to the server with retry logic
     pub fn post_message(
         &self,

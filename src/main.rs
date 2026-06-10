@@ -163,13 +163,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             runtime.block_on(server::run(&host, port, cleanup_interval, room_ttl))?;
         }
         Some(Commands::Serve { host, port }) => {
-            if cli.server != DEFAULT_SERVER_URL {
+            // No tracing subscriber on purpose: the embedded server's
+            // logs would garble the shared terminal
+            if cli.server.trim_end_matches('/') != DEFAULT_SERVER_URL {
                 eprintln!("WARNING: --server is ignored by 'serve'; broadcasting to the local server");
-            }
-            if !matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1") {
-                eprintln!(
-                    "WARNING: binding a non-loopback address; anyone who can reach this machine can view this terminal"
-                );
             }
 
             let addr = match start_local_server(&host, port) {
@@ -180,19 +177,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
 
+            // bind() accepts both "::1" and "[::1]"; strip brackets so
+            // the loopback check and the URL see the same host
+            let bare_host = host.trim_start_matches('[').trim_end_matches(']');
+            let is_loopback = bare_host.eq_ignore_ascii_case("localhost")
+                || bare_host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback());
+            let is_wildcard = matches!(bare_host, "0.0.0.0" | "::");
+            if !is_loopback {
+                eprintln!(
+                    "WARNING: binding a non-loopback address; anyone who can reach this machine \
+                     can view this terminal and broadcast their own rooms on this server"
+                );
+                if is_wildcard {
+                    eprintln!(
+                        "Viewers on other machines must replace 'localhost' in the link below \
+                         with this machine's address"
+                    );
+                }
+            }
+
             // Browsers can't reach wildcard addresses; point the client
             // (and the printed share link) at localhost instead. IPv6
             // hosts need brackets in URLs.
-            let url_host = match host.as_str() {
-                "0.0.0.0" | "::" => "localhost".to_string(),
-                h if h.contains(':') => format!("[{h}]"),
-                h => h.to_string(),
+            let url_host = if is_wildcard {
+                "localhost".to_string()
+            } else if bare_host.contains(':') {
+                format!("[{bare_host}]")
+            } else {
+                bare_host.to_string()
             };
             let args = cli::ClientArgs {
                 server: format!("http://{url_host}:{}", addr.port()),
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                claim_room: true,
             };
             cli::run(args)?;
         }
@@ -203,6 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                claim_room: false,
             };
             cli::run(args)?;
         }

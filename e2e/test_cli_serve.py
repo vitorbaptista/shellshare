@@ -22,6 +22,7 @@ from conftest import (
     CLI_PATH,
     SocketListener,
     _free_port,
+    http_post_message,
     poll_until,
     random_id,
     wait_for_server,
@@ -213,6 +214,18 @@ class TestConfiguration:
             returncode, _, _ = finish(proc)
         assert returncode == 0
 
+    def test_bracketed_ipv6_host(self):
+        """--host '[::1]' must not double-bracket the URL or warn."""
+        port = _free_port()
+        room = f"serve-{random_id()}"
+        proc = start_serve(port, room, "pw", host="[::1]")
+        returncode, _, stderr = finish(proc, "hello")
+        assert returncode == 0, f"CLI failed: {stderr}"
+        assert f"http://[::1]:{port}/r/{room}" in stderr
+        # ::1 is loopback: no exposure warning, and no broadcast errors
+        assert "WARNING" not in stderr
+        assert "ERROR" not in stderr
+
     def test_server_flag_is_ignored_with_warning(self):
         """Passing --server alongside serve warns instead of silently ignoring."""
         port = _free_port()
@@ -230,6 +243,31 @@ class TestConfiguration:
         assert "WARNING: --server is ignored" in stderr
         # It must still broadcast to the local server, not example.com
         assert f"http://127.0.0.1:{port}/r/{room}" in stderr
+
+
+class TestRoomClaiming:
+    """Serve mode claims its room before any output is shared."""
+
+    def test_room_claimed_before_first_output(self):
+        """Once the share URL is printed, nobody else can take the room."""
+        port = _free_port()
+        room = f"serve-{random_id()}"
+        proc = start_serve(port, room, "pw", host="127.0.0.1")
+        try:
+            # The share URL is printed after the claim, so reading it
+            # guarantees the room is already owned
+            line = proc.stderr.readline()
+            assert f"/r/{room}" in line, f"unexpected first stderr line: {line!r}"
+
+            status = http_post_message(
+                f"http://127.0.0.1:{port}", room, "wrong-password", "hijack"
+            )
+            assert status == 401, (
+                f"room was claimable by another password (got {status})"
+            )
+        finally:
+            returncode, _, stderr = finish(proc, "hello")
+        assert returncode == 0, f"CLI failed: {stderr}"
 
 
 class TestErrorHandling:
