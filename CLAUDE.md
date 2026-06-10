@@ -19,6 +19,7 @@ make lint                      # Both clippy + check
 cargo run -- server            # Start server on 0.0.0.0:3000
 cargo run -- server --port 8080 --host 127.0.0.1
 cargo run -- --server http://localhost:3000  # Run client
+cargo run -- serve             # Share via a local server on localhost:8000
 
 # E2E tests (Python + Playwright)
 # Requires a release binary: the suite starts its own servers from it
@@ -28,7 +29,7 @@ cd e2e && uv sync && uv run pytest -n 10
 
 ## Architecture
 
-**Dual-mode binary**: `shellshare` operates as client (default) or server (`shellshare server`).
+**Dual-mode binary**: `shellshare` operates as client (default) or server (`shellshare server`). `shellshare serve` combines both: it boots the embedded server on a background thread (default `localhost:8000`, configurable via `--host`/`--port`) and runs the client against it, sharing the terminal with no external server.
 
 ### Client (`src/cli/`)
 Multi-threaded design ensures network latency never blocks terminal display:

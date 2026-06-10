@@ -1100,9 +1100,16 @@ class TestSocketIOEventOrder:
                 all_received.set()
 
         sio.connect(SERVER_URL)
-        sio.emit('join', f'/r/{room_id}')
 
-        assert all_received.wait(timeout=15), f"Not all events received: {events}"
+        # A bare emit has no delivery guarantee and a lost join means zero
+        # events ever arrive. Re-joining is idempotent (same pattern as
+        # SocketListener.connect), so emit and re-emit until confirmed.
+        for _ in range(3):
+            sio.emit('join', f'/r/{room_id}')
+            if all_received.wait(timeout=5):
+                break
+
+        assert all_received.is_set(), f"Not all events received: {events}"
 
         # Document the order of events
         event_types = [e[0] for e in events]
@@ -1819,9 +1826,15 @@ class TestSocketIOLateJoinerHistory:
                 all_received.set()
 
         sio.connect(SERVER_URL)
-        sio.emit('join', f'/r/{room_id}')
 
-        assert all_received.wait(timeout=15), f"Not all events received: {events}"
+        # Same confirmed-join pattern as SocketListener.connect: a lost
+        # join would mean zero events; re-joining is idempotent
+        for _ in range(3):
+            sio.emit('join', f'/r/{room_id}')
+            if all_received.wait(timeout=5):
+                break
+
+        assert all_received.is_set(), f"Not all events received: {events}"
 
         # Verify size comes before message
         event_types = [e[0] for e in events]
