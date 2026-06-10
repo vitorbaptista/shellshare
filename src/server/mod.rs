@@ -69,7 +69,26 @@ pub async fn run(
     cleanup_interval_secs: u64,
     room_ttl_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Starting shellshare server on {}:{}", host, port);
+    let listener = bind(host, port).await?;
+    serve_on(listener, cleanup_interval_secs, room_ttl_secs).await
+}
+
+/// Bind the server's TCP listener.
+///
+/// Separated from [`serve_on`] so callers (e.g. `shellshare serve`) can
+/// report bind failures before handing the terminal over to the client.
+pub async fn bind(host: &str, port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(format!("{host}:{port}")).await
+}
+
+/// Serve the shellshare app on an already-bound listener
+pub async fn serve_on(
+    listener: tokio::net::TcpListener,
+    cleanup_interval_secs: u64,
+    room_ttl_secs: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let addr = listener.local_addr()?;
+    info!("Starting shellshare server on {}", addr);
     info!(
         "Room cleanup: interval={}s, TTL={}s",
         cleanup_interval_secs, room_ttl_secs
@@ -119,8 +138,7 @@ pub async fn run(
         .layer(TraceLayer::new_for_http());
 
     // Run server
-    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
-    info!("Listening on {}:{}", host, port);
+    info!("Listening on {}", addr);
     axum::serve(listener, app).await?;
 
     Ok(())
