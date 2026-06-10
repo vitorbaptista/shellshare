@@ -39,7 +39,9 @@ else:
     CLI_PATH = _DEBUG_PATH
 
 CLI_COMMAND = [str(CLI_PATH)]
-SERVER_URL = "http://localhost:3000"
+# 127.0.0.1, not localhost: on Windows localhost can resolve to ::1 first
+# while the server listens on IPv4 (see ServerHandle.url)
+SERVER_URL = "http://127.0.0.1:3000"
 
 
 def _server_responds(url, timeout=1):
@@ -47,6 +49,9 @@ def _server_responds(url, timeout=1):
     try:
         with urllib.request.urlopen(url, timeout=timeout):
             return True
+    except urllib.error.HTTPError:
+        # An HTTP error response still means a server is up
+        return True
     except Exception:
         return False
 

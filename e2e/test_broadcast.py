@@ -14,9 +14,7 @@ import time
 import urllib.request
 from playwright.sync_api import sync_playwright
 
-from conftest import CLI_COMMAND
-
-SERVER_URL = "http://localhost:3000"
+from conftest import CLI_COMMAND, SERVER_URL
 
 
 def random_id(length=12):
