@@ -352,8 +352,15 @@ pub fn run_script_mode(
     loop {
         // Check if Ctrl+C was pressed
         if !running.load(Ordering::SeqCst) {
-            // Kill the child process
+            // Kill the child process and reap it (bounded), so the slave
+            // is only dropped after the child is actually gone
             let _ = child.kill();
+            for _ in 0..40 {
+                match child.try_wait() {
+                    Ok(None) => thread::sleep(Duration::from_millis(50)),
+                    Ok(Some(_)) | Err(_) => break,
+                }
+            }
             break;
         }
 
@@ -384,10 +391,11 @@ pub fn run_script_mode(
     running.store(false, Ordering::SeqCst);
 
     // Close our copy of the slave BEFORE joining the reader thread.
-    // The child has exited in every path that reaches here, so this is safe
-    // on Windows too (portable-pty issue #4206 only requires the slave to
-    // outlive the child). Without this, the master never sees EOF and the
-    // PTY reader thread can block in read() forever, hanging the join below.
+    // The child has exited (or been killed and reaped, bounded) in every
+    // path that reaches here, so this is safe on Windows too (portable-pty
+    // only requires the slave to outlive the child). Without this, the
+    // master never sees EOF and the PTY reader thread can block in read()
+    // forever, hanging the join below.
     drop(pair.slave);
 
     // Wait for threads to finish
