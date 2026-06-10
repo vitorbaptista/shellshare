@@ -4,6 +4,20 @@
   float: right;
 }
 
+.broadcast-status::before {
+  content: "\25CF"; /* ● */
+  margin-right: 0.3em;
+  color: #999;
+}
+
+.broadcast-status.live::before {
+  color: #2ecc40;
+}
+
+.broadcast-status.offline::before {
+  color: #cc4030;
+}
+
 header {
   text-align: left;
 }

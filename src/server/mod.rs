@@ -230,7 +230,9 @@ fn setup_socket_handlers(io: &SocketIo) {
                 drop(socket_rooms);
 
                 // Catch the viewer up if the room is live
-                if let Some(snapshot) = state.rooms.snapshot(&room_id).await {
+                let snapshot = state.rooms.snapshot(&room_id).await;
+                let broadcasting = snapshot.as_ref().is_some_and(|s| s.broadcasting);
+                if let Some(snapshot) = snapshot {
                     // Send size FIRST - terminal must be sized before receiving content
                     if let Some(ref size) = snapshot.size {
                         if let Err(e) = socket.emit("size", size) {
@@ -245,6 +247,12 @@ fn setup_socket_handlers(io: &SocketIo) {
                             warn!("Failed to emit message: {:?}", e);
                         }
                     }
+                }
+
+                // Tell the viewer whether a broadcaster is attached
+                // right now; transitions arrive as room broadcasts
+                if let Err(e) = socket.emit("broadcasting", &broadcasting) {
+                    warn!("Failed to emit broadcasting: {:?}", e);
                 }
 
                 // Get fresh user count right before emissions
@@ -368,6 +376,13 @@ async fn ws_ingest_handler(
     ws.on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret))
 }
 
+/// How long the ingest loop waits for ANY frame before declaring the
+/// broadcaster dead. The client pings every 30s even when idle, so only
+/// a vanished peer (crashed machine, dropped NAT mapping) goes silent
+/// this long - and without a bound, a half-open TCP connection would
+/// keep the room's "live" indicator on for the kernel's timeout.
+const INGEST_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// Receive loop for one broadcasting WebSocket connection.
 ///
 /// Every stored binary frame is acknowledged with the cumulative byte
@@ -386,8 +401,16 @@ async fn ws_ingest_handler(
 /// (possible if the room was evicted for inactivity and re-claimed by
 /// someone else); the client reconnects and is then rejected at upgrade.
 async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId, secret: String) {
+    // The connection itself is the aliveness signal: viewers show the
+    // room as live while at least one ingest connection is attached.
+    // A count of 0 means the room vanished between handshake and
+    // upgrade - the loop below then ends on its first failed append.
+    if state.rooms.broadcaster_connected(&room_id).await > 0 {
+        emit_broadcasting(&state, &room_id, true);
+    }
+
     let mut received_bytes: u64 = 0;
-    while let Some(Ok(msg)) = socket.recv().await {
+    while let Some(Ok(msg)) = recv_with_timeout(&mut socket).await {
         // Every stored frame is acked; size frames add no bytes, so
         // their ack repeats the current count (a no-op for the client's
         // buffer, but it lets a sender await durability of a resize)
@@ -435,6 +458,32 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
         }
     }
     info!("WS ingest disconnected for room {:?}", room_id);
+
+    if state.rooms.broadcaster_disconnected(&room_id).await == 0 {
+        emit_broadcasting(&state, &room_id, false);
+    }
+}
+
+/// Receive the next frame, or `None` when the broadcaster has been
+/// silent past [`INGEST_IDLE_TIMEOUT`] - a live client pings every 30s,
+/// so silence that long means the connection is dead on a half-open TCP
+/// socket that would otherwise linger.
+async fn recv_with_timeout(
+    socket: &mut WebSocket,
+) -> Option<Result<WsMessage, axum::Error>> {
+    tokio::time::timeout(INGEST_IDLE_TIMEOUT, socket.recv())
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Tell every viewer in the room whether a broadcaster is attached
+fn emit_broadcasting(state: &AppState, room_id: &RoomId, live: bool) {
+    if let Some(ns) = state.io.get().and_then(|io| io.of("/")) {
+        let _ = ns
+            .within(room_id.as_str().to_string())
+            .emit("broadcasting", &live);
+    }
 }
 
 /// DELETE /r/:room - Delete room

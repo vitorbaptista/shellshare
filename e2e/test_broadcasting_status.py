@@ -1,0 +1,145 @@
+"""
+E2E tests for the broadcaster aliveness indicator.
+
+The server tracks ingest WebSocket connections per room and tells
+viewers - on join and on every transition - whether a broadcaster's
+client is currently attached via the Socket.IO `broadcasting` event.
+"Live" means the connection is open, not that output is flowing: the
+CLI pings even when idle.
+"""
+
+import json
+
+from playwright.sync_api import sync_playwright
+
+from conftest import (
+    SERVER_URL,
+    SocketListener,
+    wait_for_server,
+    ws_connect_room,
+)
+
+
+def attach_broadcaster(room_id, password):
+    """Open an ingest connection and wait until the server has
+    registered it (the ack proves the receive loop - which records the
+    attachment before reading any frame - is running)."""
+    ws = ws_connect_room(SERVER_URL, room_id, password)
+    ws.send(json.dumps({"size": {"cols": 80, "rows": 24}}))
+    ws.recv()  # ack
+    return ws
+
+
+class TestBroadcastingStatus:
+    """Socket.IO `broadcasting` event behavior."""
+
+    def test_join_nonexistent_room_reports_offline(self, unique_room):
+        """A viewer joining a room nobody broadcasts to is told so."""
+        wait_for_server(SERVER_URL)
+
+        listener = SocketListener(unique_room)
+        listener.connect()
+        try:
+            assert listener.wait_for_broadcasting(False), \
+                "Expected broadcasting=false on join of an empty room"
+        finally:
+            listener.disconnect()
+
+    def test_join_live_room_reports_broadcasting(self, unique_room, unique_password):
+        """A viewer joining while the broadcaster is attached sees live."""
+        wait_for_server(SERVER_URL)
+
+        ws = attach_broadcaster(unique_room, unique_password)
+        try:
+            listener = SocketListener(unique_room)
+            listener.connect()
+            try:
+                assert listener.wait_for_broadcasting(True), \
+                    "Expected broadcasting=true on join of a live room"
+            finally:
+                listener.disconnect()
+        finally:
+            ws.close()
+
+    def test_viewer_sees_broadcaster_come_and_go(self, unique_room, unique_password):
+        """An already-joined viewer is notified of both transitions."""
+        wait_for_server(SERVER_URL)
+
+        listener = SocketListener(unique_room)
+        listener.connect()
+        try:
+            # The room does not exist yet
+            assert listener.wait_for_broadcasting(False)
+
+            ws = attach_broadcaster(unique_room, unique_password)
+            assert listener.wait_for_broadcasting(True), \
+                "Expected broadcasting=true when the broadcaster attached"
+
+            # The client closing its connection means the session ended,
+            # even though it sent no data right before
+            ws.close()
+            assert listener.wait_for_broadcasting(False), \
+                "Expected broadcasting=false when the broadcaster detached"
+        finally:
+            listener.disconnect()
+
+    def test_room_with_history_but_no_broadcaster_is_offline(
+        self, unique_room, unique_password
+    ):
+        """History alone doesn't make a room live: the one-shot
+        broadcast below disconnects, so a later viewer sees offline."""
+        wait_for_server(SERVER_URL)
+
+        listener = SocketListener(unique_room)
+        listener.connect()
+        try:
+            ws = attach_broadcaster(unique_room, unique_password)
+            ws.send_binary(b"some output")
+            ws.recv()  # ack
+            assert listener.wait_for_broadcasting(True)
+            ws.close()
+            assert listener.wait_for_broadcasting(False)
+
+            # A fresh viewer still gets the history, but is told offline
+            late = SocketListener(unique_room)
+            late.connect()
+            try:
+                assert late.wait_for_message(containing="some output")
+                assert late.wait_for_broadcasting(False)
+            finally:
+                late.disconnect()
+        finally:
+            listener.disconnect()
+
+
+class TestBroadcastingStatusInBrowser:
+    """The indicator in the viewer page itself."""
+
+    def test_indicator_follows_broadcaster(self, unique_room, unique_password):
+        wait_for_server(SERVER_URL)
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"{SERVER_URL}/r/{unique_room}")
+
+            # No broadcaster yet: the join answer flips it to offline
+            page.wait_for_function(
+                "document.getElementById('broadcast-status').textContent === 'offline'",
+                timeout=10000,
+            )
+
+            ws = attach_broadcaster(unique_room, unique_password)
+            try:
+                page.wait_for_function(
+                    "document.getElementById('broadcast-status').textContent === 'live'",
+                    timeout=10000,
+                )
+            finally:
+                ws.close()
+
+            page.wait_for_function(
+                "document.getElementById('broadcast-status').textContent === 'offline'",
+                timeout=10000,
+            )
+            browser.close()

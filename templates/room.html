@@ -18,6 +18,8 @@
   <div class="wrapper">
     <header>
       <div class="online">
+        <span id="broadcast-status" class="broadcast-status">connecting</span>
+        &middot;
         <span id="online-counter">0</span> user<span id="online-counter-plural">s</span> online
       </div>
       <h1 class="title">
@@ -50,6 +52,7 @@
       var joinedBefore = false;
       var onlineCounter = document.getElementById('online-counter');
       var onlineCounterPlural = document.getElementById('online-counter-plural');
+      var broadcastStatus = document.getElementById('broadcast-status');
       var terminalContainer = document.getElementById('terminal');
 
       if (typeof Terminal !== 'undefined') {
@@ -86,6 +89,20 @@
         } else {
           onlineCounterPlural.innerHTML = 's';
         }
+      });
+      // Whether the broadcaster's client is attached to the room right
+      // now (it pings even when idle, so "live" means the session is
+      // open, not that output is flowing). The server reports the
+      // current state on join and every transition afterwards.
+      socket.on('broadcasting', function (live) {
+        broadcastStatus.textContent = live ? 'live' : 'offline';
+        broadcastStatus.className =
+          'broadcast-status ' + (live ? 'live' : 'offline');
+      });
+      // Our own connection is down: we can't know the broadcaster's state
+      socket.on('disconnect', function () {
+        broadcastStatus.textContent = 'connecting';
+        broadcastStatus.className = 'broadcast-status';
       });
       socket.on('message', function (message) {
         if (term && message) {
