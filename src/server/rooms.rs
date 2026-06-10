@@ -66,6 +66,8 @@ pub struct RoomSnapshot {
     pub size: Option<serde_json::Value>,
     /// Accumulated message history as one contiguous byte payload
     pub history: Option<Bytes>,
+    /// Whether a broadcaster's ingest connection is currently attached
+    pub broadcasting: bool,
 }
 
 /// One broadcasting session's state
@@ -78,6 +80,10 @@ struct Room {
     size: Option<serde_json::Value>,
     /// Last activity (broadcast or viewer join), drives eviction
     last_activity: Instant,
+    /// Ingest connections currently attached. More than one is possible
+    /// around a client reconnect (the stale loop briefly overlaps the
+    /// new one) or with two broadcasters sharing a password.
+    broadcasters: usize,
 }
 
 impl Room {
@@ -87,6 +93,7 @@ impl Room {
             messages: MessageHistory::new(MAX_HISTORY_MESSAGES),
             size: None,
             last_activity: Instant::now(),
+            broadcasters: 0,
         }
     }
 }
@@ -146,6 +153,29 @@ impl Rooms {
         Some(RoomSnapshot {
             size: entry.size.clone(),
             history: entry.messages.accumulated(),
+            broadcasting: entry.broadcasters > 0,
+        })
+    }
+
+    /// Record that a broadcaster's ingest connection attached to the
+    /// room. Returns the new connection count (0 when the room vanished
+    /// between the handshake and the upgrade).
+    pub async fn broadcaster_connected(&self, room: &RoomId) -> usize {
+        let mut rooms = self.inner.write().await;
+        rooms.get_mut(room).map_or(0, |entry| {
+            entry.broadcasters += 1;
+            entry.broadcasters
+        })
+    }
+
+    /// Record that a broadcaster's ingest connection detached. Returns
+    /// the remaining count; 0 also covers a room already deleted (the
+    /// `{"delete": true}` path removes the room before the loop ends).
+    pub async fn broadcaster_disconnected(&self, room: &RoomId) -> usize {
+        let mut rooms = self.inner.write().await;
+        rooms.get_mut(room).map_or(0, |entry| {
+            entry.broadcasters = entry.broadcasters.saturating_sub(1);
+            entry.broadcasters
         })
     }
 

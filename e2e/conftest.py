@@ -278,6 +278,7 @@ class SocketListener:
     _messages: list = field(default_factory=list, init=False, repr=False)
     _sizes: list = field(default_factory=list, init=False, repr=False)
     _user_counts: list = field(default_factory=list, init=False, repr=False)
+    _broadcasting: list = field(default_factory=list, init=False, repr=False)
     _condition: threading.Condition = field(default_factory=threading.Condition, init=False, repr=False)
     _connected: bool = field(default=False, init=False, repr=False)
 
@@ -303,6 +304,12 @@ class SocketListener:
         def on_users_count(count):
             with self._condition:
                 self._user_counts.append(count)
+                self._condition.notify_all()
+
+        @self._sio.on('broadcasting')
+        def on_broadcasting(live):
+            with self._condition:
+                self._broadcasting.append(live)
                 self._condition.notify_all()
 
         self._sio.connect(self.server_url)
@@ -404,6 +411,23 @@ class SocketListener:
         """Get the last received user count."""
         with self._condition:
             return self._user_counts[-1] if self._user_counts else 0
+
+    def wait_for_broadcasting(self, expected, timeout=5) -> bool:
+        """Wait until the LATEST broadcasting state equals `expected`."""
+        with self._condition:
+            start = time.time()
+            while True:
+                if self._broadcasting and self._broadcasting[-1] == expected:
+                    return True
+                remaining = timeout - (time.time() - start)
+                if remaining <= 0:
+                    return False
+                self._condition.wait(timeout=remaining)
+
+    def get_last_broadcasting(self):
+        """Last received broadcasting state, or None before the first."""
+        with self._condition:
+            return self._broadcasting[-1] if self._broadcasting else None
 
     def get_last_size(self) -> dict:
         """Get the last received terminal size."""
