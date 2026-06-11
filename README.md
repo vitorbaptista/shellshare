@@ -66,18 +66,23 @@ broadcast to this instance, use the `--server` option:
 
 ## Deploy
 
-To deploy with [Dokku](https://dokku.com/), configure it to pull from `Dockerfile.production`, which pulls the Docker image from GitHub Container Registry:
+To deploy with [Dokku](https://dokku.com/), let it build the image from
+source on each push using the project's `Dockerfile`:
 
 ```bash
 # Create the app
 dokku apps:create shellshare
 
-# Configure to pull from Dockerfile.prooduction
-dokku builder-dockerfile:set shellshare dockerfile-path Dockerfile.production
+# Build from the source Dockerfile (this is also Dokku's default)
+dokku builder-dockerfile:set shellshare dockerfile-path Dockerfile
 
-# Deploy
+# Deploy: pushes the current commit; Dokku builds and releases it
 make deploy
 ```
+
+Each `make deploy` builds the pushed commit on the Dokku host, so the
+deployed code always matches what you pushed — there is no separate image
+tag to bump.
 
 ## Analytics (optional, off by default)
 
