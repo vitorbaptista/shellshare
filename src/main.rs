@@ -10,6 +10,7 @@
 mod cli;
 mod protocol;
 mod server;
+mod themes;
 
 use clap::{Parser, Subcommand};
 use tracing::Level;
@@ -55,6 +56,12 @@ struct Cli {
     /// Read from stdin instead of spawning a shell
     #[arg(long, global = true)]
     stdin: bool,
+
+    /// Color theme viewers see the broadcast in
+    // Validated at parse time, so a typo fails before the room is
+    // claimed and the shell spawns.
+    #[arg(short, long, global = true, default_value = "tango", value_parser = clap::builder::PossibleValuesParser::new(themes::names()))]
+    theme: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -220,6 +227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                theme: cli.theme,
             };
             cli::run(args)?;
         }
@@ -230,6 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                theme: cli.theme,
             };
             cli::run(args)?;
         }

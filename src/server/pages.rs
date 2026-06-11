@@ -75,11 +75,17 @@ pub async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
 /// GET /r/:room - Viewer page
 pub async fn room_page_handler(Path(_room): Path<String>) -> impl IntoResponse {
     match Templates::get("room.html") {
-        Some(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(Body::from(content.data.into_owned()))
-            .unwrap(),
+        Some(content) => {
+            // Inline the theme definitions so the viewer can color the
+            // terminal without an extra request
+            let html = String::from_utf8_lossy(&content.data)
+                .replace("{{THEMES_JSON}}", crate::themes::THEMES_JSON);
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(html))
+                .unwrap()
+        }
         None => template_missing(),
     }
 }
