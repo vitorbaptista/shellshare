@@ -167,6 +167,11 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     };
 
     if args.json {
+        // PTY output is raw bytes and may leave stdout mid-line; start
+        // the event on a fresh line so it stays parseable as a whole line
+        if !args.stdin {
+            println!();
+        }
         emit_json(&serde_json::json!({
             "event": "end",
             "exit_code": exit_code,

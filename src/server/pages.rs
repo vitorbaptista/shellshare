@@ -307,9 +307,18 @@ pub async fn serve_static(req: Request<Body>) -> impl IntoResponse {
                 return response.status(StatusCode::NOT_MODIFIED).body(Body::empty()).unwrap();
             }
             let mime = mime_guess::from_path(path).first_or_octet_stream();
+            // Text files are UTF-8; without an explicit charset browsers
+            // fall back to Latin-1 and garble non-ASCII (e.g. llms.txt)
+            let content_type = if mime.type_() == mime_guess::mime::TEXT
+                && mime.get_param(mime_guess::mime::CHARSET).is_none()
+            {
+                format!("{mime}; charset=utf-8")
+            } else {
+                mime.to_string()
+            };
             response
                 .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime.as_ref())
+                .header(header::CONTENT_TYPE, content_type)
                 .body(Body::from(content.data.into_owned()))
                 .unwrap()
         }

@@ -27,15 +27,17 @@ IS_WINDOWS = platform.system() == "Windows"
 
 
 def parse_json_events(stdout):
-    """Parse every line of stdout that is a JSON object (exec mode
-    interleaves the command's own output between the event lines)."""
+    """Parse the shellshare events out of stdout. Exec mode interleaves the
+    command's raw PTY output between the event lines, and that output may
+    leave stray bytes (e.g. a carriage return) on the event's line, so look
+    for a JSON object anywhere in each line."""
     events = []
     for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
+        start = line.find('{"event"')
+        if start == -1:
             continue
         try:
-            events.append(json.loads(line))
+            events.append(json.loads(line[start:]))
         except json.JSONDecodeError:
             pass
     return events
@@ -107,7 +109,8 @@ class TestExecSubcommand:
         events = parse_json_events(proc.stdout)
         assert events[0]["event"] == "sharing"
         assert events[0]["url"] == f"{SERVER_URL}/r/{unique_room}"
-        assert events[-1] == {"event": "end", "exit_code": 0}
+        assert events[-1] == {"event": "end", "exit_code": 0}, \
+            f"stdout was: {proc.stdout!r}"
 
     @pytest.mark.skipif(IS_WINDOWS, reason="recipe uses a POSIX shell")
     def test_exec_propagates_exit_code(self, unique_room, unique_password):
@@ -122,7 +125,8 @@ class TestExecSubcommand:
         )
         assert proc.returncode == 3
         events = parse_json_events(proc.stdout)
-        assert events[-1] == {"event": "end", "exit_code": 3}
+        assert events[-1] == {"event": "end", "exit_code": 3}, \
+            f"stdout was: {proc.stdout!r}"
 
     def test_exec_requires_command(self):
         proc = subprocess.run(
@@ -141,7 +145,8 @@ class TestDiscoveryEndpoints:
         wait_for_server(SERVER_URL)
         response = requests.get(f"{SERVER_URL}/llms.txt")
         assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/plain")
+        # charset is required: without it browsers decode UTF-8 as Latin-1
+        assert response.headers["content-type"] == "text/plain; charset=utf-8"
         assert "shellshare" in response.text
         # The agent contract must be documented
         assert "--json" in response.text
