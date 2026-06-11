@@ -84,6 +84,10 @@ pub struct Transport {
     size: TermSize,
     /// Size already delivered on the CURRENT connection, if any
     sent_size: Option<TermSize>,
+    /// Viewer color theme, carried inside every size message (the
+    /// server stores and forwards the size verbatim, so late joiners
+    /// get the theme with no server-side knowledge of it)
+    theme: Option<String>,
     backoff: Duration,
     /// Do not attempt to reconnect before this instant
     next_attempt: Option<Instant>,
@@ -100,6 +104,7 @@ impl Transport {
         room_path: &str,
         password: &str,
         size: TermSize,
+        theme: Option<String>,
     ) -> Result<Self, TransportError> {
         let ws_base = if let Some(rest) = server_url.strip_prefix("https://") {
             format!("wss://{rest}")
@@ -122,6 +127,7 @@ impl Transport {
             dropped_unacked: 0,
             size,
             sent_size: None,
+            theme,
             backoff: INITIAL_BACKOFF,
             next_attempt: None,
             last_ping: Instant::now(),
@@ -204,7 +210,11 @@ impl Transport {
 
         // Size first, so viewers resize before the content that follows
         if self.sent_size != Some(self.size) {
-            let frame = Message::text(json!({"size": self.size}).to_string());
+            let mut size = json!(self.size);
+            if let Some(theme) = &self.theme {
+                size["theme"] = json!(theme);
+            }
+            let frame = Message::text(json!({"size": size}).to_string());
             if self.write(frame).is_err() {
                 return Ok(());
             }

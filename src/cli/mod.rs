@@ -35,6 +35,8 @@ pub struct ClientArgs {
     pub room: Option<String>,
     pub password: Option<String>,
     pub stdin: bool,
+    /// Viewer color theme, already validated against `themes::names()`
+    pub theme: Option<String>,
 }
 
 /// Generate a random 18-character alphanumeric room ID
@@ -94,7 +96,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
     // is handed over to the shell. Failures must propagate (not exit):
     // the caller may hold a tunnel whose cleanup an exit would skip
     let size = get_terminal_size();
-    let transport = ws::Transport::connect(&server, &room_path, &password, size)?;
+    let transport = ws::Transport::connect(&server, &room_path, &password, size, args.theme)?;
 
     // Ctrl+C only flips the flag; the sending thread owns the transport
     // and performs cleanup (flush, room deletion) when it stops

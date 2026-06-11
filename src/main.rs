@@ -10,6 +10,7 @@
 mod cli;
 mod protocol;
 mod server;
+mod themes;
 mod tunnel;
 
 use clap::{Parser, Subcommand};
@@ -56,6 +57,12 @@ struct Cli {
     /// Read from stdin instead of spawning a shell
     #[arg(long, global = true)]
     stdin: bool,
+
+    /// Color theme viewers see the broadcast in
+    // Validated at parse time, so a typo fails before the room is
+    // claimed and the shell spawns.
+    #[arg(short, long, global = true, default_value = "tango", value_parser = clap::builder::PossibleValuesParser::new(themes::names()))]
+    theme: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -210,7 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "WARNING: --server is ignored by 'serve'; broadcasting to the local server"
                 );
             }
-            serve(&host, port, tunnel, cli.room, cli.password, cli.stdin);
+            serve(&host, port, tunnel, cli.room, cli.password, cli.stdin, cli.theme);
         }
         None => {
             // Run client mode
@@ -220,6 +227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                theme: cli.theme,
             };
             exit_on_error(cli::run(args));
         }
@@ -237,6 +245,7 @@ fn serve(
     room: Option<String>,
     password: Option<String>,
     stdin: bool,
+    theme: Option<String>,
 ) {
     let addr = match start_local_server(host, port) {
         Ok(addr) => addr,
@@ -310,6 +319,7 @@ fn serve(
         room,
         password,
         stdin,
+        theme,
     };
     let result = cli::run(args);
     // Close the tunnel before a possible exit: process::exit

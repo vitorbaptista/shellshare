@@ -42,6 +42,8 @@
     (function () {
       'use strict';
 
+      // Theme definitions injected by the server from themes.json
+      var THEMES = {{THEMES_JSON}};
       var socket = io();
       var room = window.location.pathname;
       var term;
@@ -118,18 +120,28 @@
         }
 
         sizeChanged = (currentSize.cols != size.cols ||
-                       currentSize.rows != size.rows);
+                       currentSize.rows != size.rows ||
+                       currentSize.theme != size.theme);
 
         if (term && sizeChanged) {
           term.destroy();
         }
 
         if (typeof Terminal !== 'undefined' && (!term || sizeChanged)) {
-          term = new Terminal({
+          var options = {
             cols: size.cols,
             rows: size.rows,
             body: terminalContainer,
-          });
+          };
+          var theme = THEMES[size.theme];
+          if (theme) {
+            // term.js takes the 16 ANSI colors plus background and
+            // foreground as the last two entries
+            options.colors = theme.palette.concat([theme.background,
+                                                   theme.foreground]);
+            terminalContainer.style.backgroundColor = theme.background;
+          }
+          term = new Terminal(options);
           term.open();
         }
 

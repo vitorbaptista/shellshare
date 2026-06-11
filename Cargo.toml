@@ -37,7 +37,7 @@ rust-embed = { version = "8", features = ["mime-guess", "axum"] }
 mime_guess = "2"
 
 # CLI
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", features = ["derive", "env", "string"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
