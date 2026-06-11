@@ -27,7 +27,16 @@
       </h1>
     </header>
     <div class="main">
-      <div id="terminal"></div>
+      <div id="terminal">
+        <button id="fullscreen-toggle" type="button" title="Fullscreen (f)" aria-label="Toggle fullscreen">
+          <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>
+          </svg>
+          <svg class="icon-compress" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"/>
+          </svg>
+        </button>
+      </div>
     </div>
     <footer>
       <p>shellshare is a free software (Apache License). Source code on <a href="https://github.com/vitorbaptista/shellshare">GitHub</a>.</p>
@@ -56,6 +65,7 @@
       var onlineCounterPlural = document.getElementById('online-counter-plural');
       var broadcastStatus = document.getElementById('broadcast-status');
       var terminalContainer = document.getElementById('terminal');
+      var fullscreenToggle = document.getElementById('fullscreen-toggle');
 
       if (typeof Terminal !== 'undefined') {
         Terminal.bindKeys = function() {
@@ -146,7 +156,136 @@
         }
 
         currentSize = size;
+        fitTerminal();
       }
+
+      // Fullscreen: the `fullscreen` class on #terminal drives all
+      // layout, so browsers without requestFullscreen on divs (iOS
+      // Safari) still get a fill-the-page mode. The native API only
+      // adds the OS chrome on top.
+      function isFullscreen() {
+        return terminalContainer.classList.contains('fullscreen');
+      }
+
+      function nativeFullscreenElement() {
+        return document.fullscreenElement ||
+               document.webkitFullscreenElement || null;
+      }
+
+      function enterFullscreen() {
+        terminalContainer.classList.add('fullscreen');
+        var rfs = terminalContainer.requestFullscreen ||
+                  terminalContainer.webkitRequestFullscreen;
+        if (rfs) {
+          // Older webkit doesn't return a promise
+          var result = rfs.call(terminalContainer);
+          if (result && result.catch) {
+            result.catch(function () {});
+          }
+        }
+        fitTerminal();
+      }
+
+      function exitFullscreen() {
+        if (nativeFullscreenElement()) {
+          var result = (document.exitFullscreen ||
+                        document.webkitExitFullscreen).call(document);
+          if (result && result.catch) {
+            result.catch(function () {});
+          }
+        }
+        terminalContainer.classList.remove('fullscreen');
+        fitTerminal();
+      }
+
+      function toggleFullscreen() {
+        if (isFullscreen()) {
+          exitFullscreen();
+        } else {
+          enterFullscreen();
+        }
+      }
+
+      // Scale the font so the broadcaster's cols×rows fill the screen.
+      // term.js sizing is purely font-size driven and .terminal is
+      // width: max-content, so its bounding box at the base size gives
+      // the exact ratio to scale by.
+      var MIN_FONT_PX = 7;
+      var fitScheduled = false;
+
+      function fitTerminal() {
+        if (!term) {
+          return;
+        }
+        var el = term.element;
+        el.style.fontSize = '';
+        if (!isFullscreen()) {
+          return;
+        }
+        // The stylesheet's base size, measured with the inline
+        // override cleared above
+        var baseFont = parseFloat(getComputedStyle(el).fontSize) || 14;
+        var rect = el.getBoundingClientRect();
+        var availWidth = terminalContainer.clientWidth;
+        var availHeight = terminalContainer.clientHeight;
+        if (!rect.width || !rect.height) {
+          return;
+        }
+        var scale = Math.min(availWidth / rect.width,
+                             availHeight / rect.height);
+        // Integer px keeps glyphs crisp
+        var px = Math.max(MIN_FONT_PX, Math.floor(baseFont * scale));
+        el.style.fontSize = px + 'px';
+        // Line-height rounding can push a pixel of overflow; nudge down
+        while (px > MIN_FONT_PX) {
+          rect = el.getBoundingClientRect();
+          if (rect.width <= availWidth && rect.height <= availHeight) {
+            break;
+          }
+          px -= 1;
+          el.style.fontSize = px + 'px';
+        }
+      }
+
+      function scheduleFit() {
+        if (fitScheduled) {
+          return;
+        }
+        fitScheduled = true;
+        requestAnimationFrame(function () {
+          fitScheduled = false;
+          fitTerminal();
+        });
+      }
+
+      // The native state is authoritative whenever it changes: this
+      // covers Esc and browser-UI exits, and re-syncs the class if a
+      // pending requestFullscreen resolves after a rapid toggle. The
+      // fallback path never fires this event, so its class handling
+      // is untouched.
+      function onFullscreenChange() {
+        terminalContainer.classList.toggle('fullscreen',
+                                           !!nativeFullscreenElement());
+        scheduleFit();
+      }
+
+      fullscreenToggle.addEventListener('click', toggleFullscreen);
+      window.addEventListener('resize', scheduleFit);
+      document.addEventListener('fullscreenchange', onFullscreenChange);
+      document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+      document.addEventListener('keydown', function (e) {
+        if (e.defaultPrevented || e.repeat ||
+            e.ctrlKey || e.metaKey || e.altKey) {
+          return;
+        }
+        if (e.key === 'f' || e.key === 'F') {
+          toggleFullscreen();
+        } else if (e.key === 'Escape' && isFullscreen() &&
+                   !nativeFullscreenElement()) {
+          // Fallback mode only; native fullscreen handles its own Esc
+          exitFullscreen();
+        }
+      });
     })();
   </script>
 </body>

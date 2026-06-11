@@ -424,6 +424,76 @@ def test_resize_rebuilds_browser_terminal():
         browser.close()
 
 
+def test_fullscreen_mode_scales_and_restores():
+    """
+    Pressing `f` enters fullscreen: #terminal gets the `fullscreen`
+    class and the font is rescaled to fit the viewport. Pressing `f`
+    again restores the default layout. The class is the primary signal
+    so the test holds even if headless denies native fullscreen.
+    """
+    from conftest import broadcast_message
+
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+
+    wait_for_server(SERVER_URL)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(f"{SERVER_URL}/r/{room_id}")
+        page.wait_for_selector("#terminal", timeout=10000)
+        page.wait_for_function(
+            "document.getElementById('online-counter').textContent !== '0'",
+            timeout=10000
+        )
+
+        status = broadcast_message(
+            SERVER_URL, room_id, password, "fullscreen test",
+            size={"cols": 80, "rows": 24},
+        )
+        assert status == 200
+        page.wait_for_function(
+            "document.querySelectorAll('#terminal .terminal').length === 1",
+            timeout=10000,
+        )
+
+        page.keyboard.press("f")
+        page.wait_for_function(
+            "document.getElementById('terminal')"
+            ".classList.contains('fullscreen')",
+            timeout=10000,
+        )
+        # DOM contract preserved: term.js element still the only .terminal
+        assert page.evaluate(
+            "document.querySelectorAll('#terminal .terminal').length === 1"
+        )
+        # Font rescaled to fill the viewport
+        page.wait_for_function(
+            "document.querySelector('#terminal .terminal')"
+            ".style.fontSize !== ''",
+            timeout=10000,
+        )
+        font_size = page.evaluate(
+            "document.querySelector('#terminal .terminal').style.fontSize"
+        )
+        # An 80x24 terminal in a larger viewport must scale up
+        assert font_size.endswith("px") and float(font_size[:-2]) > 14
+
+        page.keyboard.press("f")
+        page.wait_for_function(
+            "!document.getElementById('terminal')"
+            ".classList.contains('fullscreen')",
+            timeout=10000,
+        )
+        assert page.evaluate(
+            "document.querySelector('#terminal .terminal')"
+            ".style.fontSize === ''"
+        )
+
+        browser.close()
+
+
 if __name__ == "__main__":
     test_happy_path_broadcast_appears_in_browser()
     test_user_counter_shows_in_browser()
@@ -432,3 +502,4 @@ if __name__ == "__main__":
     test_late_joiner_sees_history_in_browser()
     test_unicode_renders_in_browser()
     test_resize_rebuilds_browser_terminal()
+    test_fullscreen_mode_scales_and_restores()
