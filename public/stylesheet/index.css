@@ -24,6 +24,35 @@
   display: inline-block;
 }
 
+.why {
+  list-style: none;
+  margin: 1em 0;
+  padding: 0;
+  line-height: 1.6em;
+}
+
+.why li::before {
+  content: "\2192\00a0\00a0"; /* right arrow */
+  color: #999;
+}
+
+.compare {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+  line-height: 1.6em;
+}
+
+.compare td {
+  padding: 0.4em 0.8em 0.4em 0;
+  border-top: 1px solid #ddd;
+  vertical-align: top;
+}
+
+.compare tr:first-child td {
+  border-top: none;
+}
+
 .instructions .download {
   text-align: center;
   margin: 4em 0;

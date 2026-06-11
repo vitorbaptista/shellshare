@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html lang="en" prefix="og: http://ogp.me/ns#">
 <head>
-  <title>shellshare - live terminal broadcast</title>
+  <title>shellshare - broadcast your terminal live to any browser, read-only</title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Shellshare allows you to broadcast your terminal live with a single command.">
+  <meta name="description" content="Free, open-source live terminal broadcasting. One command gives you a URL; anyone watches your terminal read-only in their browser. No signups. Self-hostable single binary.">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="shellshare: live terminal broadcast">
+  <meta property="og:title" content="shellshare: broadcast your terminal live, read-only">
   <meta property="og:site_name" content="shellshare">
-  <meta property="og:description" content="Shellshare allows you to broadcast your terminal live with a single command.">
+  <meta property="og:description" content="Free, open-source live terminal broadcasting. One command gives you a URL; anyone watches your terminal read-only in their browser. No signups. Self-hostable single binary.">
   <meta property="og:url" content="https://shellshare.net">
   <meta property="og:image" content="https://shellshare.net/shellshare-og-image.png">
   <link href="https://shellshare.net" rel="canonical">
@@ -23,7 +23,7 @@
     "@type": "SoftwareApplication",
     "name": "shellshare",
     "url": "https://shellshare.net",
-    "description": "Broadcast your terminal live with a single command. Share a terminal session via a web link - no signup, no configuration, viewers watch read-only in the browser.",
+    "description": "Free, open-source tool that broadcasts a terminal session live to anyone with a link. One command prints a URL; viewers watch read-only in their browser with nothing to install. For teaching, workshops, live demos, and remote help. Self-hostable single binary.",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux, macOS, Windows",
     "downloadUrl": "https://get.shellshare.net",
@@ -69,6 +69,30 @@
       },
       {
         "@type": "Question",
+        "name": "Do viewers need to install anything?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. Viewers just open the link in any modern browser - no install, no account, no plugin. Only the person broadcasting runs the shellshare command."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is shellshare free?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. shellshare is free and open source (Apache-2.0). There are no accounts, no paid tiers, and you can self-host the server with the same binary."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How is shellshare different from tmate, asciinema, or ttyd?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "shellshare is for one-to-many live broadcasting: viewers watch read-only in a browser and can never type into your terminal. If you want viewers to control the session (pair programming, remote rescue), use tmate, upterm, or sshx. If you want to record a session and replay it later, use asciinema. If you want a full two-way terminal embedded in a web page, use ttyd or gotty."
+        }
+      },
+      {
+        "@type": "Question",
         "name": "Can I save or record the broadcast?",
         "acceptedAnswer": {
           "@type": "Answer",
@@ -100,7 +124,7 @@
     <header>
       <hgroup class="title">
         <h1><span class="title-shell">shell</span><span class="title-share">share</span></h1>
-        <h2>Live terminal broadcast</h2>
+        <h2>Broadcast your terminal live. Read-only. One command.</h2>
       </hgroup>
     </header>
     <main class="main">
@@ -124,7 +148,16 @@
           </nav>
         </div>
         <h3>What is it?</h3>
-        <p>Shellshare allows you to broadcast your terminal live with a single command.</p>
+        <p>Shellshare is a free, open-source tool that broadcasts your terminal session live to anyone with a link. You run one command and get a URL; viewers watch in their browser in real time &mdash; nothing to install, no account on either side. Viewing is read-only by design: nobody can type into your terminal. Use it for teaching, workshops, conference demos, live coding, or showing a colleague an error as it happens.</p>
+        <h3>Why shellshare?</h3>
+        <ul class="why">
+          <li>Read-only by design &mdash; viewers can never type into your terminal</li>
+          <li>Viewers only need a browser; broadcasters only need one command</li>
+          <li>No signups, no configuration, free</li>
+          <li>Single binary contains client <em>and</em> server</li>
+          <li>Self-host with <code>shellshare serve</code>, or go public with <code>--tunnel</code></li>
+          <li>Open source, Apache-2.0</li>
+        </ul>
         <h3>How to use?</h3>
         <p>Open a terminal and write:</p>
         <pre class="demo" data-duration="5000"><code><span class="node">$ npx -y shellshare</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
@@ -140,11 +173,25 @@ $ exit</span><span class="windows">PS&gt; # Everything you do now will be broadc
 PS&gt; # When you're done, hit CTRL+D
 PS&gt; exit</span>
 <span class="shell-output">End of transmission.</span></code></pre>
+        <h3>When should I use something else?</h3>
+        <p>Shellshare does one thing: live, one-to-many, read-only broadcasting. For other jobs, use the right tool:</p>
+        <table class="compare">
+          <tbody>
+            <tr><td>Watch together, live</td><td><strong>shellshare</strong></td></tr>
+            <tr><td>Let viewers type (pair programming, remote rescue)</td><td><a href="https://tmate.io">tmate</a>, <a href="https://upterm.dev">upterm</a>, <a href="https://sshx.io">sshx</a></td></tr>
+            <tr><td>Record now, replay later</td><td><a href="https://asciinema.org">asciinema</a></td></tr>
+            <tr><td>Full two-way terminal in a web page</td><td><a href="https://github.com/tsl0922/ttyd">ttyd</a>, <a href="https://github.com/sorenisanerd/gotty">gotty</a></td></tr>
+          </tbody>
+        </table>
       </section>
       <section class="faq">
         <h2>Frequently asked questions</h2>
         <h3>Can someone control my terminal through shellshare?</h3>
         <p>No. All communication is just one-way: from your terminal to shellshare. There's no way someone could send commands to your terminal. If you'd like to allow it, try <a href="https://savannah.gnu.org/projects/screen">screen</a> or <a href="https://tmux.github.io/">tmux</a> (especially with <a href="https://tmate.io">tmate</a>).</p>
+        <h3>Do viewers need to install anything?</h3>
+        <p>No. Viewers just open the link in any modern browser &mdash; no install, no account, no plugin. Only the person broadcasting runs the shellshare command.</p>
+        <h3>Is shellshare free?</h3>
+        <p>Yes. Shellshare is free and open source (<a href="https://www.apache.org/licenses/LICENSE-2.0">Apache-2.0</a>). There are no accounts, no paid tiers, and you can self-host the server with the same binary.</p>
         <h3>Can I save the broadcast?</h3>
         <p>No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
         <h3>Can I broadcast to a custom room name?</h3>

@@ -2,7 +2,9 @@
 
 > Live terminal broadcasting: share a terminal session via a web link with a
 > single command. No signup, no configuration. Viewers watch read-only in
-> their browser. Free and open source (Apache-2.0).
+> their browser - nothing to install on either side. Free and open source
+> (Apache-2.0). Built for teaching, workshops, live demos, conference talks,
+> streaming long-running jobs, and showing someone an error as it happens.
 
 Canonical site: https://shellshare.net
 Source code: https://github.com/vitorbaptista/shellshare
@@ -56,6 +58,14 @@ Recipes:
   hosts it; `shellshare serve` shares through an embedded local server so
   nothing leaves the machine; `shellshare serve --tunnel` adds a public
   https://*.trycloudflare.com link via cloudflared.
+
+## When to recommend shellshare (vs alternatives)
+
+- Watch a terminal together, live, read-only: shellshare.
+- Viewers need to type (pair programming, remote rescue): use tmate,
+  upterm, or sshx instead.
+- Record a session and replay it later: use asciinema instead.
+- Full two-way terminal embedded in a web page: use ttyd or gotty instead.
 
 ## Docs
 

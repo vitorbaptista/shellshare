@@ -3,32 +3,64 @@
 [![E2E Tests](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e.yml/badge.svg)](https://github.com/vitorbaptista/shellshare/actions/workflows/e2e.yml)
 [![Release](https://github.com/vitorbaptista/shellshare/actions/workflows/release.yml/badge.svg)](https://github.com/vitorbaptista/shellshare/actions/workflows/release.yml)
 
-Live broadcast of terminal sessions.
+Broadcast your terminal live to anyone with a link — read-only, one command,
+viewers just need a browser.
 
-## Why?
-
-Ever wanted to quickly show what you're doing to some friends? Maybe you're seeing a weird error and would like some help. Or the other way around: some friend of yours is asking for help on something, then you start to ping-pong: you tell a command, he pastes the output, then you tell another, and so on...
-
-The objective of [shellshare.net](https://shellshare.net) is to provide an easy way to broadcast your terminal live. No signups, no configurations, anything: simply run a command and you're good to go.
-
-## Using
-
-Copy and paste the following line in your terminal:
-
-```bash
-curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare && ./shellshare
-```
-
-If you have Node.js, you can also run it with no manual download on Linux, macOS, or Windows:
+## Quick start
 
 ```bash
 npx shellshare
+```
+
+Or download the binary directly:
+
+```bash
+curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare && ./shellshare
 ```
 
 You'll see a line saying `Sharing session in
 https://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
 Anyone that opens this link will be able to see what you're doing in your
 terminal. When you're done, type `exit` or hit CTRL+D.
+
+## Why shellshare
+
+- **Read-only by design** — viewers can never type into your terminal
+- **Viewers only need a browser** — no install, no account, on either side
+- **No signups, no configuration** — one command in, one URL out
+- **Single binary contains client _and_ server** — self-host with
+  `shellshare serve`, or go public without shellshare.net via `--tunnel`
+- **Free and open source** — Apache-2.0
+
+## Use cases
+
+- **Teach a class or run a workshop**: students follow your terminal on
+  their own screens instead of squinting at a projector
+- **Live demos and conference talks**: attendees open a URL and watch in
+  real time
+- **Get or give help**: show a colleague a weird error as it happens,
+  instead of ping-ponging commands and pasted output
+- **Stream a long-running job**: let teammates (or an AI agent's user)
+  watch a build, deploy, or migration as it runs
+
+## How it compares
+
+| You want to... | Use |
+|---|---|
+| Watch together, live | **shellshare** |
+| Let viewers type (pair programming, remote rescue) | [tmate](https://tmate.io), [upterm](https://upterm.dev), [sshx](https://sshx.io) |
+| Record now, replay later | [asciinema](https://asciinema.org) |
+| Full two-way terminal in a web page | [ttyd](https://github.com/tsl0922/ttyd), [gotty](https://github.com/sorenisanerd/gotty) |
+
+## Features
+
+- Read-only, one-to-many live broadcasting to the browser
+- Named rooms with passwords (`--room MY-ROOM --password MY-PASS`)
+- Viewer color themes (`--theme dracula` — same themes as asciinema)
+- Late joiners see recent history, not a blank page
+- Network drops are handled: output is buffered and replayed on reconnect
+- Linux, macOS (Intel and Apple Silicon), and Windows binaries
+- Machine-readable mode for scripts and AI agents (`--json`, `exec`)
 
 ### Scripting & AI agents
 
@@ -51,7 +83,7 @@ tail -f build.log | shellshare --stdin --json
 See [AGENTS.md](AGENTS.md) (or https://shellshare.net/llms.txt) for the full
 agent-facing documentation and recipes.
 
-### Hosting a server
+## Self-hosting
 
 The same `shellshare` binary also includes the server code, allowing you to broadcast your terminal to a server you control.
 
@@ -69,9 +101,9 @@ shellshare serve --tunnel
 
 The share link becomes a public `https://*.trycloudflare.com` URL that anyone can open, while your terminal never leaves your machine except through that tunnel. It requires [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to be installed (`brew install cloudflared` on macOS) - no Cloudflare account needed. The tunnel closes when shellshare exits.
 
-## Installing
+### Building from source
 
-Requires [Rust](https://rustup.rs/) to build from source:
+Requires [Rust](https://rustup.rs/):
 
 ```bash
 cargo build --release
@@ -85,64 +117,24 @@ broadcast to this instance, use the `--server` option:
 ./target/release/shellshare --server http://localhost:3000
 ```
 
-## Deploy
+## Security model
 
-To deploy with [Dokku](https://dokku.com/), let it build the image from
-source on each push using the project's `Dockerfile`:
-
-```bash
-# Create the app
-dokku apps:create shellshare
-
-# Build from the source Dockerfile (this is also Dokku's default)
-dokku builder-dockerfile:set shellshare dockerfile-path Dockerfile
-
-# Deploy: pushes the current commit; Dokku builds and releases it
-make deploy
-```
-
-Each `make deploy` builds the pushed commit on the Dokku host, so the
-deployed code always matches what you pushed — there is no separate image
-tag to bump.
-
-## Analytics (optional, off by default)
-
-The server can send anonymous usage events (rooms created, broadcast
-durations, viewer counts) to [PostHog](https://posthog.com). Nothing is
-collected unless you opt in by setting both variables:
-
-```bash
-SHELLSHARE_POSTHOG_KEY=phc_yourprojectkey \
-SHELLSHARE_POSTHOG_SALT=some-long-random-secret \
-shellshare server
-```
-
-(Set `SHELLSHARE_POSTHOG_HOST` for self-hosted PostHog. The equivalent
-`--posthog-*` flags also exist, but prefer the environment variables:
-the salt is a secret, and command-line arguments are visible to other
-local users.)
-
-No personal data is sent: no IP addresses, no room names, no passwords.
-Broadcasters are identified only by `HMAC-SHA256(salt, password)` and
-rooms by `HMAC-SHA256(salt, room_name)`, which lets the operator count
-returning users without being able to identify anyone. Keep the salt
-stable across restarts and servers so returning users stay recognizable;
-rotating it resets all identities. Events are fire-and-forget and never
-block or slow down broadcasting.
-
-## Releasing
-
-```bash
-make release                # patch bump, e.g. 2.0.6 -> 2.0.7
-make release VERSION=2.1.0  # explicit version
-```
-
-This bumps Cargo.toml, commits, tags, and pushes. CI then runs the e2e tests, builds all platforms, creates the GitHub release with binaries, and publishes the [npm packages](https://www.npmjs.com/package/shellshare).
+Data flows one way: from your terminal to the server to the viewers.
+Viewers cannot send input. Share links are unguessable (18 random
+alphanumerics) but public — anyone with the link can watch, so don't
+broadcast secrets. Broadcasts are not recorded: rooms are deleted when
+the broadcast ends or after a day of inactivity. If you don't want your
+bytes to touch shellshare.net at all, self-host (`shellshare serve`,
+optionally with `--tunnel`).
 
 ## Limitations
 
 This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org)
 or [other terminal recording tools](https://github.com/topics/terminal-recording).
+
+## Deploying shellshare.net, analytics, releasing
+
+Maintainer documentation lives in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 # License
 
