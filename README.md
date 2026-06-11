@@ -30,6 +30,27 @@ https://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
 Anyone that opens this link will be able to see what you're doing in your
 terminal. When you're done, type `exit` or hit CTRL+D.
 
+### Scripting & AI agents
+
+shellshare is built to be driven by scripts and AI agents — for example, an
+agent sharing a live view of a long build with its user. Add `--json` for a
+machine-readable contract: the first line on stdout is
+`{"event":"sharing","url":"https://shellshare.net/r/..."}` (parse `url` and
+hand it to your user), and a final `{"event":"end","exit_code":N}` line is
+printed when the broadcast finishes. Errors go to stderr as `ERROR: ...`
+with a non-zero exit.
+
+```bash
+# Share a single command live; exits with the command's exit code
+shellshare exec --json -- npm test
+
+# Stream a log or any pipe (reads stdin until EOF)
+tail -f build.log | shellshare --stdin --json
+```
+
+See [AGENTS.md](AGENTS.md) (or https://shellshare.net/llms.txt) for the full
+agent-facing documentation and recipes.
+
 ### Hosting a server
 
 The same `shellshare` binary also includes the server code, allowing you to broadcast your terminal to a server you control.

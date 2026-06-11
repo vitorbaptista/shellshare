@@ -17,6 +17,83 @@
   <link rel="stylesheet" href="/stylesheet/vendor/cssbase.css">
   <link rel="stylesheet" href="/stylesheet/index.css">
   <link rel="icon" type="image/png" href="/favicon.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "shellshare",
+    "url": "https://shellshare.net",
+    "description": "Broadcast your terminal live with a single command. Share a terminal session via a web link - no signup, no configuration, viewers watch read-only in the browser.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "downloadUrl": "https://get.shellshare.net",
+    "installUrl": "https://www.npmjs.com/package/shellshare",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "isAccessibleForFree": true,
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "author": {
+      "@type": "Person",
+      "name": "Vitor Baptista",
+      "url": "https://vitorbaptista.com"
+    },
+    "softwareHelp": {
+      "@type": "CreativeWork",
+      "url": "https://shellshare.net/llms.txt"
+    }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "How do I share my terminal live without signing up?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Run `npx -y shellshare` (or download the binary from https://get.shellshare.net). It prints a link like https://shellshare.net/r/abc123 - anyone who opens it watches your terminal live. Exit the shell to stop."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can someone control my terminal through shellshare?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. All communication is one-way, from your terminal to the viewers. Nobody can send commands to your terminal."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I save or record the broadcast?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. shellshare is for live broadcasts only. To record a terminal session, use asciinema.org instead."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can AI agents or scripts use shellshare?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, shellshare is built for it. Run `shellshare exec --json -- <command>` to share one command live: the first stdout line is a JSON event with the share URL, and the process exits with the command's exit code. Pipes work too: `tail -f build.log | shellshare --stdin --json`. Machine-readable docs at https://shellshare.net/llms.txt."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I self-host shellshare?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. The same binary contains the server: `shellshare server` hosts it, and `shellshare serve` shares your terminal through an embedded local server so nothing leaves your computer. Add --tunnel for a public Cloudflare quick-tunnel link."
+        }
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <div class="wrapper">
@@ -84,6 +161,8 @@ PS&gt; exit</span>
         <p>If you don't set a password, shellshare will use your network card's MAC address to uniquely identify your computer. This means you'll be able to transmit to the same room later only if you're using the same computer.</p>
         <h3>Can I change the colors viewers see?</h3>
         <p>Yes. Start shellshare with <code>--theme</code> (e.g. <code>./shellshare --theme dracula</code>) and viewers will see your broadcast in that color scheme. We support the same themes as <a href="https://docs.asciinema.org/manual/player/themes/">asciinema</a>: <code>asciinema</code>, <code>dracula</code>, <code>gruvbox-dark</code>, <code>monokai</code>, <code>nord</code>, <code>seti</code>, <code>solarized-dark</code>, <code>solarized-light</code> and <code>tango</code>.</p>
+        <h3>Can AI agents or scripts use shellshare?</h3>
+        <p>Yes, shellshare is built for it. Add <code>--json</code> and the first line on stdout is a machine-readable event with the share URL: <code>{"event":"sharing","url":"https://shellshare.net/r/..."}</code>. Use <code>shellshare exec --json -- npm test</code> to share a single command live and exit with its exit code, or pipe anything into <code>shellshare --stdin --json</code>. Machine-readable docs live at <a href="/llms.txt">shellshare.net/llms.txt</a>.</p>
         <h3>Can I recover the password to a custom room?</h3>
         <p>No. However, the rooms are deleted after a day of inactivity, so you can recreate it in 24 hours.</p>
         <h3>Can I run shellshare on Windows?</h3>

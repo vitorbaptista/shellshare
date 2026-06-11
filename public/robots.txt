@@ -1,2 +1,32 @@
+# Rooms are ephemeral live broadcasts - never index them.
+# Everything else (home page, llms.txt, downloads) is welcome,
+# including AI crawlers.
+
 User-agent: *
-Disallow: /r/*
+Disallow: /r/
+
+User-agent: GPTBot
+Disallow: /r/
+
+User-agent: ClaudeBot
+Disallow: /r/
+
+User-agent: Claude-Web
+Disallow: /r/
+
+User-agent: anthropic-ai
+Disallow: /r/
+
+User-agent: PerplexityBot
+Disallow: /r/
+
+User-agent: Google-Extended
+Disallow: /r/
+
+User-agent: Applebot-Extended
+Disallow: /r/
+
+User-agent: CCBot
+Disallow: /r/
+
+Sitemap: https://shellshare.net/sitemap.xml

@@ -6,7 +6,7 @@
 mod script;
 mod ws;
 
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -35,6 +35,11 @@ pub struct ClientArgs {
     pub room: Option<String>,
     pub password: Option<String>,
     pub stdin: bool,
+    /// Print machine-readable JSON events to stdout instead of prose
+    pub json: bool,
+    /// Command to run instead of an interactive shell (`shellshare exec`);
+    /// the broadcast ends when it exits and its exit code is propagated
+    pub exec: Option<Vec<String>>,
     /// Viewer color theme, already validated against `themes::names()`
     pub theme: Option<String>,
 }
@@ -79,8 +84,17 @@ fn normalize_server_url(server: &str) -> String {
     server.trim_end_matches('/').to_string()
 }
 
-/// Run the shellshare client
-pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
+/// Emit one machine-readable event line on stdout (the `--json` contract:
+/// whole JSON objects, one per line, flushed immediately so a pipe reader
+/// sees the share URL before any terminal output follows).
+fn emit_json(event: &serde_json::Value) {
+    println!("{event}");
+    let _ = io::stdout().flush();
+}
+
+/// Run the shellshare client. Returns the exit code to propagate: the
+/// child command's status for `exec`, otherwise 0.
+pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     let server = normalize_server_url(&args.server);
     let share_base = args
         .display_server
@@ -106,31 +120,60 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
         running_clone.store(false, Ordering::SeqCst);
     })?;
 
-    if args.stdin {
-        // Stdin mode - print to stderr
-        eprintln!("Sharing terminal in {share_base}/{room_path}");
+    let share_url = format!("{share_base}/{room_path}");
+    if args.json {
+        emit_json(&serde_json::json!({
+            "event": "sharing",
+            "url": share_url,
+            "room": room,
+            "server": server,
+        }));
+    }
+
+    let exit_code = if args.stdin {
+        // Stdin mode - prose goes to stderr (stdout may be piped onward)
+        if !args.json {
+            eprintln!("Sharing terminal in {share_url}");
+        }
 
         // Read from stdin and stream to server
         stream_stdin(transport, &running)?;
 
-        eprintln!("End of transmission.");
+        if !args.json {
+            eprintln!("End of transmission.");
+        }
+        0
     } else {
-        // Script mode - print to stdout
-        if size.rows > 30 || size.cols > 160 {
-            println!("Current terminal size is {}x{}.", size.rows, size.cols);
-            println!("It's too big to be viewed on smaller screens.");
-            println!("You can resize it anytime.");
+        // Script mode - prose goes to stdout. The interactive niceties
+        // only make sense for a human on a TTY; scripts and agents get
+        // the JSON contract (or nothing) instead.
+        if !args.json {
+            if io::stdout().is_terminal() && (size.rows > 30 || size.cols > 160) {
+                println!("Current terminal size is {}x{}.", size.rows, size.cols);
+                println!("It's too big to be viewed on smaller screens.");
+                println!("You can resize it anytime.");
+            }
+
+            println!("Sharing terminal in {share_url}");
         }
 
-        println!("Sharing terminal in {share_base}/{room_path}");
-
         // Run script mode with PTY
-        script::run_script_mode(transport, &running)?;
+        let code = script::run_script_mode(transport, &running, args.exec.as_deref())?;
 
-        println!("End of transmission.");
+        if !args.json {
+            println!("End of transmission.");
+        }
+        code
+    };
+
+    if args.json {
+        emit_json(&serde_json::json!({
+            "event": "end",
+            "exit_code": exit_code,
+        }));
     }
 
-    Ok(())
+    Ok(exit_code)
 }
 
 /// Stream stdin to the server (for testing)

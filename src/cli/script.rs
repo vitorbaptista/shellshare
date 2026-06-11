@@ -86,12 +86,15 @@ impl RawModeGuard {
     }
 }
 
-/// Run script mode - spawn a shell in a PTY and stream output to server
+/// Run script mode - spawn a shell (or, for `exec`, a single command) in a
+/// PTY and stream output to server. Returns the exit code to propagate:
+/// the child's status when it can be observed, otherwise 0.
 #[allow(clippy::too_many_lines)] // Complex PTY setup with multiple threads
 pub fn run_script_mode(
     transport: ws::Transport,
     running: &Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error>> {
+    exec: Option<&[String]>,
+) -> Result<i32, Box<dyn std::error::Error>> {
     // Enable raw mode BEFORE spawning shell
     // This allows character-by-character input and proper escape sequence handling
     // for interactive TUI apps like vim, less, htop, etc.
@@ -119,8 +122,16 @@ pub fn run_script_mode(
     // Open a PTY pair
     let pair = pty_system.openpty(pty_size)?;
 
-    // Build command to spawn the shell, preserving current working directory
-    let mut cmd = CommandBuilder::new(&shell);
+    // Build the command to spawn - the user's shell, or the `exec`
+    // command verbatim - preserving the current working directory
+    let mut cmd = match exec {
+        Some([program, args @ ..]) => {
+            let mut cmd = CommandBuilder::new(program);
+            cmd.args(args);
+            cmd
+        }
+        _ => CommandBuilder::new(&shell),
+    };
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
@@ -343,6 +354,10 @@ pub fn run_script_mode(
         }
     });
 
+    // The child's exit status when it could be observed; `exec` forwards
+    // it to the caller (interrupted/unobservable children report 0)
+    let mut exit_code = 0;
+
     // Poll child status instead of blocking, so we can respond to Ctrl+C and resize requests
     loop {
         // Check if Ctrl+C was pressed
@@ -367,8 +382,9 @@ pub fn run_script_mode(
 
         // Check if child has exited (non-blocking)
         match child.try_wait() {
-            Ok(Some(_status)) => {
+            Ok(Some(status)) => {
                 // Child exited
+                exit_code = i32::try_from(status.exit_code()).unwrap_or(1);
                 break;
             }
             Ok(None) => {
@@ -407,5 +423,5 @@ pub fn run_script_mode(
         let _ = handle.join();
     }
 
-    Ok(())
+    Ok(exit_code)
 }
