@@ -67,6 +67,15 @@ dokku builder-dockerfile:set shellshare dockerfile-path Dockerfile.production
 make deploy
 ```
 
+## Releasing
+
+```bash
+make release                # patch bump, e.g. 2.0.6 -> 2.0.7
+make release VERSION=2.1.0  # explicit version
+```
+
+This bumps Cargo.toml, commits, tags, and pushes. CI then runs the e2e tests, builds all platforms, creates the GitHub release with binaries, and publishes the [npm packages](https://www.npmjs.com/package/shellshare).
+
 ## Limitations
 
 This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org)
