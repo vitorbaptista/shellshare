@@ -222,7 +222,7 @@ class TestServerCommunication:
         )
 
         assert returncode == 0
-        assert SERVER_URL.replace("http://", "") in stderr or "localhost:3000" in stderr
+        assert SERVER_URL.replace("http://", "") in stderr
 
     def test_custom_room_name(self, unique_password):
         """--room flag should set the room name."""

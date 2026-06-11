@@ -14,6 +14,7 @@ import socket
 import string
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -49,26 +50,35 @@ def _free_port():
         return s.getsockname()[1]
 
 
-# SHELLSHARE_E2E_PORT pins the shared server's port (and reuses any
-# server already answering there). Without it the suite picks a free
-# port, so whatever happens to occupy :3000 never breaks a test run.
-_env_port = os.environ.get("SHELLSHARE_E2E_PORT")
-if _env_port is not None:
-    try:
-        SHARED_PORT = int(_env_port)
-        if not 1 <= SHARED_PORT <= 65535:
-            raise ValueError
-    except ValueError:
-        raise RuntimeError(
-            "SHELLSHARE_E2E_PORT must be a port number (1-65535), got: "
-            f"{_env_port!r}"
-        ) from None
-else:
-    SHARED_PORT = _free_port()
-    # xdist workers re-import this module in fresh processes spawned
-    # after this point; the env var carries the controller's choice so
-    # every worker agrees on the port
-    os.environ["SHELLSHARE_E2E_PORT"] = str(SHARED_PORT)
+def _resolve_shared_port():
+    """Pick the shared server's port, returning (port, pinned).
+
+    SHELLSHARE_E2E_PORT pins the port (pytest_configure then reuses any
+    server already answering there). Without it the suite picks a free
+    port, so whatever happens to occupy :3000 never breaks a test run.
+    """
+    env_port = os.environ.get("SHELLSHARE_E2E_PORT")
+    if env_port is not None:
+        try:
+            port = int(env_port)
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except ValueError:
+            raise RuntimeError(
+                "SHELLSHARE_E2E_PORT must be a port number (1-65535), got: "
+                f"{env_port!r}"
+            ) from None
+        return port, True
+    port = _free_port()
+    # xdist workers re-import this module in fresh local processes
+    # spawned after this point (popen gateways, xdist's default); the
+    # env var carries the controller's choice so every worker agrees
+    # on the port
+    os.environ["SHELLSHARE_E2E_PORT"] = str(port)
+    return port, False
+
+
+SHARED_PORT, _PORT_WAS_PINNED = _resolve_shared_port()
 # 127.0.0.1, not localhost: on Windows localhost can resolve to ::1 first
 # while the server listens on IPv4 (see ServerHandle.url)
 SERVER_URL = f"http://127.0.0.1:{SHARED_PORT}"
@@ -87,34 +97,47 @@ def _server_responds(url, timeout=1):
 
 
 def _spawn_server(port, *extra_args):
-    """Spawn a shellshare server process on the given port."""
+    """Spawn a shellshare server process on the given port.
+
+    Output goes to a log file (kept on the proc as `log_path`) so a
+    startup failure - e.g. the port got taken between picking it and
+    binding - is reported by wait_for_server instead of timing out
+    with no clue.
+    """
     if not CLI_PATH.exists():
         raise RuntimeError(
             f"shellshare binary not found at {CLI_PATH}. "
             "Run `cargo build --release` first."
         )
-    return subprocess.Popen(
-        [str(CLI_PATH), "server", "--host", "127.0.0.1", "--port", str(port)]
-        + [str(a) for a in extra_args],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    log_path = Path(tempfile.gettempdir()) / f"shellshare-e2e-{port}.log"
+    with open(log_path, "wb") as log:
+        proc = subprocess.Popen(
+            [str(CLI_PATH), "server", "--host", "127.0.0.1", "--port", str(port)]
+            + [str(a) for a in extra_args],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+    proc.log_path = log_path
+    return proc
 
 
 def pytest_configure(config):
-    """Start the shared server if none is answering at SERVER_URL.
+    """Start the shared server, or adopt a pinned one already running.
 
     Runs only in the xdist controller (or in a single-process run), so the
     server is started exactly once no matter how many workers there are.
-    With SHELLSHARE_E2E_PORT pinned, a server someone already started on
-    that port is detected and left alone.
+    Reusing a running server only applies to a pinned port: an auto-picked
+    port was free moments ago, so anything answering there now is a
+    stranger that grabbed it in the meantime - spawn and let the bind
+    failure surface instead of silently testing the wrong server.
     """
     if hasattr(config, "workerinput"):  # xdist worker: controller handles it
         return
     config._shellshare_server = None
-    if not _server_responds(SERVER_URL):
-        config._shellshare_server = _spawn_server(SHARED_PORT)
-        wait_for_server(SERVER_URL)
+    if _PORT_WAS_PINNED and _server_responds(SERVER_URL):
+        return
+    config._shellshare_server = _spawn_server(SHARED_PORT)
+    wait_for_server(SERVER_URL, proc=config._shellshare_server)
 
 
 def pytest_unconfigure(config):
@@ -156,7 +179,7 @@ def dedicated_server():
         proc = _spawn_server(port, *extra_args)
         handle = ServerHandle(port=port, proc=proc)
         handles.append(handle)
-        wait_for_server(handle.url)
+        wait_for_server(handle.url, proc=proc)
         return handle
 
     yield start
@@ -219,10 +242,25 @@ def poll_until(predicate, timeout=5, interval=0.1):
     return False
 
 
-def wait_for_server(url, timeout_seconds=30):
-    """Wait for server to be ready."""
+def wait_for_server(url, timeout_seconds=30, proc=None):
+    """Wait for server to be ready.
+
+    Given the server's process, a crash before it answers fails
+    immediately with the server's output instead of timing out.
+    """
     start = time.time()
     while time.time() - start < timeout_seconds:
+        if proc is not None and proc.poll() is not None:
+            log_path = getattr(proc, "log_path", None)
+            output = (
+                "\n" + Path(log_path).read_text(errors="replace")[-2000:]
+                if log_path is not None
+                else ""
+            )
+            raise RuntimeError(
+                f"server exited with code {proc.returncode} "
+                f"before answering at {url}{output}"
+            )
         try:
             urllib.request.urlopen(url, timeout=1)
             return True
