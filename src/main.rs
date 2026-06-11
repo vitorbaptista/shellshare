@@ -178,7 +178,7 @@ fn start_local_server(host: &str, port: u16) -> Result<std::net::SocketAddr, Str
         .map_err(|e| format!("could not start local server on {host}:{port}: {e}"))
 }
 
-/// Build the analytics config from the server's PostHog flags.
+/// Build the analytics config from the server's `PostHog` flags.
 ///
 /// Both the key and the salt are required; refusing a half-configured
 /// setup beats silently degrading it (a random fallback salt would
