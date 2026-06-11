@@ -16,6 +16,10 @@ jobs:
     # regressions show up when comparing runs.
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      # Push trend data to the gh-pages branch and comment on regressions
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -59,3 +63,40 @@ jobs:
         with:
           name: benchmark-results-${{ github.sha }}
           path: e2e/bench-results.json
+
+      - name: Convert results for trend tracking
+        # github-action-benchmark's customSmallerIsBetter format: latency
+        # scenarios report p50/p95 in ms; throughput scenarios report
+        # elapsed seconds (fixed payload, so smaller is better there too)
+        run: |
+          python3 - <<'EOF'
+          import json
+
+          results = json.load(open("e2e/bench-results.json"))["results"]
+          out = []
+          for name, r in results.items():
+              if "p50_ms" in r:
+                  out.append({"name": f"{name} p50", "unit": "ms", "value": r["p50_ms"]})
+                  out.append({"name": f"{name} p95", "unit": "ms", "value": r["p95_ms"]})
+              elif "elapsed_s" in r:
+                  out.append({"name": f"{name} elapsed", "unit": "s", "value": r["elapsed_s"]})
+          json.dump(out, open("bench-trend.json", "w"), indent=2)
+          EOF
+
+      - name: Track trend and alert on regressions
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: shellshare pipeline benchmarks
+          tool: customSmallerIsBetter
+          output-file-path: bench-trend.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Only pushes to main append to the trend history; PRs compare
+          # against it read-only
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-data-file: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # Shared runners are noisy: alert only on a 1.5x regression, and
+          # never fail the job - the comment is the signal
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
+          summary-always: true
