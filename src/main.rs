@@ -10,6 +10,7 @@
 mod cli;
 mod protocol;
 mod server;
+mod tunnel;
 
 use clap::{Parser, Subcommand};
 use tracing::Level;
@@ -76,6 +77,10 @@ enum Commands {
         /// Room TTL in seconds - rooms inactive for this long are removed (default: 21600 = 6 hours)
         #[arg(long, default_value_t = DEFAULT_ROOM_TTL_SECS)]
         room_ttl: u64,
+
+        /// Expose the server publicly through a Cloudflare quick tunnel (requires cloudflared)
+        #[arg(long)]
+        tunnel: bool,
     },
     /// Share your terminal through a local server (no external server needed)
     Serve {
@@ -86,6 +91,10 @@ enum Commands {
         /// Port for the local server
         #[arg(short, long, default_value = DEFAULT_PORT)]
         port: u16,
+
+        /// Share a public link through a Cloudflare quick tunnel (requires cloudflared)
+        #[arg(long)]
+        tunnel: bool,
     },
 }
 
@@ -144,6 +153,16 @@ fn start_local_server(host: &str, port: u16) -> Result<std::net::SocketAddr, Str
         .map_err(|e| format!("could not start local server on {host}:{port}: {e}"))
 }
 
+/// Print a client error the way the CLI always has and exit non-zero.
+/// Call sites must drop any [`tunnel::Tunnel`] first: exiting skips
+/// destructors, so a live handle would leak cloudflared.
+fn exit_on_error(result: Result<(), Box<dyn std::error::Error>>) {
+    if let Err(e) = result {
+        eprintln!("ERROR: {e}");
+        std::process::exit(1);
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -153,6 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             port,
             cleanup_interval,
             room_ttl,
+            tunnel,
         }) => {
             // Initialize logging for server
             let subscriber = FmtSubscriber::builder()
@@ -162,78 +182,139 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create runtime only for server mode
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(server::run(&host, port, cleanup_interval, room_ttl))?;
+            runtime.block_on(async {
+                let listeners = server::bind(&host, port).await?;
+                // Bind before tunneling so cloudflared forwards to the
+                // real port (`--port 0` lets the OS pick), and hold the
+                // handle for the server's lifetime: dropping it would
+                // kill cloudflared and the public URL with it
+                let _tunnel = if tunnel {
+                    let t = tunnel::start(listeners[0].local_addr()?)?;
+                    tracing::info!("Tunnel ready: rooms are public at {}/r/<room>", t.url);
+                    tracing::warn!(
+                        "anyone with that URL can view rooms and broadcast their own \
+                         through this server"
+                    );
+                    Some(t)
+                } else {
+                    None
+                };
+                server::serve_on(listeners, cleanup_interval, room_ttl).await
+            })?;
         }
-        Some(Commands::Serve { host, port }) => {
+        Some(Commands::Serve { host, port, tunnel }) => {
             // No tracing subscriber on purpose: the embedded server's
             // logs would garble the shared terminal
             if cli.server.trim_end_matches('/') != DEFAULT_SERVER_URL {
-                eprintln!("WARNING: --server is ignored by 'serve'; broadcasting to the local server");
-            }
-
-            let addr = match start_local_server(&host, port) {
-                Ok(addr) => addr,
-                Err(e) => {
-                    eprintln!("ERROR: {e}");
-                    std::process::exit(1);
-                }
-            };
-
-            // bind() accepts both "::1" and "[::1]"; strip brackets so
-            // the loopback check and the URL see the same host
-            let bare_host = host
-                .strip_prefix('[')
-                .and_then(|h| h.strip_suffix(']'))
-                .unwrap_or(&host);
-            let parsed_ip = bare_host.parse::<std::net::IpAddr>().ok();
-            let is_loopback = bare_host.eq_ignore_ascii_case("localhost")
-                || parsed_ip.is_some_and(|ip| ip.is_loopback());
-            let is_wildcard = parsed_ip.is_some_and(|ip| ip.is_unspecified());
-            if !is_loopback {
                 eprintln!(
-                    "WARNING: binding a non-loopback address; anyone who can reach this machine \
-                     can view this terminal and broadcast their own rooms on this server"
+                    "WARNING: --server is ignored by 'serve'; broadcasting to the local server"
                 );
-                if is_wildcard {
-                    eprintln!(
-                        "Viewers on other machines must replace 'localhost' in the link below \
-                         with this machine's address"
-                    );
-                }
             }
-
-            // Browsers can't reach wildcard addresses; point the client
-            // (and the printed share link) at localhost instead. IPv6
-            // hosts need brackets in URLs.
-            let url_host = if is_wildcard {
-                "localhost".to_string()
-            } else if bare_host.contains(':') {
-                format!("[{bare_host}]")
-            } else {
-                bare_host.to_string()
-            };
-            // Connecting the client claims the room immediately, so
-            // nobody can take the name between server start and the
-            // first broadcast
-            let args = cli::ClientArgs {
-                server: format!("http://{url_host}:{}", addr.port()),
-                room: cli.room,
-                password: cli.password,
-                stdin: cli.stdin,
-            };
-            cli::run(args)?;
+            serve(&host, port, tunnel, cli.room, cli.password, cli.stdin);
         }
         None => {
             // Run client mode
             let args = cli::ClientArgs {
                 server: cli.server,
+                display_server: None,
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
             };
-            cli::run(args)?;
+            exit_on_error(cli::run(args));
         }
     }
 
     Ok(())
+}
+
+/// `shellshare serve`: boot the embedded server, optionally tunnel it,
+/// and broadcast this terminal to it.
+fn serve(
+    host: &str,
+    port: u16,
+    tunnel: bool,
+    room: Option<String>,
+    password: Option<String>,
+    stdin: bool,
+) {
+    let addr = match start_local_server(host, port) {
+        Ok(addr) => addr,
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // bind() accepts both "::1" and "[::1]"; strip brackets so
+    // the loopback check and the URL see the same host
+    let bare_host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    let parsed_ip = bare_host.parse::<std::net::IpAddr>().ok();
+    let is_loopback =
+        bare_host.eq_ignore_ascii_case("localhost") || parsed_ip.is_some_and(|ip| ip.is_loopback());
+    let is_wildcard = parsed_ip.is_some_and(|ip| ip.is_unspecified());
+    if !is_loopback {
+        eprintln!(
+            "WARNING: binding a non-loopback address; anyone who can reach this machine \
+             can view this terminal and broadcast their own rooms on this server"
+        );
+        if is_wildcard {
+            eprintln!(
+                "Viewers on other machines must replace 'localhost' in the link below \
+                 with this machine's address"
+            );
+        }
+    }
+
+    // Browsers can't reach wildcard addresses; point the client
+    // (and the printed share link) at localhost instead. IPv6
+    // hosts need brackets in URLs.
+    let url_host = if is_wildcard {
+        "localhost".to_string()
+    } else if bare_host.contains(':') {
+        format!("[{bare_host}]")
+    } else {
+        bare_host.to_string()
+    };
+    // The broadcaster keeps talking to the local server directly;
+    // only the share link (and so the viewers) goes through the
+    // tunnel. The handle must outlive the client: dropping it
+    // kills cloudflared and the public URL with it
+    let tunnel_handle = if tunnel {
+        match tunnel::start(addr) {
+            Ok(t) => {
+                eprintln!(
+                    "WARNING: anyone with the link below can view this terminal \
+                     and broadcast their own rooms through this server"
+                );
+                Some(t)
+            }
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    // Connecting the client claims the room immediately, so
+    // nobody can take the name between server start and the
+    // first broadcast
+    let args = cli::ClientArgs {
+        server: format!("http://{url_host}:{}", addr.port()),
+        display_server: tunnel_handle.as_ref().map(|t| t.url.clone()),
+        room,
+        password,
+        stdin,
+    };
+    let result = cli::run(args);
+    // Close the tunnel before a possible exit: process::exit
+    // skips destructors, which would leave cloudflared running
+    // with the public URL pointing at a dead server
+    drop(tunnel_handle);
+    exit_on_error(result);
 }

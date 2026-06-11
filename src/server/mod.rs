@@ -73,17 +73,6 @@ const LEGACY_CLIENT_MESSAGE: &str = "This shellshare server no longer supports b
     over HTTP POST. Your client is too old: download the latest from this server's home page \
     (it serves the binary at /bin/shellshare) and share again.";
 
-/// Run the shellshare server
-pub async fn run(
-    host: &str,
-    port: u16,
-    cleanup_interval_secs: u64,
-    room_ttl_secs: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let listeners = bind(host, port).await?;
-    serve_on(listeners, cleanup_interval_secs, room_ttl_secs).await
-}
-
 /// Bind the server's TCP listeners.
 ///
 /// Separated from [`serve_on`] so callers (e.g. `shellshare serve`) can

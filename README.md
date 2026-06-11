@@ -34,7 +34,19 @@ terminal. When you're done, type `exit` or hit CTRL+D.
 
 The same `shellshare` binary also includes the server code, allowing you to broadcast your terminal to a server you control.
 
-To do so you just need to run `shellshare server` in one terminal and access [http://localhost:3000](http://localhost:3000). You can broadcast to this server using `shellshare --server http://localhost:3000`. You can use [ngrok](https://ngrok.com) to easily get a public URL to shellshare running on your local machine.
+To do so you just need to run `shellshare server` in one terminal and access [http://localhost:3000](http://localhost:3000). You can broadcast to this server using `shellshare --server http://localhost:3000`.
+
+`shellshare serve` does both at once: it starts a local server in the background and broadcasts your terminal to it.
+
+### Sharing a public link without shellshare.net
+
+Add `--tunnel` to `serve` (or `server`) to expose the local server through a [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/):
+
+```bash
+shellshare serve --tunnel
+```
+
+The share link becomes a public `https://*.trycloudflare.com` URL that anyone can open, while your terminal never leaves your machine except through that tunnel. It requires [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to be installed (`brew install cloudflared` on macOS) - no Cloudflare account needed. The tunnel closes when shellshare exits.
 
 ## Installing
 

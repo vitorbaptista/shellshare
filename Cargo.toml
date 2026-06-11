@@ -63,7 +63,7 @@ rand = "0.8"
 portable-pty = "0.8"
 
 # Ctrl+C handling (CLI)
-ctrlc = "3"
+ctrlc = { version = "3", features = ["termination"] }
 libc = "0.2.180"
 term_size = "0.3.2"
 signal-hook = "0.4.3"
