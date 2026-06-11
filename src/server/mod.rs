@@ -147,8 +147,16 @@ pub async fn serve_on(
         ..Default::default()
     };
 
-    // Socket.IO setup
+    // Socket.IO setup. WebSocket only, no HTTP long-polling: the
+    // engine.io polling encoder corrupts binary events when an emit
+    // lands on a parked long-poll (the announce and its attachment are
+    // concatenated without the packet separator - engineioxide bug,
+    // still present in 0.17.3), which intermittently garbled history
+    // replay and live output for viewers. Every consumer is ours (the
+    // viewer page below connects websocket-only), so there is nothing
+    // that needs the fallback.
     let (sio_layer, io) = SocketIo::builder()
+        .transports([socketioxide::TransportType::Websocket])
         .with_state(app_state.clone())
         .build_layer();
 

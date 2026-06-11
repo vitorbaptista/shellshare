@@ -388,7 +388,9 @@ class SocketListener:
                 self._broadcasting.append(live)
                 self._condition.notify_all()
 
-        self._sio.connect(self.server_url)
+        # WebSocket only, like the viewer page: the server rejects HTTP
+        # long-polling (its engine.io polling path corrupts binary frames)
+        self._sio.connect(self.server_url, transports=["websocket"])
         self._connected = True
 
         if not wait_for_join:

@@ -54,7 +54,10 @@
 
       // Theme definitions injected by the server from themes.json
       var THEMES = {{THEMES_JSON}};
-      var socket = io();
+      // WebSocket only - the server rejects HTTP long-polling (its
+      // engine.io polling path corrupts binary frames), and skipping
+      // the polling-then-upgrade dance avoids its races entirely
+      var socket = io({transports: ['websocket']});
       var room = window.location.pathname;
       var term;
       var currentSize = {};

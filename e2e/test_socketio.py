@@ -23,6 +23,7 @@ import json
 import platform
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -90,11 +91,29 @@ class TestSocketIOConnection:
         def connect():
             connected.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
 
         assert connected.wait(timeout=15), "Failed to connect"
 
         sio.disconnect()
+
+    def test_http_polling_is_rejected(self):
+        """The server must reject the HTTP long-polling transport.
+
+        Its engine.io polling encoder corrupts binary events delivered
+        to a parked long-poll (the attachment announce and its binary
+        payload are concatenated without the packet separator), which
+        intermittently garbled history replay for viewers. Everything
+        we ship connects WebSocket-only; polling failing loudly here
+        keeps it from being reintroduced by accident.
+        """
+        wait_for_server(SERVER_URL)
+
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(
+                f"{SERVER_URL}/socket.io/?EIO=4&transport=polling", timeout=5
+            )
+        assert exc_info.value.code == 400
 
     def test_can_join_room(self):
         """Should be able to join a room."""
@@ -108,7 +127,7 @@ class TestSocketIOConnection:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
 
         # Join room
         sio.emit('join', f'/r/{room_id}')
@@ -144,7 +163,7 @@ class TestSocketIOMessages:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for join to complete
@@ -186,7 +205,7 @@ class TestSocketIOMessages:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for join to complete
@@ -228,7 +247,7 @@ class TestSocketIOMessages:
             received_messages.append(data)
             message_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for existing data
@@ -260,7 +279,7 @@ class TestSocketIOUserCount:
             user_counts.append(count)
             count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for user count
@@ -292,7 +311,7 @@ class TestSocketIOUserCount:
             elif count == 2:
                 count2_received.set()
 
-        sio1.connect(SERVER_URL)
+        sio1.connect(SERVER_URL, transports=["websocket"])
         sio1.emit('join', f'/r/{room_id}')
         assert count1_received.wait(timeout=15), "First client didn't receive count=1"
 
@@ -304,7 +323,7 @@ class TestSocketIOUserCount:
         def on_users_count2(count):
             sio2_joined.set()
 
-        sio2.connect(SERVER_URL)
+        sio2.connect(SERVER_URL, transports=["websocket"])
         sio2.emit('join', f'/r/{room_id}')
         assert sio2_joined.wait(timeout=15), "Second client didn't join"
 
@@ -337,7 +356,7 @@ class TestSocketIOUserCount:
             elif count == 1 and count2_received.is_set():
                 count_back_to_1.set()
 
-        sio1.connect(SERVER_URL)
+        sio1.connect(SERVER_URL, transports=["websocket"])
         sio1.emit('join', f'/r/{room_id}')
         assert count1_received.wait(timeout=15), "First client didn't receive count=1"
 
@@ -349,7 +368,7 @@ class TestSocketIOUserCount:
         def on_users_count2(count):
             sio2_joined.set()
 
-        sio2.connect(SERVER_URL)
+        sio2.connect(SERVER_URL, transports=["websocket"])
         sio2.emit('join', f'/r/{room_id}')
         assert sio2_joined.wait(timeout=15), "Second client didn't join"
         assert count2_received.wait(timeout=15), "First client didn't receive count=2"
@@ -389,7 +408,7 @@ class TestSocketIOMultipleRooms:
         def on_users_count1(count):
             sio1_joined.set()
 
-        sio1.connect(SERVER_URL)
+        sio1.connect(SERVER_URL, transports=["websocket"])
         sio1.emit('join', f'/r/{room_id1}')
         assert sio1_joined.wait(timeout=15), "Client 1 didn't join"
 
@@ -406,7 +425,7 @@ class TestSocketIOMultipleRooms:
         def on_users_count2(count):
             sio2_joined.set()
 
-        sio2.connect(SERVER_URL)
+        sio2.connect(SERVER_URL, transports=["websocket"])
         sio2.emit('join', f'/r/{room_id2}')
         assert sio2_joined.wait(timeout=15), "Client 2 didn't join"
 
@@ -459,7 +478,7 @@ class TestSocketIOMessageAccumulation:
             received_messages.append(data)
             message_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for existing data
@@ -501,7 +520,7 @@ class TestSocketIOJoinEdgeCases:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         # Join WITHOUT the /r/ prefix
         sio.emit('join', room_id)
 
@@ -552,7 +571,7 @@ class TestSocketIOJoinEdgeCases:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         # Join WITH the /r/ prefix (standard way)
         sio.emit('join', f'/r/{room_id}')
 
@@ -588,7 +607,7 @@ class TestSocketIOJoinEdgeCases:
         def connect_error(data):
             error_occurred.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         assert connected.wait(timeout=15), "Failed to connect"
 
         # Join with empty string - should not crash
@@ -617,7 +636,7 @@ class TestSocketIOJoinEdgeCases:
             user_counts.append(count)
             count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', room_id)
 
         # Wait for user count (indicates successful join)
@@ -666,7 +685,7 @@ class TestSocketIOMultipleRoomJoin:
             if join_count[0] >= 2:  # Both rooms joined
                 joins_complete.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
 
         # Join both rooms
         sio.emit('join', f'/r/{room_id1}')
@@ -703,7 +722,7 @@ class TestSocketIOMultipleRoomJoin:
             counts1.append(count)
             sio1_joined.set()
 
-        sio1.connect(SERVER_URL)
+        sio1.connect(SERVER_URL, transports=["websocket"])
         sio1.emit('join', f'/r/{room_id1}')
         assert sio1_joined.wait(timeout=15), "Client 1 didn't join"
 
@@ -717,7 +736,7 @@ class TestSocketIOMultipleRoomJoin:
             counts2.append(count)
             sio2_joined.set()
 
-        sio2.connect(SERVER_URL)
+        sio2.connect(SERVER_URL, transports=["websocket"])
         sio2.emit('join', f'/r/{room_id2}')
         assert sio2_joined.wait(timeout=15), "Client 2 didn't join"
 
@@ -749,7 +768,7 @@ class TestSocketIOReconnection:
             counts1.append(count)
             sio1_joined.set()
 
-        sio1.connect(SERVER_URL)
+        sio1.connect(SERVER_URL, transports=["websocket"])
         sio1.emit('join', f'/r/{room_id}')
         assert sio1_joined.wait(timeout=15), "First join failed"
 
@@ -768,7 +787,7 @@ class TestSocketIOReconnection:
             counts2.append(count)
             sio2_joined.set()
 
-        sio2.connect(SERVER_URL)
+        sio2.connect(SERVER_URL, transports=["websocket"])
         sio2.emit('join', f'/r/{room_id}')
         assert sio2_joined.wait(timeout=15), "Rejoin failed"
 
@@ -799,7 +818,7 @@ class TestSocketIOReconnection:
             messages1.append(data)
             msg_received1.set()
 
-        sio1.connect(SERVER_URL)
+        sio1.connect(SERVER_URL, transports=["websocket"])
         sio1.emit('join', f'/r/{room_id}')
 
         assert msg_received1.wait(timeout=15), "First client should receive message"
@@ -815,7 +834,7 @@ class TestSocketIOReconnection:
             messages2.append(data)
             msg_received2.set()
 
-        sio2.connect(SERVER_URL)
+        sio2.connect(SERVER_URL, transports=["websocket"])
         sio2.emit('join', f'/r/{room_id}')
 
         assert msg_received2.wait(timeout=15), "Second client should receive message"
@@ -850,7 +869,7 @@ class TestSocketIOEdgeCases:
             elif join_count[0] >= 2:
                 second_join.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
 
         # Join same room twice
         sio.emit('join', f'/r/{room_id}')
@@ -890,7 +909,7 @@ class TestSocketIOEdgeCases:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         # Use encoded room for Socket.IO too (server uses req.url which keeps encoding)
         sio.emit('join', f'/r/{encoded_room_id}')
 
@@ -922,7 +941,7 @@ class TestSocketIOEdgeCases:
             user_counts.append(count)
             count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Should either work or fail gracefully
@@ -958,7 +977,7 @@ class TestSocketIOEdgeCases:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert user_count_received.wait(timeout=15), "Join failed"
@@ -979,7 +998,7 @@ class TestSocketIOEdgeCases:
         wait_for_server(SERVER_URL)
 
         sio = socketio.Client()
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
 
         # Rapidly join different rooms
         for i in range(10):
@@ -1018,7 +1037,7 @@ class TestSocketIOEdgeCases:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert user_count_received.wait(timeout=15), "Join failed"
@@ -1076,7 +1095,7 @@ class TestSocketIOEventOrder:
             if 'size' in event_types and 'message' in event_types and 'usersCount' in event_types:
                 all_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
 
         # A bare emit has no delivery guarantee and a lost join means zero
         # events ever arrive. Re-joining is idempotent (same pattern as
@@ -1122,7 +1141,7 @@ class TestSocketIOEventOrder:
             sizes.append(data)
             size_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert size_received.wait(timeout=15), "Size not received"
@@ -1161,7 +1180,7 @@ class TestSocketIOEmptyRoom:
             user_counts.append(count)
             events_done.set()  # usersCount is always sent
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for usersCount (always sent)
@@ -1213,7 +1232,7 @@ class TestSocketIOEmptyRoom:
             user_counts.append(count)
             count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Wait for usersCount
@@ -1263,7 +1282,7 @@ class TestSocketIOSizePassthrough:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert user_count_received.wait(timeout=15), "Join failed"
@@ -1304,7 +1323,7 @@ class TestSocketIOSizePassthrough:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert user_count_received.wait(timeout=15), "Join failed"
@@ -1345,7 +1364,7 @@ class TestSocketIOMessageFormat:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert user_count_received.wait(timeout=15), "Join failed"
@@ -1386,7 +1405,7 @@ class TestSocketIOMessageFormat:
             messages.append(data)
             message_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert message_received.wait(timeout=15), "Message not received"
@@ -1446,8 +1465,8 @@ class TestSocketIOStripPrefix:
         def on_count2(count):
             sio2_joined.set()
 
-        sio1.connect(SERVER_URL)
-        sio2.connect(SERVER_URL)
+        sio1.connect(SERVER_URL, transports=["websocket"])
+        sio2.connect(SERVER_URL, transports=["websocket"])
 
         # One joins with /r/ prefix
         sio1.emit('join', f'/r/{room_id}')
@@ -1501,7 +1520,7 @@ class TestSocketIOLargeMessage:
         def on_users_count(count):
             user_count_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         assert user_count_received.wait(timeout=15), "Join failed"
@@ -1552,7 +1571,7 @@ class TestSocketIOMultipleClients:
 
             sio.on('message', make_msg_handler(messages, msg_evt))
             sio.on('usersCount', make_join_handler(join_evt))
-            sio.connect(SERVER_URL)
+            sio.connect(SERVER_URL, transports=["websocket"])
             sio.emit('join', f'/r/{room_id}')
 
             clients.append(sio)
@@ -1610,7 +1629,7 @@ class TestSocketIOLateJoinerHistory:
             received_messages.append(data)
             message_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Should receive the historical message
@@ -1645,7 +1664,7 @@ class TestSocketIOLateJoinerHistory:
             received_messages.append(data)
             message_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Should receive the accumulated history
@@ -1691,7 +1710,7 @@ class TestSocketIOLateJoinerHistory:
         def on_live_count(count):
             live_ready.set()
 
-        live_viewer.connect(SERVER_URL)
+        live_viewer.connect(SERVER_URL, transports=["websocket"])
         live_viewer.emit('join', f'/r/{room_id}')
 
         # Wait for live viewer to be ready
@@ -1715,7 +1734,7 @@ class TestSocketIOLateJoinerHistory:
             late_messages.append(decode_message(data))
             late_received.set()
 
-        late_joiner.connect(SERVER_URL)
+        late_joiner.connect(SERVER_URL, transports=["websocket"])
         late_joiner.emit('join', f'/r/{room_id}')
 
         # Wait for late joiner to receive history
@@ -1755,7 +1774,7 @@ class TestSocketIOLateJoinerHistory:
             received_sizes.append(data)
             size_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
         sio.emit('join', f'/r/{room_id}')
 
         # Should receive the size
@@ -1799,7 +1818,7 @@ class TestSocketIOLateJoinerHistory:
             if 'size' in event_types and 'message' in event_types:
                 all_received.set()
 
-        sio.connect(SERVER_URL)
+        sio.connect(SERVER_URL, transports=["websocket"])
 
         # Same confirmed-join pattern as SocketListener.connect: a lost
         # join would mean zero events; re-joining is idempotent
