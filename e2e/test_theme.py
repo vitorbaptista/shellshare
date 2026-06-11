@@ -17,7 +17,7 @@ from conftest import CLI_COMMAND, SERVER_URL, SocketListener, random_id
 # Background colors from themes.json, as computed CSS values
 DRACULA_BG = "rgb(40, 42, 54)"
 SOLARIZED_LIGHT_BG = "rgb(253, 246, 227)"
-DEFAULT_BG = "rgb(0, 0, 0)"
+TANGO_BG = "rgb(18, 19, 20)"  # the default theme
 
 
 def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, timeout=10):
@@ -63,7 +63,7 @@ class TestThemeWireFormat:
         assert size.get("theme") == "dracula"
         assert "cols" in size and "rows" in size
 
-    def test_no_theme_flag_sends_no_theme(self, unique_room, unique_password):
+    def test_no_theme_flag_defaults_to_tango(self, unique_room, unique_password):
         listener = SocketListener(unique_room)
         listener.connect()
 
@@ -76,7 +76,7 @@ class TestThemeWireFormat:
         size = listener.get_last_size()
         listener.disconnect()
 
-        assert "theme" not in size
+        assert size.get("theme") == "tango"
 
 
 class TestThemeValidation:
@@ -106,7 +106,12 @@ class TestThemeValidation:
             text=True,
         )
         stdout, stderr = proc.communicate(timeout=10)
-        assert "--theme" in stdout + stderr
+        help_text = stdout + stderr
+        assert "--theme" in help_text
+        assert "default: tango" in help_text
+        # The help must list what's available
+        for theme in ["asciinema", "dracula", "solarized-dark", "tango"]:
+            assert theme in help_text, f"'{theme}' missing from help: {help_text}"
 
 
 class TestThemeRendering:
@@ -182,7 +187,7 @@ class TestThemeRendering:
             proc.stdin.close()
             proc.wait(timeout=10)
 
-    def test_default_colors_without_theme(self, dedicated_server):
+    def test_tango_colors_without_theme_flag(self, dedicated_server):
         server = dedicated_server()
         room_id = f"theme-default-{random_id()}"
         password = f"secret-{random_id()}"
@@ -205,5 +210,5 @@ class TestThemeRendering:
             expect(page.locator("#terminal")).to_contain_text(
                 "plain output", timeout=10000
             )
-            assert terminal_background(page) == DEFAULT_BG
+            assert terminal_background(page) == TANGO_BG
             browser.close()

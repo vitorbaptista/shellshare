@@ -57,23 +57,11 @@ struct Cli {
     #[arg(long, global = true)]
     stdin: bool,
 
-    /// Color theme viewers see the broadcast in (default: viewer's default colors)
-    #[arg(short, long, global = true, value_parser = parse_theme)]
+    /// Color theme viewers see the broadcast in
+    // Validated at parse time, so a typo fails before the room is
+    // claimed and the shell spawns.
+    #[arg(short, long, global = true, default_value = "tango", value_parser = clap::builder::PossibleValuesParser::new(themes::names()))]
     theme: Option<String>,
-}
-
-/// Validate `--theme` against the embedded theme list, so a typo fails
-/// before the room is claimed and the shell spawns.
-fn parse_theme(name: &str) -> Result<String, String> {
-    let names = themes::names();
-    if names.iter().any(|n| n == name) {
-        Ok(name.to_string())
-    } else {
-        Err(format!(
-            "unknown theme '{name}'. Available themes: {}",
-            names.join(", ")
-        ))
-    }
 }
 
 #[derive(Subcommand)]

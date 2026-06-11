@@ -45,6 +45,11 @@ from conftest import (
 )
 
 
+def size_dims(size):
+    """The (cols, rows) of a size message, ignoring extras like theme."""
+    return (size.get("cols"), size.get("rows")) if size else None
+
+
 class TtyCli:
     """Run the shellshare CLI attached to a real controlling TTY.
 
@@ -243,7 +248,7 @@ class TestTtyResize:
             socket_listener, lambda s: "before-resize" in s, timeout=10
         )
         assert poll_until(
-            lambda: socket_listener.get_last_size() == {"cols": 80, "rows": 24},
+            lambda: size_dims(socket_listener.get_last_size()) == (80, 24),
             timeout=5,
         ), f"Initial size wrong: {socket_listener.get_last_size()}"
 
@@ -253,7 +258,7 @@ class TestTtyResize:
         cli.send("echo after-resize\n")
 
         assert poll_until(
-            lambda: socket_listener.get_last_size() == {"cols": 100, "rows": 30},
+            lambda: size_dims(socket_listener.get_last_size()) == (100, 30),
             timeout=10,
         ), (
             "Viewer never received the new size; "
