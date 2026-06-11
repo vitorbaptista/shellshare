@@ -32,8 +32,18 @@ const DEFAULT_ROOM_TTL_SECS: u64 = 21600;
 #[command(author, version, about = "Live terminal broadcasting")]
 #[command(long_about = "Share your terminal session in real-time.\n\n\
     Run without arguments to share your terminal.\n\
+    Run with 'exec' subcommand to share a single command and exit when it finishes.\n\
     Run with 'serve' subcommand to share through a local server (no external server needed).\n\
     Run with 'server' subcommand to start the broadcasting server.")]
+#[command(after_long_help = "Scripting & AI agents:\n  \
+    Add --json for a machine-readable output contract. The first line on\n  \
+    stdout is `{\"event\":\"sharing\",\"url\":\"...\"}` - parse it to get the share\n  \
+    link. A final `{\"event\":\"end\",\"exit_code\":N}` line is printed when the\n  \
+    broadcast finishes. Errors go to stderr as `ERROR: ...` and exit non-zero.\n\n  \
+    Recipes:\n    \
+    shellshare exec --json -- npm test     # share one command, exit with its code\n    \
+    tail -f build.log | shellshare --stdin --json\n\n  \
+    Machine-readable docs: https://shellshare.net/llms.txt")]
 #[command(disable_version_flag = true)]
 struct Cli {
     /// Print version
@@ -57,6 +67,12 @@ struct Cli {
     /// Read from stdin instead of spawning a shell
     #[arg(long, global = true)]
     stdin: bool,
+
+    /// Print machine-readable JSON events to stdout (for scripts and agents).
+    /// First line: `{"event":"sharing","url":...}`; last line:
+    /// `{"event":"end","exit_code":N}`
+    #[arg(long, global = true)]
+    json: bool,
 
     /// Color theme viewers see the broadcast in
     // Validated at parse time, so a typo fails before the room is
@@ -103,6 +119,13 @@ enum Commands {
         /// Expose the server publicly through a Cloudflare quick tunnel (requires cloudflared)
         #[arg(long)]
         tunnel: bool,
+    },
+    /// Run a single command, share its output live, and exit with its
+    /// exit code when it finishes (designed for scripts and AI agents)
+    Exec {
+        /// Command to run, after a `--` separator (e.g. `shellshare exec -- npm test`)
+        #[arg(required = true, last = true)]
+        command: Vec<String>,
     },
     /// Share your terminal through a local server (no external server needed)
     Serve {
@@ -207,13 +230,22 @@ fn analytics_config(
     }
 }
 
-/// Print a client error the way the CLI always has and exit non-zero.
+/// Print a client error the way the CLI always has and exit non-zero, or
+/// propagate the broadcast's exit code (non-zero only for `exec`, which
+/// forwards the child command's status so callers can script on it).
 /// Call sites must drop any [`tunnel::Tunnel`] first: exiting skips
 /// destructors, so a live handle would leak cloudflared.
-fn exit_on_error(result: Result<(), Box<dyn std::error::Error>>) {
-    if let Err(e) = result {
-        eprintln!("ERROR: {e}");
-        std::process::exit(1);
+fn exit_on_error(result: Result<i32, Box<dyn std::error::Error>>) {
+    match result {
+        Ok(code) => {
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -269,7 +301,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "WARNING: --server is ignored by 'serve'; broadcasting to the local server"
                 );
             }
-            serve(&host, port, tunnel, cli.room, cli.password, cli.stdin, cli.theme);
+            serve(
+                &host,
+                port,
+                tunnel,
+                cli.room,
+                cli.password,
+                cli.stdin,
+                cli.json,
+                cli.theme,
+            );
+        }
+        Some(Commands::Exec { command }) => {
+            let args = cli::ClientArgs {
+                server: cli.server,
+                display_server: None,
+                room: cli.room,
+                password: cli.password,
+                stdin: cli.stdin,
+                json: cli.json,
+                exec: Some(command),
+                theme: cli.theme,
+            };
+            exit_on_error(cli::run(args));
         }
         None => {
             // Run client mode
@@ -279,6 +333,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 room: cli.room,
                 password: cli.password,
                 stdin: cli.stdin,
+                json: cli.json,
+                exec: None,
                 theme: cli.theme,
             };
             exit_on_error(cli::run(args));
@@ -290,6 +346,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// `shellshare serve`: boot the embedded server, optionally tunnel it,
 /// and broadcast this terminal to it.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)] // Mirrors the CLI surface
 fn serve(
     host: &str,
     port: u16,
@@ -297,6 +354,7 @@ fn serve(
     room: Option<String>,
     password: Option<String>,
     stdin: bool,
+    json: bool,
     theme: Option<String>,
 ) {
     let addr = match start_local_server(host, port) {
@@ -371,6 +429,8 @@ fn serve(
         room,
         password,
         stdin,
+        json,
+        exec: None,
         theme,
     };
     let result = cli::run(args);

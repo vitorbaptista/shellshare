@@ -31,6 +31,8 @@ cd e2e && uv sync && uv run pytest -n 10
 
 **Dual-mode binary**: `shellshare` operates as client (default) or server (`shellshare server`). `shellshare serve` combines both: it boots the embedded server on a background thread (default `localhost:3000`, configurable via `--host`/`--port`) and runs the client against it, sharing the terminal with no external server. Both `serve` and `server` accept `--tunnel` (`src/tunnel.rs`): it spawns the user's pre-installed `cloudflared` against the local server, waits for the `https://*.trycloudflare.com` URL from its stderr banner, and uses it as the share link (the broadcaster still talks to localhost); missing cloudflared is a fatal error pointing at the install docs, and the tunnel process dies with shellshare.
 
+**Scripting surface**: `shellshare exec -- <cmd>` runs one command in the PTY (instead of a shell), broadcasts it, and exits with the command's exit code. The global `--json` flag switches stdout to newline-delimited JSON events: first `{"event":"sharing","url":...}`, last `{"event":"end","exit_code":N}` (errors stay on stderr as `ERROR: ...`). This contract is documented in `AGENTS.md` and `public/llms.txt` and covered by `e2e/test_agents.py` - the three must stay in lockstep.
+
 ### Client (`src/cli/`)
 Multi-threaded design ensures network latency never blocks terminal display:
 - **PTY reader thread**: Captures shell output, displays locally, sends to the sender thread
