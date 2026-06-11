@@ -280,6 +280,10 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
 
+      # OIDC Trusted Publishing needs npm >= 11.5; Node 22 bundles npm 10
+      - name: Update npm
+        run: npm install -g npm@latest
+
       - name: Download embedded binaries
         uses: actions/download-artifact@v4
         with:
