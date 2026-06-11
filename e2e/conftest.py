@@ -334,6 +334,25 @@ def decode_message(data):
     return bytes(data).decode("utf-8", errors="replace")
 
 
+def terminal_text(page):
+    """The viewer terminal's rendered buffer as plain text.
+
+    The viewer renders with xterm.js, whose GPU renderer leaves no text
+    in the DOM to scrape; the page exposes window.shellshareText() to
+    read the buffer instead.
+    """
+    return page.evaluate("window.shellshareText ? window.shellshareText() : ''")
+
+
+def wait_for_terminal_text(page, text, timeout=10000):
+    """Wait until the viewer terminal's buffer contains `text`."""
+    page.wait_for_function(
+        "text => window.shellshareText && window.shellshareText().includes(text)",
+        arg=text,
+        timeout=timeout,
+    )
+
+
 @dataclass
 class SocketListener:
     """

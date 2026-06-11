@@ -14,7 +14,12 @@ import time
 import urllib.request
 from playwright.sync_api import sync_playwright
 
-from conftest import CLI_COMMAND, SERVER_URL
+from conftest import (
+    CLI_COMMAND,
+    SERVER_URL,
+    terminal_text,
+    wait_for_terminal_text,
+)
 
 
 def random_id(length=12):
@@ -86,22 +91,11 @@ def test_happy_path_broadcast_appears_in_browser():
         print(f"CLI stderr: {stderr.strip()}")
         assert returncode == 0, f"CLI failed with code {returncode}: {stderr}"
 
-        # Wait for message to appear in terminal
-        # The terminal text content is updated when Socket.IO message arrives
-        terminal = page.locator("#terminal")
-        try:
-            terminal.wait_for(state="visible", timeout=5000)
-            # Use expect to wait for the text to appear
-            from playwright.sync_api import expect
-            expect(terminal).to_contain_text(test_message, timeout=10000)
-        except Exception as e:
-            # If the assertion fails, get content for debugging
-            content = terminal.text_content()
-            print(f"Terminal content when failed: {content[:200] if content else 'empty'}")
-            raise
+        # Wait for the message to appear in the terminal buffer
+        wait_for_terminal_text(page, test_message)
 
         # Get terminal content
-        content = terminal.text_content()
+        content = terminal_text(page)
         
         # Normalize whitespace for comparison
         normalized = ' '.join(content.split())
@@ -213,12 +207,10 @@ def test_terminal_size_updates_in_browser():
         assert returncode == 0, f"CLI failed: {stderr}"
 
         # Wait for message to appear in terminal (confirms size update was processed)
-        terminal = page.locator("#terminal")
-        from playwright.sync_api import expect
-        expect(terminal).to_contain_text("Test message", timeout=10000)
+        wait_for_terminal_text(page, "Test message")
 
         # The terminal should have been created - verify it exists
-        assert terminal.count() > 0, "Terminal should exist"
+        assert page.locator("#terminal").count() > 0, "Terminal should exist"
         
         print("✓ PASSED: Terminal receives size updates!")
         browser.close()
@@ -269,9 +261,7 @@ def test_multiple_broadcasts_no_duplication():
         assert returncode == 0, f"First broadcast failed: {stderr}"
 
         # Wait for first message to arrive
-        terminal = page.locator("#terminal")
-        from playwright.sync_api import expect
-        expect(terminal).to_contain_text(marker_a, timeout=10000)
+        wait_for_terminal_text(page, marker_a)
 
         # Second broadcast
         print(f"Broadcasting second message: {marker_b}")
@@ -279,10 +269,10 @@ def test_multiple_broadcasts_no_duplication():
         assert returncode == 0, f"Second broadcast failed: {stderr}"
 
         # Wait for second message to arrive
-        expect(terminal).to_contain_text(marker_b, timeout=10000)
+        wait_for_terminal_text(page, marker_b)
 
         # Get terminal content
-        content = terminal.text_content()
+        content = terminal_text(page)
         print(f"Terminal content: {content[:200]}...")
 
         # Count occurrences of each marker
@@ -333,10 +323,8 @@ def test_late_joiner_sees_history_in_browser():
             page.goto(f"{SERVER_URL}/r/{room_id}")
             page.wait_for_selector("#terminal", timeout=10000)
 
-            from playwright.sync_api import expect
-            terminal = page.locator("#terminal")
-            expect(terminal).to_contain_text(marker_early, timeout=10000)
-            expect(terminal).to_contain_text(marker_late, timeout=10000)
+            wait_for_terminal_text(page, marker_early)
+            wait_for_terminal_text(page, marker_late)
 
             browser.close()
     finally:
@@ -347,7 +335,7 @@ def test_late_joiner_sees_history_in_browser():
 def test_unicode_renders_in_browser():
     """
     Unicode from the real CLI must survive the whole encoding pipeline
-    (Rust encode -> server -> Socket.IO -> JS decode -> term.js render).
+    (Rust encode -> server -> Socket.IO -> xterm.js decode + render).
     """
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
@@ -370,18 +358,15 @@ def test_unicode_renders_in_browser():
         )
         assert returncode == 0, f"CLI failed: {stderr}"
 
-        from playwright.sync_api import expect
-        expect(page.locator("#terminal")).to_contain_text(
-            test_message, timeout=10000
-        )
+        wait_for_terminal_text(page, test_message)
 
         browser.close()
 
 
-def test_resize_rebuilds_browser_terminal():
+def test_resize_updates_browser_terminal():
     """
-    A size broadcast must rebuild the browser terminal with the new
-    dimensions (term.js renders one child div per row).
+    A size broadcast must resize the browser terminal to the new
+    dimensions (mirrored straight into xterm's cols/rows).
     """
     from conftest import broadcast_message
 
@@ -409,15 +394,13 @@ def test_resize_rebuilds_browser_terminal():
 
         post_with_size("sized at 24 rows", cols=80, rows=24)
         page.wait_for_function(
-            "document.querySelectorAll('#terminal .terminal').length === 1 && "
-            "document.querySelector('#terminal .terminal').children.length === 24",
+            "window.term && window.term.cols === 80 && window.term.rows === 24",
             timeout=10000,
         )
 
         post_with_size("resized to 30 rows", cols=100, rows=30)
         page.wait_for_function(
-            "document.querySelectorAll('#terminal .terminal').length === 1 && "
-            "document.querySelector('#terminal .terminal').children.length === 30",
+            "window.term && window.term.cols === 100 && window.term.rows === 30",
             timeout=10000,
         )
 
@@ -453,10 +436,7 @@ def test_fullscreen_mode_scales_and_restores():
             size={"cols": 80, "rows": 24},
         )
         assert status == 200
-        page.wait_for_function(
-            "document.querySelectorAll('#terminal .terminal').length === 1",
-            timeout=10000,
-        )
+        wait_for_terminal_text(page, "fullscreen test")
 
         page.keyboard.press("f")
         page.wait_for_function(
@@ -464,21 +444,15 @@ def test_fullscreen_mode_scales_and_restores():
             ".classList.contains('fullscreen')",
             timeout=10000,
         )
-        # DOM contract preserved: term.js element still the only .terminal
+        # DOM contract preserved: xterm's element is the only .terminal
         assert page.evaluate(
             "document.querySelectorAll('#terminal .terminal').length === 1"
         )
-        # Font rescaled to fill the viewport
+        # An 80x24 terminal in a larger viewport must scale up
         page.wait_for_function(
-            "document.querySelector('#terminal .terminal')"
-            ".style.fontSize !== ''",
+            "window.term.options.fontSize > 14",
             timeout=10000,
         )
-        font_size = page.evaluate(
-            "document.querySelector('#terminal .terminal').style.fontSize"
-        )
-        # An 80x24 terminal in a larger viewport must scale up
-        assert font_size.endswith("px") and float(font_size[:-2]) > 14
 
         page.keyboard.press("f")
         page.wait_for_function(
@@ -486,9 +460,9 @@ def test_fullscreen_mode_scales_and_restores():
             ".classList.contains('fullscreen')",
             timeout=10000,
         )
-        assert page.evaluate(
-            "document.querySelector('#terminal .terminal')"
-            ".style.fontSize === ''"
+        page.wait_for_function(
+            "window.term.options.fontSize === 14",
+            timeout=10000,
         )
 
         browser.close()
@@ -501,5 +475,5 @@ if __name__ == "__main__":
     test_multiple_broadcasts_no_duplication()
     test_late_joiner_sees_history_in_browser()
     test_unicode_renders_in_browser()
-    test_resize_rebuilds_browser_terminal()
+    test_resize_updates_browser_terminal()
     test_fullscreen_mode_scales_and_restores()

@@ -222,10 +222,9 @@ class TestReliability:
                     timeout=10000,
                 )
 
-                # Hyphenated marker: term.js renders spaces as &nbsp;
                 assert broadcast_message(url, room, password, "first-message") == 200
                 page.wait_for_function(
-                    "document.getElementById('terminal').innerText.includes('first-message')",
+                    "window.shellshareText && window.shellshareText().includes('first-message')",
                     timeout=10000,
                 )
 
@@ -241,7 +240,8 @@ class TestReliability:
                 while time.time() < deadline and not seen:
                     broadcast_message(url, room, password, "second-message;")
                     seen = page.evaluate(
-                        "document.getElementById('terminal').innerText.includes('second-message')"
+                        "window.shellshareText && "
+                        "window.shellshareText().includes('second-message')"
                     )
                     time.sleep(0.5)
                 assert seen, "viewer did not recover after the server restart"

@@ -85,30 +85,15 @@ header {
   margin: 0;
 }
 
-#terminal,
-.terminal {
-  background-color: black;
-  color: rgb(240, 240, 240);
-  font-family: 'Inconsolata', 'Symbols Nerd Font', monospace;
-  font-size: 14px;
-  padding: 5px;
-  overflow: hidden;
-}
-
-/* Terminals wider than the page scroll horizontally instead of
-   wrapping or clipping */
+/* The terminal itself (font, colors, sizing) is fully driven by
+   xterm.js options in the viewer script; the container only frames
+   it. Terminals wider than the page scroll horizontally instead of
+   wrapping or clipping. */
 #terminal {
   position: relative;
+  background-color: black;
+  padding: 5px;
   overflow-x: auto;
-}
-
-.terminal {
-  width: max-content;
-  max-width: none;
-}
-
-.terminal > div {
-  white-space: nowrap;
 }
 
 /* Fullscreen toggle: hidden until the terminal is hovered or the
@@ -182,9 +167,4 @@ header {
   z-index: 100;
   overflow: auto;
   padding: 0;
-}
-
-.reverse-video {
-  color: #000000;
-  background: #ccc;
 }

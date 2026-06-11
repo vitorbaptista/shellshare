@@ -67,7 +67,7 @@ class TestPageCaching:
         wait_for_server(SERVER_URL)
         _, headers, body = make_request('GET', '/r/some-room')
         link = headers.get('Link', '')
-        for asset in ['term.js', 'socket.io.min.js', 'Inconsolata-latin.woff2']:
+        for asset in ['xterm.js', 'socket.io.min.js', 'Inconsolata-latin.woff2']:
             assert asset in link, f"Link preload header must announce {asset}"
             assert re.search(rf'{re.escape(asset)}\?v=[0-9a-f]+', body), \
                 f"{asset} must be referenced with a content-hash version"
@@ -92,7 +92,7 @@ class TestAssetCaching:
         so it must not be cached forever."""
         wait_for_server(SERVER_URL)
         status, headers, _ = make_request(
-            'GET', '/javascript/vendor/term.js?v=0000000000000000')
+            'GET', '/javascript/vendor/xterm.js?v=0000000000000000')
         assert status == 200
         assert headers.get('Cache-Control') == 'public, max-age=86400'
 
