@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: build lint benchmark deploy
+.PHONY: build lint benchmark deploy release
 
 build:
 	cargo build --release
@@ -23,3 +23,8 @@ benchmark:
 
 deploy:
 	git push dokku master:master
+
+# make release            -> bump patch (2.0.6 -> 2.0.7), tag, push; CI does the rest
+# make release VERSION=x.y.z
+release:
+	scripts/release.sh $(VERSION)
