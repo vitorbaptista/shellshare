@@ -155,6 +155,12 @@ label[for] {
   letter-spacing: normal;
 }
 
+.operating-systems .os-logo {
+  height: 1.9em;
+  width: auto;
+  vertical-align: -0.35em;
+}
+
 .operating-systems input:not(:checked) + label {
   color: #ccc;
 }

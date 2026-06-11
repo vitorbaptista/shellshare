@@ -125,6 +125,10 @@ pub async fn serve_on(
     room_ttl_secs: u64,
     analytics_config: Option<AnalyticsConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Render the pages up front: a broken template or stylesheet
+    // reference fails the boot instead of the first request
+    pages::warm();
+
     for listener in &listeners {
         info!("Starting shellshare server on {}", listener.local_addr()?);
     }
