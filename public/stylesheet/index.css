@@ -29,6 +29,12 @@
   margin: 4em 0;
 }
 
+.instructions .alt-install {
+  text-align: center;
+  margin: -3em 0 4em;
+  color: #888;
+}
+
 .main h2 {
   text-transform: uppercase;
   font-size: 2em;

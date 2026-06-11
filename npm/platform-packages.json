@@ -1,0 +1,26 @@
+{
+  "shellshare-linux-x64": {
+    "artifact": "shellshare-linux-x86_64",
+    "binary": "shellshare",
+    "os": "linux",
+    "cpu": "x64"
+  },
+  "shellshare-darwin-x64": {
+    "artifact": "shellshare-macos-x86_64",
+    "binary": "shellshare",
+    "os": "darwin",
+    "cpu": "x64"
+  },
+  "shellshare-darwin-arm64": {
+    "artifact": "shellshare-macos-aarch64",
+    "binary": "shellshare",
+    "os": "darwin",
+    "cpu": "arm64"
+  },
+  "shellshare-windows-x64": {
+    "artifact": "shellshare-windows-x86_64",
+    "binary": "shellshare.exe",
+    "os": "win32",
+    "cpu": "x64"
+  }
+}
