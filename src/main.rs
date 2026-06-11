@@ -83,6 +83,21 @@ enum Commands {
         /// Room TTL in seconds - rooms inactive for this long are removed (default: 21600 = 6 hours)
         #[arg(long, default_value_t = DEFAULT_ROOM_TTL_SECS)]
         room_ttl: u64,
+
+        /// `PostHog` project API key. Usage analytics are sent only when
+        /// this AND --posthog-salt are set; otherwise nothing is collected
+        #[arg(long, env = "SHELLSHARE_POSTHOG_KEY")]
+        posthog_key: Option<String>,
+
+        /// `PostHog` ingestion host to send analytics events to
+        #[arg(long, env = "SHELLSHARE_POSTHOG_HOST", default_value = server::DEFAULT_POSTHOG_HOST)]
+        posthog_host: String,
+
+        /// Secret salt for pseudonymizing analytics identifiers. Keep it
+        /// stable across restarts and servers so returning users stay
+        /// recognizable; rotating it resets all identities
+        #[arg(long, env = "SHELLSHARE_POSTHOG_SALT")]
+        posthog_salt: Option<String>,
     },
     /// Share your terminal through a local server (no external server needed)
     Serve {
@@ -131,10 +146,13 @@ fn start_local_server(host: &str, port: u16) -> Result<std::net::SocketAddr, Str
                     return;
                 }
             }
+            // The embedded server never sends analytics: it serves the
+            // machine's own broadcast, not an operator's deployment
             if let Err(e) = server::serve_on(
                 listeners,
                 DEFAULT_CLEANUP_INTERVAL_SECS,
                 DEFAULT_ROOM_TTL_SECS,
+                None,
             )
             .await
             {
@@ -151,6 +169,35 @@ fn start_local_server(host: &str, port: u16) -> Result<std::net::SocketAddr, Str
         .map_err(|e| format!("could not start local server on {host}:{port}: {e}"))
 }
 
+/// Build the analytics config from the server's PostHog flags.
+///
+/// Both the key and the salt are required; refusing a half-configured
+/// setup beats silently degrading it (a random fallback salt would
+/// reset every identity on restart and corrupt the recurring-user
+/// metric invisibly), so each half-configured case warns and disables.
+fn analytics_config(
+    key: Option<String>,
+    host: String,
+    salt: Option<String>,
+) -> Option<server::AnalyticsConfig> {
+    match (key, salt) {
+        (Some(api_key), Some(salt)) => Some(server::AnalyticsConfig {
+            api_key,
+            host,
+            salt,
+        }),
+        (Some(_), None) => {
+            tracing::warn!("Analytics disabled: --posthog-key is set but --posthog-salt is not");
+            None
+        }
+        (None, Some(_)) => {
+            tracing::warn!("Analytics disabled: --posthog-salt is set but --posthog-key is not");
+            None
+        }
+        (None, None) => None,
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -160,6 +207,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             port,
             cleanup_interval,
             room_ttl,
+            posthog_key,
+            posthog_host,
+            posthog_salt,
         }) => {
             // Initialize logging for server
             let subscriber = FmtSubscriber::builder()
@@ -167,9 +217,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .finish();
             tracing::subscriber::set_global_default(subscriber)?;
 
+            let analytics_config = analytics_config(posthog_key, posthog_host, posthog_salt);
+
             // Create runtime only for server mode
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(server::run(&host, port, cleanup_interval, room_ttl))?;
+            runtime.block_on(server::run(
+                &host,
+                port,
+                cleanup_interval,
+                room_ttl,
+                analytics_config,
+            ))?;
         }
         Some(Commands::Serve { host, port }) => {
             // No tracing subscriber on purpose: the embedded server's

@@ -2,9 +2,12 @@
 //!
 //! This module contains the server implementation using axum + socketioxide.
 
+mod analytics;
 mod binaries;
 mod pages;
 mod rooms;
+
+pub use analytics::{Config as AnalyticsConfig, DEFAULT_POSTHOG_HOST};
 
 use axum::{
     body::Body,
@@ -63,6 +66,8 @@ struct AppState {
     socket_rooms: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Cleanup configuration for abandoned rooms
     cleanup_config: CleanupConfig,
+    /// Optional usage analytics; a no-op unless the operator opted in
+    analytics: analytics::Analytics,
 }
 
 /// What `POST /r/:room` answers since the WebSocket transport replaced
@@ -79,9 +84,10 @@ pub async fn run(
     port: u16,
     cleanup_interval_secs: u64,
     room_ttl_secs: u64,
+    analytics_config: Option<AnalyticsConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listeners = bind(host, port).await?;
-    serve_on(listeners, cleanup_interval_secs, room_ttl_secs).await
+    serve_on(listeners, cleanup_interval_secs, room_ttl_secs, analytics_config).await
 }
 
 /// Bind the server's TCP listeners.
@@ -129,6 +135,7 @@ pub async fn serve_on(
     listeners: Vec<tokio::net::TcpListener>,
     cleanup_interval_secs: u64,
     room_ttl_secs: u64,
+    analytics_config: Option<AnalyticsConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for listener in &listeners {
         info!("Starting shellshare server on {}", listener.local_addr()?);
@@ -144,6 +151,7 @@ pub async fn serve_on(
             interval: Duration::from_secs(cleanup_interval_secs),
             inactive_ttl: Duration::from_secs(room_ttl_secs),
         },
+        analytics: analytics::Analytics::new(analytics_config),
         ..Default::default()
     };
 
@@ -223,7 +231,10 @@ fn setup_socket_handlers(io: &SocketIo) {
                 // emitting usersCount more than once per room.
                 let mut socket_rooms = state.socket_rooms.write().await;
                 let tracked = socket_rooms.entry(socket.id.to_string()).or_default();
-                if !tracked.contains(&room_name) {
+                // Re-emitted joins are not new viewers; remember which
+                // this was so analytics counts each socket once per room
+                let newly_joined = !tracked.contains(&room_name);
+                if newly_joined {
                     tracked.push(room_name.clone());
                 }
                 // Release before the room snapshot below takes its own lock
@@ -231,6 +242,7 @@ fn setup_socket_handlers(io: &SocketIo) {
 
                 // Catch the viewer up if the room is live
                 let snapshot = state.rooms.snapshot(&room_id).await;
+                let room_exists = snapshot.is_some();
                 let broadcasting = snapshot.as_ref().is_some_and(|s| s.broadcasting);
                 if let Some(snapshot) = snapshot {
                     // Send size FIRST - terminal must be sized before receiving content
@@ -268,6 +280,15 @@ fn setup_socket_handlers(io: &SocketIo) {
 
                 // Also broadcast to notify other clients in the room
                 let _ = socket.within(room_name).emit("usersCount", &user_count);
+
+                // Joins to nonexistent rooms (dead links) are not an
+                // audience and would only inflate the numbers; replay
+                // viewers count, flagged by `broadcasting`
+                if newly_joined && room_exists {
+                    state
+                        .analytics
+                        .viewer_joined(room_id.as_str(), user_count, broadcasting);
+                }
             },
         );
 
@@ -330,7 +351,7 @@ async fn ingest(
     size: Option<&serde_json::Value>,
     message: Option<&Bytes>,
 ) -> Result<(), rooms::Unauthorized> {
-    state.rooms.append(room_id, secret, size, message).await?;
+    let _ = state.rooms.append(room_id, secret, size, message).await?;
 
     if let Some(io) = state.io.get() {
         let room_name = room_id.as_str().to_string();
@@ -367,13 +388,12 @@ async fn ws_ingest_handler(
     let room_id = RoomId::parse(&room_path);
     let secret = auth_secret(&headers).to_string();
 
-    if state
-        .rooms
-        .append(&room_id, &secret, None, None)
-        .await
-        .is_err()
-    {
-        return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    match state.rooms.append(&room_id, &secret, None, None).await {
+        Ok(rooms::Appended::Claimed) => state.analytics.room_created(&secret),
+        Ok(rooms::Appended::Verified) => {}
+        Err(rooms::Unauthorized) => {
+            return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+        }
     }
 
     info!("WS ingest connected for room {:?}", room_id);
@@ -409,7 +429,7 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
     // room as live while at least one ingest connection is attached.
     // A count of 0 means the room vanished between handshake and
     // upgrade - the loop below then ends on its first failed append.
-    if state.rooms.broadcaster_connected(&room_id).await > 0 {
+    if state.rooms.broadcaster_connected(&room_id, &secret).await > 0 {
         emit_broadcasting(&state, &room_id, true);
     }
 
@@ -432,7 +452,12 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
                     continue;
                 };
                 if body.get("delete").and_then(serde_json::Value::as_bool) == Some(true) {
-                    let _ = state.rooms.delete(&room_id, &secret).await;
+                    // The clean-exit path: deleting removes the room, so
+                    // this is the last chance to know the live segment's
+                    // length (the loop's own detach below finds nothing)
+                    if let Ok(Some(duration)) = state.rooms.delete(&room_id, &secret).await {
+                        state.analytics.broadcast_ended(&secret, duration);
+                    }
                     break;
                 }
                 let size = body
@@ -446,7 +471,8 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
             // axum answers pings itself; a ping still refreshes the room
             // so an idle-but-connected broadcast isn't evicted
             WsMessage::Ping(_) | WsMessage::Pong(_) => {
-                (state.rooms.append(&room_id, &secret, None, None).await, false)
+                let result = state.rooms.append(&room_id, &secret, None, None).await;
+                (result.map(|_| ()), false)
             }
             WsMessage::Close(_) => break,
         };
@@ -463,8 +489,14 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
     }
     info!("WS ingest disconnected for room {:?}", room_id);
 
-    if state.rooms.broadcaster_disconnected(&room_id).await == 0 {
+    let (remaining, duration) = state.rooms.broadcaster_disconnected(&room_id, &secret).await;
+    if remaining == 0 {
         emit_broadcasting(&state, &room_id, false);
+    }
+    // `duration` is Some only when this detach ended a still-live
+    // room's segment; the delete paths already reported theirs
+    if let Some(duration) = duration {
+        state.analytics.broadcast_ended(&secret, duration);
     }
 }
 
@@ -505,8 +537,14 @@ async fn delete_room_handler(
         !secret.is_empty()
     );
 
-    if state.rooms.delete(&room_id, secret).await.is_err() {
-        return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    match state.rooms.delete(&room_id, secret).await {
+        // Deleting out from under a live broadcaster ends its segment
+        // here; its loop then finds the room gone and reports nothing
+        Ok(Some(duration)) => state.analytics.broadcast_ended(secret, duration),
+        Ok(None) => {}
+        Err(rooms::Unauthorized) => {
+            return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+        }
     }
 
     plain_response(StatusCode::ACCEPTED, "Accepted")
