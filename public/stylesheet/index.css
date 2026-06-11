@@ -91,6 +91,28 @@ pre {
   border-radius: 10px;
 }
 
+pre.demo {
+  box-sizing: border-box;
+}
+
+pre.demo .cursor {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: #F0F0F0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  pre.demo .cursor {
+    animation: demo-cursor-blink 1s steps(1) infinite;
+  }
+}
+
+@keyframes demo-cursor-blink {
+  50% { opacity: 0; }
+}
+
 .shell-output {
   color: #888;
   font-style: italic;
