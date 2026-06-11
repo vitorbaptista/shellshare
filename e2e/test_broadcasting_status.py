@@ -123,23 +123,35 @@ class TestBroadcastingStatusInBrowser:
             page = browser.new_page()
             page.goto(f"{SERVER_URL}/r/{unique_room}")
 
-            # No broadcaster yet: the join answer flips it to offline
+            # The indicator is a colored dot; the state lives in the
+            # class (color) and title (tooltip).
+            # The initial markup already says offline, so prove the
+            # join completed (we are the 1 user counted) before
+            # asserting the server-reported state
             page.wait_for_function(
-                "document.getElementById('broadcast-status').textContent === 'offline'",
+                "document.getElementById('online-counter').textContent === '1'",
+                timeout=10000,
+            )
+            page.wait_for_function(
+                "document.getElementById('broadcast-status').title === 'offline'",
                 timeout=10000,
             )
 
             ws = attach_broadcaster(unique_room, unique_password)
             try:
                 page.wait_for_function(
-                    "document.getElementById('broadcast-status').textContent === 'live'",
+                    "document.getElementById('broadcast-status').title === 'online'"
+                    " && document.getElementById('broadcast-status')"
+                    ".classList.contains('online')",
                     timeout=10000,
                 )
             finally:
                 ws.close()
 
             page.wait_for_function(
-                "document.getElementById('broadcast-status').textContent === 'offline'",
+                "document.getElementById('broadcast-status').title === 'offline'"
+                " && document.getElementById('broadcast-status')"
+                ".classList.contains('offline')",
                 timeout=10000,
             )
             browser.close()
@@ -162,7 +174,7 @@ class TestBroadcastingStatusInBrowser:
             page.goto(f"{server.url}/r/{unique_room}")
 
             page.wait_for_function(
-                "document.getElementById('broadcast-status').textContent === 'offline'",
+                "document.getElementById('broadcast-status').title === 'offline'",
                 timeout=10000,
             )
             assert page.evaluate(href).endswith("/favicon.png"), \
@@ -184,7 +196,7 @@ class TestBroadcastingStatusInBrowser:
                 ws.close()
 
             page.wait_for_function(
-                "document.getElementById('broadcast-status').textContent === 'offline'",
+                "document.getElementById('broadcast-status').title === 'offline'",
                 timeout=10000,
             )
             # Offline stops the blink and restores the regular icon; a

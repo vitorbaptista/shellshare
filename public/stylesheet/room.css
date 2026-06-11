@@ -10,22 +10,38 @@
   font-display: swap;
 }
 
-.online {
+/* div.online, not .online: the broadcast-status span also carries an
+   `online` class when the broadcaster is live, and must not match */
+div.online {
   order: 1;
 }
 
 .broadcast-status::before {
   content: "\25CF"; /* ● */
+  /* Empty alt text: the visually hidden text inside the span carries
+     the meaning, so screen readers shouldn't announce "black circle".
+     Browsers without the alt syntax fall back to the line above. */
+  content: "\25CF" / "";
   margin-right: 0.3em;
   color: #999;
 }
 
-.broadcast-status.live::before {
+.broadcast-status.online::before {
   color: #2ecc40;
 }
 
 .broadcast-status.offline::before {
   color: #cc4030;
+}
+
+/* Present for screen readers, invisible on screen */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 header {
