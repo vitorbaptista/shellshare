@@ -10,7 +10,8 @@ const PLATFORMS = {
   'linux x64': 'shellshare-linux-x64',
   'darwin x64': 'shellshare-darwin-x64',
   'darwin arm64': 'shellshare-darwin-arm64',
-  'win32 x64': 'shellshare-win32-x64',
+  // "windows" not "win32": npm's spam filter rejects new win32-* names
+  'win32 x64': 'shellshare-windows-x64',
 };
 
 const key = process.platform + ' ' + process.arch;

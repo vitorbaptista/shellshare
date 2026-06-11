@@ -17,7 +17,7 @@
     "os": "darwin",
     "cpu": "arm64"
   },
-  "shellshare-win32-x64": {
+  "shellshare-windows-x64": {
     "artifact": "shellshare-windows-x86_64",
     "binary": "shellshare.exe",
     "os": "win32",
