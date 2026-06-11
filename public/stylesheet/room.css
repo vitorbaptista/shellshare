@@ -1,5 +1,15 @@
 @import "base.css";
 
+/* Symbols-only Nerd Font fallback: broadcasters' shells often emit Nerd
+   Font icons (Private Use Area codepoints) that Inconsolata lacks. The
+   browser falls through to this font per-glyph, so text stays in
+   Inconsolata and only the icons use it. */
+@font-face {
+  font-family: 'Symbols Nerd Font';
+  src: url('/font/SymbolsNerdFontMono-Regular.woff2') format('woff2');
+  font-display: swap;
+}
+
 .online {
   float: right;
 }
@@ -31,7 +41,7 @@ header {
 .terminal {
   background-color: black;
   color: rgb(240, 240, 240);
-  font-family: 'Inconsolata', monospace;
+  font-family: 'Inconsolata', 'Symbols Nerd Font', monospace;
   font-size: 14px;
   padding: 5px;
   overflow: hidden;
