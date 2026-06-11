@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/stylesheet/vendor/ansi2html.css">
   <link rel="stylesheet" href="/stylesheet/room.css">
   <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Inconsolata">
-  <link rel="icon" type="image/gif" href="/favicon.gif">
+  <link id="favicon" rel="icon" type="image/png" href="/favicon.png">
 </head>
 <body>
   <div class="wrapper">
@@ -66,6 +66,33 @@
       var broadcastStatus = document.getElementById('broadcast-status');
       var terminalContainer = document.getElementById('terminal');
       var fullscreenToggle = document.getElementById('fullscreen-toggle');
+      var favicon = document.getElementById('favicon');
+
+      // While the room is live the favicon's underscore cursor blinks:
+      // alternate between the regular icon and one with the cursor
+      // erased. Animated GIF favicons don't animate in Chrome/Safari,
+      // so the swap is driven from here.
+      var FAVICON_CURSOR_ON = '/favicon.png';
+      var FAVICON_CURSOR_OFF = '/favicon-cursor-off.png';
+      var faviconTimer = null;
+      var faviconCursorOn = true;
+      // Pre-fetch so the first swaps don't flicker through a blank icon
+      new Image().src = FAVICON_CURSOR_OFF;
+
+      function setFaviconBlink(blinking) {
+        if (blinking && !faviconTimer) {
+          faviconTimer = setInterval(function () {
+            faviconCursorOn = !faviconCursorOn;
+            favicon.href = faviconCursorOn ?
+              FAVICON_CURSOR_ON : FAVICON_CURSOR_OFF;
+          }, 600);
+        } else if (!blinking && faviconTimer) {
+          clearInterval(faviconTimer);
+          faviconTimer = null;
+          faviconCursorOn = true;
+          favicon.href = FAVICON_CURSOR_ON;
+        }
+      }
 
       if (typeof Terminal !== 'undefined') {
         Terminal.bindKeys = function() {
@@ -110,11 +137,13 @@
         broadcastStatus.textContent = live ? 'live' : 'offline';
         broadcastStatus.className =
           'broadcast-status ' + (live ? 'live' : 'offline');
+        setFaviconBlink(live);
       });
       // Our own connection is down: we can't know the broadcaster's state
       socket.on('disconnect', function () {
         broadcastStatus.textContent = 'connecting';
         broadcastStatus.className = 'broadcast-status';
+        setFaviconBlink(false);
       });
       socket.on('message', function (message) {
         if (term && message) {

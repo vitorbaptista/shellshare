@@ -20,11 +20,11 @@ from conftest import (
 )
 
 
-def attach_broadcaster(room_id, password):
+def attach_broadcaster(room_id, password, server_url=SERVER_URL):
     """Open an ingest connection and wait until the server has
     registered it (the ack proves the receive loop - which records the
     attachment before reading any frame - is running)."""
-    ws = ws_connect_room(SERVER_URL, room_id, password)
+    ws = ws_connect_room(server_url, room_id, password)
     ws.send(json.dumps({"size": {"cols": 80, "rows": 24}}))
     ws.recv()  # ack
     return ws
@@ -142,4 +142,65 @@ class TestBroadcastingStatusInBrowser:
                 "document.getElementById('broadcast-status').textContent === 'offline'",
                 timeout=10000,
             )
+            browser.close()
+
+    def test_favicon_blinks_only_while_live(
+        self, dedicated_server, unique_room, unique_password
+    ):
+        """While the broadcaster is attached the favicon's underscore
+        cursor blinks (the page alternates between the two icon files);
+        offline it sits still on the regular icon."""
+        # Dedicated server: guarantees the freshly built binary, which
+        # is the only one that embeds the new favicon-cursor-off.png
+        server = dedicated_server()
+
+        href = "document.getElementById('favicon').href"
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"{server.url}/r/{unique_room}")
+
+            page.wait_for_function(
+                "document.getElementById('broadcast-status').textContent === 'offline'",
+                timeout=10000,
+            )
+            assert page.evaluate(href).endswith("/favicon.png"), \
+                "Offline room must show the static favicon"
+
+            ws = attach_broadcaster(unique_room, unique_password, server.url)
+            try:
+                # The blink alternates, so seeing the cursor-off frame
+                # and then the cursor-on frame again proves it's cycling
+                page.wait_for_function(
+                    f"{href}.endsWith('/favicon-cursor-off.png')",
+                    timeout=10000,
+                )
+                page.wait_for_function(
+                    f"{href}.endsWith('/favicon.png')",
+                    timeout=10000,
+                )
+            finally:
+                ws.close()
+
+            page.wait_for_function(
+                "document.getElementById('broadcast-status').textContent === 'offline'",
+                timeout=10000,
+            )
+            # Offline stops the blink and restores the regular icon; a
+            # window longer than the blink interval with zero href
+            # mutations proves it stays put (a single sample could land
+            # on the cursor-on frame of a still-running blink)
+            page.wait_for_function(
+                f"{href}.endsWith('/favicon.png')", timeout=10000
+            )
+            page.evaluate(
+                "window.__faviconFlips = 0;"
+                "new MutationObserver(function () { window.__faviconFlips++; })"
+                ".observe(document.getElementById('favicon'),"
+                "         {attributes: true, attributeFilter: ['href']})"
+            )
+            page.wait_for_timeout(1500)
+            assert page.evaluate("window.__faviconFlips") == 0, \
+                "Favicon must stop blinking once the broadcaster detaches"
             browser.close()
