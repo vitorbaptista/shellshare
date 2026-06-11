@@ -43,13 +43,16 @@
   line-height: 1.6em;
 }
 
+.compare th,
 .compare td {
   padding: 0.4em 0.8em 0.4em 0;
   border-top: 1px solid #ddd;
   vertical-align: top;
+  text-align: left;
 }
 
-.compare tr:first-child td {
+.compare th,
+.compare thead + tbody tr:first-child td {
   border-top: none;
 }
 

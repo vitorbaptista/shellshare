@@ -2,8 +2,9 @@
 
 > Live terminal broadcasting: share a terminal session via a web link with a
 > single command. No signup, no configuration. Viewers watch read-only in
-> their browser - nothing to install on either side. Free and open source
-> (Apache-2.0). Built for teaching, workshops, live demos, conference talks,
+> their browser - nothing for viewers to install, no accounts anywhere.
+> Free and open source (Apache-2.0). Built for teaching, workshops,
+> live demos, conference talks,
 > streaming long-running jobs, and showing someone an error as it happens.
 
 Canonical site: https://shellshare.net
@@ -49,7 +50,7 @@ Recipes:
 - Share links are unguessable (18 random alphanumerics) but public: anyone
   with the link can watch. Don't broadcast secrets.
 - Live-only: broadcasts are not recorded. Rooms are deleted when the
-  broadcast ends or after a few hours of inactivity.
+  broadcast ends or after 6 hours of inactivity (server default).
 - Late joiners see recent history, not a blank page.
 - Network drops are handled: output is buffered and replayed on reconnect.
 - `--theme` sets viewer colors (asciinema themes: dracula, gruvbox-dark,

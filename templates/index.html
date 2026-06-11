@@ -96,7 +96,7 @@
         "name": "Can I save or record the broadcast?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "No. shellshare is for live broadcasts only. To record a terminal session, use asciinema.org instead."
+          "text": "No. Shellshare was made only for live broadcasts. If you'd like to record your terminal, try asciinema.org."
         }
       },
       {
@@ -148,7 +148,7 @@
           </nav>
         </div>
         <h3>What is it?</h3>
-        <p>Shellshare is a free, open-source tool that broadcasts your terminal session live to anyone with a link. You run one command and get a URL; viewers watch in their browser in real time &mdash; nothing to install, no account on either side. Viewing is read-only by design: nobody can type into your terminal. Use it for teaching, workshops, conference demos, live coding, or showing a colleague an error as it happens.</p>
+        <p>Shellshare is a free, open-source tool that broadcasts your terminal session live to anyone with a link. You run one command and get a URL; viewers watch in their browser in real time &mdash; nothing for them to install, no accounts anywhere. Viewing is read-only by design: nobody can type into your terminal. Use it for teaching, workshops, conference demos, live coding, or showing a colleague an error as it happens.</p>
         <h3>Why shellshare?</h3>
         <ul class="why">
           <li>Read-only by design &mdash; viewers can never type into your terminal</li>
@@ -176,6 +176,9 @@ PS&gt; exit</span>
         <h3>When should I use something else?</h3>
         <p>Shellshare does one thing: live, one-to-many, read-only broadcasting. For other jobs, use the right tool:</p>
         <table class="compare">
+          <thead>
+            <tr><th scope="col">You want to...</th><th scope="col">Use</th></tr>
+          </thead>
           <tbody>
             <tr><td>Watch together, live</td><td><strong>shellshare</strong></td></tr>
             <tr><td>Let viewers type (pair programming, remote rescue)</td><td><a href="https://tmate.io">tmate</a>, <a href="https://upterm.dev">upterm</a>, <a href="https://sshx.io">sshx</a></td></tr>
@@ -186,14 +189,18 @@ PS&gt; exit</span>
       </section>
       <section class="faq">
         <h2>Frequently asked questions</h2>
+        <h3>How do I share my terminal live without signing up?</h3>
+        <p>Run <code>npx -y shellshare</code> (or download the binary from <a href="https://get.shellshare.net">get.shellshare.net</a>). It prints a link like <code>https://shellshare.net/r/abc123</code> &mdash; anyone who opens it watches your terminal live. Exit the shell to stop.</p>
         <h3>Can someone control my terminal through shellshare?</h3>
         <p>No. All communication is just one-way: from your terminal to shellshare. There's no way someone could send commands to your terminal. If you'd like to allow it, try <a href="https://savannah.gnu.org/projects/screen">screen</a> or <a href="https://tmux.github.io/">tmux</a> (especially with <a href="https://tmate.io">tmate</a>).</p>
         <h3>Do viewers need to install anything?</h3>
         <p>No. Viewers just open the link in any modern browser &mdash; no install, no account, no plugin. Only the person broadcasting runs the shellshare command.</p>
         <h3>Is shellshare free?</h3>
         <p>Yes. Shellshare is free and open source (<a href="https://www.apache.org/licenses/LICENSE-2.0">Apache-2.0</a>). There are no accounts, no paid tiers, and you can self-host the server with the same binary.</p>
-        <h3>Can I save the broadcast?</h3>
-        <p>No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
+        <h3>Can I save or record the broadcast?</h3>
+        <p>No. Shellshare was made only for live broadcasts. If you'd like to record your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
+        <h3>How is shellshare different from tmate, asciinema, or ttyd?</h3>
+        <p>Shellshare is for one-to-many live broadcasting: viewers watch read-only in a browser and can never type into your terminal. If you want viewers to control the session (pair programming, remote rescue), use <a href="https://tmate.io">tmate</a>, <a href="https://upterm.dev">upterm</a>, or <a href="https://sshx.io">sshx</a>. If you want to record a session and replay it later, use <a href="https://asciinema.org">asciinema</a>. If you want a full two-way terminal embedded in a web page, use <a href="https://github.com/tsl0922/ttyd">ttyd</a> or <a href="https://github.com/sorenisanerd/gotty">gotty</a>.</p>
         <h3>Can I broadcast to a custom room name?</h3>
         <p>Yes. You can broadcast to a named room secured with a password by calling shellshare as:</p>
         <pre><code><span class="node">$ npx -y shellshare --room MY-ROOM --password MY-PASS</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
@@ -211,7 +218,7 @@ PS&gt; exit</span>
         <h3>Can AI agents or scripts use shellshare?</h3>
         <p>Yes, shellshare is built for it. Add <code>--json</code> and the first line on stdout is a machine-readable event with the share URL: <code>{"event":"sharing","url":"https://shellshare.net/r/..."}</code>. Use <code>shellshare exec --json -- npm test</code> to share a single command live and exit with its exit code, or pipe anything into <code>shellshare --stdin --json</code>. Machine-readable docs live at <a href="/llms.txt">shellshare.net/llms.txt</a>.</p>
         <h3>Can I recover the password to a custom room?</h3>
-        <p>No. However, the rooms are deleted after a day of inactivity, so you can recreate it in 24 hours.</p>
+        <p>No. However, the rooms are deleted after 6 hours of inactivity, so you can recreate it then.</p>
         <h3>Can I run shellshare on Windows?</h3>
         <p>Yes. We have pre-built binaries for Linux, macOS (Intel and Apple Silicon), and Windows. When you download from <a href="https://get.shellshare.net">https://get.shellshare.net</a>, we automatically detect your operating system and give you the correct binary.</p>
         <p>You can also pass the <code>os</code> query parameter to explicitly download a specific binary. The options are <code>linux</code>, <code>windows</code>, <code>mac</code> and <code>mac-arm</code>. For example, if you want to download the Linux binary regardless of your operating system, access <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a>.</p>

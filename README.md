@@ -18,7 +18,7 @@ Or download the binary directly:
 curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare && ./shellshare
 ```
 
-You'll see a line saying `Sharing session in
+You'll see a line saying `Sharing terminal in
 https://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
 Anyone that opens this link will be able to see what you're doing in your
 terminal. When you're done, type `exit` or hit CTRL+D.
@@ -26,7 +26,7 @@ terminal. When you're done, type `exit` or hit CTRL+D.
 ## Why shellshare
 
 - **Read-only by design** — viewers can never type into your terminal
-- **Viewers only need a browser** — no install, no account, on either side
+- **Viewers only need a browser** — no install, no account; broadcasters run one command
 - **No signups, no configuration** — one command in, one URL out
 - **Single binary contains client _and_ server** — self-host with
   `shellshare serve`, or go public without shellshare.net via `--tunnel`
@@ -49,7 +49,7 @@ terminal. When you're done, type `exit` or hit CTRL+D.
 |---|---|
 | Watch together, live | **shellshare** |
 | Let viewers type (pair programming, remote rescue) | [tmate](https://tmate.io), [upterm](https://upterm.dev), [sshx](https://sshx.io) |
-| Record now, replay later | [asciinema](https://asciinema.org) |
+| Record now, replay later | [asciinema](https://asciinema.org) or [other terminal recorders](https://github.com/topics/terminal-recording) |
 | Full two-way terminal in a web page | [ttyd](https://github.com/tsl0922/ttyd), [gotty](https://github.com/sorenisanerd/gotty) |
 
 ## Features
@@ -123,14 +123,10 @@ Data flows one way: from your terminal to the server to the viewers.
 Viewers cannot send input. Share links are unguessable (18 random
 alphanumerics) but public — anyone with the link can watch, so don't
 broadcast secrets. Broadcasts are not recorded: rooms are deleted when
-the broadcast ends or after a day of inactivity. If you don't want your
+the broadcast ends or after 6 hours of inactivity (server default,
+configurable with `--room-ttl`). If you don't want your
 bytes to touch shellshare.net at all, self-host (`shellshare serve`,
 optionally with `--tunnel`).
-
-## Limitations
-
-This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org)
-or [other terminal recording tools](https://github.com/topics/terminal-recording).
 
 ## Deploying shellshare.net, analytics, releasing
 

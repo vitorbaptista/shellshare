@@ -76,7 +76,7 @@ get a public `https://*.trycloudflare.com` link without using shellshare.net
 - The share link is unguessable (18 random alphanumerics) but public —
   anyone with the link can watch. Don't broadcast secrets.
 - Broadcasts are live-only and not recorded; rooms are deleted when the
-  broadcast ends (or after a few hours of inactivity).
+  broadcast ends (or after 6 hours of inactivity, the server default).
 - Late joiners see recent history, so the page is not blank if the user
   opens the link mid-run.
 - Transient network failures are handled: output is buffered and replayed
