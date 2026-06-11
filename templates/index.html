@@ -34,13 +34,13 @@
             <span class="windows">iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe; .\shellshare.exe</span>
           </code>
           <nav class="operating-systems">
-            <input type="radio" id="os-node" name="os" value="node" checked>
+            <input type="radio" id="os-node" name="os" value="node" autocomplete="off" checked>
             <label for="os-node" title="Node.js"><svg class="node-logo" viewBox="0 0 28 32" aria-hidden="true" focusable="false"><polygon points="14,0 28,8 28,24 14,32 0,24 0,8" fill="currentColor"/><text x="14" y="21.5" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="12" fill="#fff">JS</text></svg></label>
-            <input type="radio" id="os-linux" name="os" value="linux">
+            <input type="radio" id="os-linux" name="os" value="linux" autocomplete="off">
             <label for="os-linux" title="Linux"><i class="fa fa-2x fa-linux"></i></label>
-            <input type="radio" id="os-macos" name="os" value="macos">
+            <input type="radio" id="os-macos" name="os" value="macos" autocomplete="off">
             <label for="os-macos" title="macOS"><i class="fa fa-2x fa-apple"></i></label>
-            <input type="radio" id="os-windows" name="os" value="windows">
+            <input type="radio" id="os-windows" name="os" value="windows" autocomplete="off">
             <label for="os-windows" title="Windows"><i class="fa fa-2x fa-windows"></i></label>
           </nav>
         </div>
@@ -48,7 +48,7 @@
         <p>Shellshare allows you to broadcast your terminal live with a single command.</p>
         <h3>How to use?</h3>
         <p>Open a terminal and write:</p>
-        <pre><code><span class="node">$ npx -y shellshare</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
+        <pre class="demo" data-duration="5000"><code><span class="node">$ npx -y shellshare</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
 $ chmod +x shellshare
 $ ./shellshare</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
 $ chmod +x shellshare
@@ -113,6 +113,159 @@ PS&gt; exit</span>
         setTimeout(function () { code.classList.remove('copied'); }, 1500);
       });
     });
+
+    // Live-typing demo for the "How to use?" terminal.
+    (function () {
+      var pre = document.querySelector('pre.demo');
+      if (!pre) return;
+      var duration = parseInt(pre.getAttribute('data-duration'), 10);
+      if (isNaN(duration)) duration = 5000;
+      var startDelay = parseInt(pre.getAttribute('data-start-delay'), 10);
+      if (isNaN(startDelay)) startDelay = 2000;
+      var outputPause = 400;
+      var original = pre.querySelector('code').cloneNode(true);
+      var run = 0;
+
+      function selectedOs() {
+        var checked = document.querySelector('.operating-systems input:checked');
+        return checked ? checked.value : 'node';
+      }
+
+      // Rebuild the lines visible for the selected OS from the original markup.
+      function visibleLines(os) {
+        var lines = [];
+        var current = { text: '', output: false };
+        Array.prototype.forEach.call(original.childNodes, function (node) {
+          var output = false;
+          if (node.nodeType === 1) {
+            if (!node.classList.contains(os) && !node.classList.contains('shell-output')) return;
+            output = node.classList.contains('shell-output');
+          }
+          node.textContent.split('\n').forEach(function (part, i) {
+            if (i > 0) {
+              lines.push(current);
+              current = { text: '', output: false };
+            }
+            current.text += part;
+            if (part && output) current.output = true;
+          });
+        });
+        lines.push(current);
+        return lines;
+      }
+
+      function play() {
+        var token = ++run;
+        var lines = visibleLines(selectedOs());
+        var code = document.createElement('code');
+        var cursor = document.createElement('span');
+        cursor.className = 'cursor';
+        code.appendChild(cursor);
+        pre.replaceChildren(code);
+
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          renderAll(code, cursor, lines);
+          return;
+        }
+
+        // Reserve the final height so the terminal doesn't grow while typing.
+        // Measure with the cursor still attached: it can make a line a hair
+        // taller, and min-height must cover the tallest state.
+        lines.forEach(function (line, n) {
+          appendLine(code, cursor, line, n === lines.length - 1);
+        });
+        pre.style.minHeight = pre.offsetHeight + 'px';
+        code.replaceChildren(cursor);
+        // Screen readers get the full text from the download box above;
+        // hide the churn of char-by-char mutations.
+        pre.setAttribute('aria-hidden', 'true');
+
+        // Pace typing so the full animation lasts ~`duration`.
+        var typedChars = 0;
+        var pauses = 0;
+        lines.forEach(function (line) {
+          if (line.output) pauses++;
+          else typedChars += line.text.replace(/^(\$|PS>) /, '').length;
+        });
+        var charDelay = Math.max(0, duration - pauses * outputPause) / Math.max(1, typedChars);
+
+        var i = 0;
+        function nextLine() {
+          if (token !== run) return;
+          if (i >= lines.length) {
+            cursor.remove();
+            pre.removeAttribute('aria-hidden');
+            return;
+          }
+          var line = lines[i++];
+          if (line.output) {
+            setTimeout(function () {
+              if (token !== run) return;
+              appendLine(code, cursor, line, i >= lines.length);
+              nextLine();
+            }, outputPause);
+            return;
+          }
+          var prompt = (line.text.match(/^(\$|PS>) /) || [''])[0];
+          var rest = line.text.slice(prompt.length);
+          var target = document.createTextNode(prompt);
+          code.insertBefore(target, cursor);
+          var j = 0;
+          // Pause on the bare prompt before the very first keystroke.
+          if (i === 1 && startDelay) {
+            setTimeout(typeChar, startDelay);
+            return;
+          }
+          function typeChar() {
+            if (token !== run) return;
+            if (j >= rest.length) {
+              if (i < lines.length) code.insertBefore(document.createTextNode('\n'), cursor);
+              nextLine();
+              return;
+            }
+            target.textContent += rest[j++];
+            setTimeout(typeChar, charDelay);
+          }
+          typeChar();
+        }
+        nextLine();
+      }
+
+      function renderAll(code, cursor, lines) {
+        lines.forEach(function (line, i) {
+          appendLine(code, cursor, line, i === lines.length - 1);
+        });
+        if (cursor) cursor.remove();
+      }
+
+      function appendLine(code, cursor, line, last) {
+        var newline = last ? '' : '\n';
+        if (line.output) {
+          var span = document.createElement('span');
+          span.className = 'shell-output';
+          span.textContent = line.text;
+          code.insertBefore(span, cursor);
+          if (newline) code.insertBefore(document.createTextNode(newline), cursor);
+        } else {
+          code.insertBefore(document.createTextNode(line.text + newline), cursor);
+        }
+      }
+
+      // Only animate on page load; switching OS just swaps the text.
+      function showInstantly() {
+        run++;
+        pre.style.minHeight = '';
+        pre.removeAttribute('aria-hidden');
+        var code = document.createElement('code');
+        pre.replaceChildren(code);
+        renderAll(code, null, visibleLines(selectedOs()));
+      }
+
+      Array.prototype.forEach.call(document.querySelectorAll('.operating-systems input'), function (input) {
+        input.addEventListener('change', showInstantly);
+      });
+      play();
+    })();
   </script>
 </body>
 </html>
