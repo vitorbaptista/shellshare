@@ -203,9 +203,7 @@ impl Transport {
             }
             match self.handshake() {
                 Ok(socket) => self.socket = Some(socket),
-                Err(TransportError::Unauthorized) => {
-                    return Err(TransportError::Unauthorized)
-                }
+                Err(TransportError::Unauthorized) => return Err(TransportError::Unauthorized),
                 Err(_) => return Ok(()), // retry after backoff
             }
         }
@@ -337,9 +335,7 @@ impl Transport {
 
             match tungstenite::connect(request) {
                 Ok((socket, _response)) => Ok(socket),
-                Err(WsError::Http(response))
-                    if response.status() == StatusCode::UNAUTHORIZED =>
-                {
+                Err(WsError::Http(response)) if response.status() == StatusCode::UNAUTHORIZED => {
                     Err(TransportError::Unauthorized)
                 }
                 Err(e) => Err(TransportError::Connect(e.to_string())),

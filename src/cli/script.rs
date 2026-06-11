@@ -57,7 +57,9 @@ impl RawModeGuard {
                 return Self { original: None };
             }
 
-            Self { original: Some(original) }
+            Self {
+                original: Some(original),
+            }
         }
     }
 }
@@ -79,7 +81,9 @@ struct RawModeGuard;
 
 #[cfg(windows)]
 impl RawModeGuard {
-    fn new() -> Self { Self }
+    fn new() -> Self {
+        Self
+    }
 }
 
 /// Run script mode - spawn a shell in a PTY and stream output to server
