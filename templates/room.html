@@ -59,6 +59,52 @@
       // the polling-then-upgrade dance avoids its races entirely
       var socket = io({transports: ['websocket']});
       var room = window.location.pathname;
+
+      // TEMPORARY DIAGNOSTICS for issue #132: timestamped log of every
+      // socket lifecycle event and payload, readable by the e2e suite
+      // via window.__rxLog. Remove once the Windows flake is diagnosed.
+      var RXLOG = [];
+      window.__rxLog = RXLOG;
+      function rxlog(kind, info) {
+        RXLOG.push(Date.now() + ' ' + kind + ' ' + info);
+        if (RXLOG.length > 300) { RXLOG.shift(); }
+      }
+      function hexdump(buf) {
+        var bytes = new Uint8Array(buf);
+        var head = [];
+        for (var i = 0; i < Math.min(bytes.length, 48); i++) {
+          head.push(bytes[i].toString(16).padStart(2, '0'));
+        }
+        return 'len=' + bytes.length + ' ' + head.join('');
+      }
+      rxlog('page-load', location.href);
+      socket.io.on('error', function (e) { rxlog('mgr-error', String(e)); });
+      socket.io.on('reconnect_attempt', function (n) {
+        rxlog('reconnect-attempt', n);
+      });
+      socket.io.engine.on('close', function (reason) {
+        rxlog('engine-close', String(reason));
+      });
+      socket.on('connect_error', function (e) {
+        rxlog('connect-error', String(e && e.message || e));
+      });
+      socket.on('disconnect', function (reason) {
+        rxlog('socket-disconnect', String(reason));
+      });
+      socket.on('connect', function () {
+        rxlog('connect', socket.id + ' via ' +
+              socket.io.engine.transport.name);
+      });
+      socket.on('message', function (m) {
+        try { rxlog('message', hexdump(m)); }
+        catch (e) { rxlog('message-unhexable', String(e) + ' ' + typeof m); }
+      });
+      socket.on('size', function (s) {
+        rxlog('size', JSON.stringify(s));
+      });
+      socket.on('broadcasting', function (b) { rxlog('broadcasting', b); });
+      socket.on('usersCount', function (n) { rxlog('usersCount', n); });
+      // END TEMPORARY DIAGNOSTICS
       var term;
       var currentSize = {};
       // Messages are binary: raw terminal bytes, decoded as one
@@ -112,6 +158,24 @@
       // Join on every connect: socket.io reconnects by itself after a
       // network blip, but room membership is lost server-side, so a
       // viewer that doesn't re-join goes silently dead.
+      //
+      // The join must be confirmed, not fire-and-forget: a bare emit
+      // can be lost (e.g. it reaches the server before the connection
+      // handler finished registering events), and a viewer whose join
+      // vanished would stare at an empty terminal forever. The server
+      // answers every join with usersCount, re-joining is idempotent,
+      // and the history catch-up is only sent for a socket's first
+      // join - so emit and re-emit until confirmed.
+      var joinConfirmed = false;
+      var joinTimer = null;
+      function joinUntilConfirmed() {
+        joinTimer = null;
+        if (joinConfirmed || !socket.connected) {
+          return;
+        }
+        socket.emit('join', room);
+        joinTimer = setTimeout(joinUntilConfirmed, 500);
+      }
       socket.on('connect', function () {
         if (joinedBefore) {
           // The server replays the room history on join; start from a
@@ -125,9 +189,14 @@
           onSize({cols: 80, rows: 30});
         }
         joinedBefore = true;
-        socket.emit('join', room);
+        joinConfirmed = false;
+        if (joinTimer) {
+          clearTimeout(joinTimer);
+        }
+        joinUntilConfirmed();
       });
       socket.on('usersCount', function (onlineUsers) {
+        joinConfirmed = true;
         onlineCounter.innerHTML = onlineUsers;
         if (onlineUsers == 1) {
           onlineCounterPlural.innerHTML = '';

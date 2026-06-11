@@ -165,7 +165,7 @@ class TestThemeRendering:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # DIAGNOSTICS #132: capture CLI errors
             text=True,
         )
         try:
@@ -176,17 +176,48 @@ class TestThemeRendering:
             with sync_playwright() as p:
                 browser = p.chromium.launch()
                 page = browser.new_page()
+                # TEMPORARY DIAGNOSTICS for issue #132
+                console_lines = []
+                page.on(
+                    "console",
+                    lambda m: console_lines.append(f"{m.type}: {m.text}"),
+                )
                 page.goto(f"{server.url}/r/{room_id}")
                 page.wait_for_selector("#terminal", timeout=10000)
 
-                expect(page.locator("#terminal")).to_contain_text(
-                    "early content", timeout=10000
-                )
-                assert terminal_background(page) == SOLARIZED_LIGHT_BG
+                try:
+                    expect(page.locator("#terminal")).to_contain_text(
+                        "early content", timeout=10000
+                    )
+                    assert terminal_background(page) == SOLARIZED_LIGHT_BG
+                except AssertionError:
+                    # TEMPORARY DIAGNOSTICS for issue #132: dump every
+                    # observable on failure, in raw byte-level form
+                    rxlog = page.evaluate("window.__rxLog || []")
+                    print("=== DIAG #132: page rxlog ===")
+                    for line in rxlog:
+                        print(" ", line)
+                    print("=== DIAG #132: page console ===")
+                    for line in console_lines:
+                        print(" ", line)
+                    print("=== DIAG #132: server log tail ===")
+                    try:
+                        print(server.proc.log_path.read_text(
+                            encoding="utf-8", errors="backslashreplace"
+                        )[-4000:])
+                    except OSError as e:
+                        print("  unreadable:", e)
+                    raise
                 browser.close()
         finally:
             proc.stdin.close()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            finally:
+                stderr_tail = proc.stderr.read() if proc.stderr else ""
+                if stderr_tail.strip():
+                    print("=== DIAG #132: CLI stderr ===")
+                    print(stderr_tail[-2000:])
 
     def test_tango_colors_without_theme_flag(self, dedicated_server):
         server = dedicated_server()
