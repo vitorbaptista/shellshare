@@ -1,14 +1,14 @@
 //! HTML pages and static assets, embedded at compile time.
 //!
 //! Everything the browser loads that is not room data lives here: the
-//! home page (with its OS-detected install command), the viewer page,
-//! and the static assets under `public/`. The sibling `binaries` module
-//! plays the same role for the downloadable CLI binary.
+//! home page, the viewer page, and the static assets under `public/`.
+//! The sibling `binaries` module plays the same role for the
+//! downloadable CLI binary.
 
 use axum::{
     body::Body,
     extract::Path,
-    http::{header, HeaderMap, Method, Request, StatusCode},
+    http::{header, Method, Request, StatusCode},
     response::{IntoResponse, Response},
 };
 use rust_embed::Embed;
@@ -23,44 +23,11 @@ struct StaticAssets;
 #[folder = "templates/"]
 struct Templates;
 
-/// Detect OS from User-Agent header, for pre-selecting the install
-/// command on the home page
-fn detect_os_from_user_agent(user_agent: &str) -> &'static str {
-    let ua = user_agent.to_lowercase();
-    if ua.contains("windows") {
-        "windows"
-    } else if ua.contains("mac") {
-        "macos"
-    } else {
-        "linux" // default
-    }
-}
-
 /// GET / - Home page
-pub async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
+pub async fn index_handler() -> impl IntoResponse {
     match Templates::get("index.html") {
         Some(content) => {
-            let user_agent = headers
-                .get(header::USER_AGENT)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-
-            let os = detect_os_from_user_agent(user_agent);
-
-            let html = String::from_utf8_lossy(&content.data);
-            let html = html
-                .replace(
-                    "{{LINUX_CHECKED}}",
-                    if os == "linux" { " checked" } else { "" },
-                )
-                .replace(
-                    "{{MACOS_CHECKED}}",
-                    if os == "macos" { " checked" } else { "" },
-                )
-                .replace(
-                    "{{WINDOWS_CHECKED}}",
-                    if os == "windows" { " checked" } else { "" },
-                );
+            let html = String::from_utf8_lossy(&content.data).into_owned();
 
             Response::builder()
                 .status(StatusCode::OK)

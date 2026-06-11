@@ -28,32 +28,34 @@
       <section class="instructions">
         <div class="download">
           <code title="Click to copy">
+            <span class="node">npx -y shellshare</span>
             <span class="macos">curl -sLo shellshare https://get.shellshare.net/?os=mac &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
             <span class="linux">wget -qO shellshare https://get.shellshare.net/?os=linux &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
             <span class="windows">iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe; .\shellshare.exe</span>
           </code>
           <nav class="operating-systems">
-            <input type="radio" id="os-linux" name="os" value="linux"{{LINUX_CHECKED}}>
-            <label for="os-linux"><i class="fa fa-2x fa-linux"></i></label>
-            <input type="radio" id="os-macos" name="os" value="macos"{{MACOS_CHECKED}}>
-            <label for="os-macos"><i class="fa fa-2x fa-apple"></i></label>
-            <input type="radio" id="os-windows" name="os" value="windows"{{WINDOWS_CHECKED}}>
-            <label for="os-windows"><i class="fa fa-2x fa-windows"></i></label>
+            <input type="radio" id="os-node" name="os" value="node" checked>
+            <label for="os-node" title="Node.js"><svg class="node-logo" viewBox="0 0 28 32" aria-hidden="true" focusable="false"><polygon points="14,0 28,8 28,24 14,32 0,24 0,8" fill="currentColor"/><text x="14" y="21.5" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="12" fill="#fff">JS</text></svg></label>
+            <input type="radio" id="os-linux" name="os" value="linux">
+            <label for="os-linux" title="Linux"><i class="fa fa-2x fa-linux"></i></label>
+            <input type="radio" id="os-macos" name="os" value="macos">
+            <label for="os-macos" title="macOS"><i class="fa fa-2x fa-apple"></i></label>
+            <input type="radio" id="os-windows" name="os" value="windows">
+            <label for="os-windows" title="Windows"><i class="fa fa-2x fa-windows"></i></label>
           </nav>
         </div>
-        <p class="alt-install">Have Node.js? Just run <code>npx shellshare</code></p>
         <h3>What is it?</h3>
         <p>Shellshare allows you to broadcast your terminal live with a single command.</p>
         <h3>How to use?</h3>
         <p>Open a terminal and write:</p>
-        <pre><code><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
+        <pre><code><span class="node">$ npx -y shellshare</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
 $ chmod +x shellshare
 $ ./shellshare</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
 $ chmod +x shellshare
 $ ./shellshare</span><span class="windows">PS&gt; iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe
 PS&gt; .\shellshare.exe</span>
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
-<span class="macos linux">$ # Everything you do now will be broadcast live on the URL above.
+<span class="node macos linux">$ # Everything you do now will be broadcast live on the URL above.
 $ # When you're done, hit CTRL+D
 $ exit</span><span class="windows">PS&gt; # Everything you do now will be broadcast live on the URL above.
 PS&gt; # When you're done, hit CTRL+D
@@ -68,12 +70,12 @@ PS&gt; exit</span>
         <p>No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
         <h3>Can I broadcast to a custom room name?</h3>
         <p>Yes. You can broadcast to a named room secured with a password by calling shellshare as:</p>
-        <pre><code><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
+        <pre><code><span class="node">$ npx -y shellshare --room MY-ROOM --password MY-PASS</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
 $ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
 $ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="windows">PS&gt; iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe
 PS&gt; .\shellshare.exe --room MY-ROOM --password MY-PASS</span>
 <span class="shell-output">Sharing terminal in https://shellshare.net/r/MY-ROOM</span>
-<span class="macos linux">$ # ...
+<span class="node macos linux">$ # ...
 $ exit</span><span class="windows">PS&gt; # ...
 PS&gt; exit</span>
 <span class="shell-output">End of transmission.</span></code></pre>
