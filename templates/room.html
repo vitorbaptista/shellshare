@@ -135,11 +135,29 @@
         }
         applyTheme(currentSize.theme);
         term.open(terminalContainer);
+        // Read-only viewer: xterm focuses its hidden textarea on
+        // click, which then swallows keydown events before they reach
+        // the page (breaking the `f` fullscreen toggle and Ctrl+C
+        // copy below). Nothing needs that focus - there is no input -
+        // so refuse it. Mouse selection is unaffected.
+        term.textarea.tabIndex = -1;
+        term.textarea.addEventListener('focus', function () {
+          term.textarea.blur();
+        });
         enableWebglRenderer();
         for (var i = 0; i < pendingWrites.length; i++) {
           term.write(pendingWrites[i]);
         }
         pendingWrites = [];
+        // The renderer caches glyphs in a texture atlas, so fonts
+        // that load lazily after first paint (the Nerd Font symbols
+        // fallback, non-latin Inconsolata subsets) would otherwise
+        // stay rendered as the fallback glyphs they were drawn with
+        if (document.fonts && document.fonts.addEventListener) {
+          document.fonts.addEventListener('loadingdone', function () {
+            term.clearTextureAtlas();
+          });
+        }
         // For the e2e suite and console debugging: the WebGL renderer
         // leaves no text in the DOM to scrape
         window.term = term;
@@ -463,6 +481,18 @@
       document.addEventListener('fullscreenchange', onFullscreenChange);
       document.addEventListener('webkitfullscreenchange', onFullscreenChange);
       document.addEventListener('keydown', function (e) {
+        // Ctrl/Cmd+C copies the terminal selection: the renderer
+        // keeps no text in the DOM, so the browser's native copy
+        // sees nothing to take (right-click Copy works regardless;
+        // xterm fills the `copy` event itself). The viewer is
+        // read-only, so the chord is free to mean "copy".
+        if ((e.ctrlKey || e.metaKey) && !e.altKey &&
+            (e.key === 'c' || e.key === 'C') &&
+            term && term.hasSelection() && navigator.clipboard) {
+          navigator.clipboard.writeText(term.getSelection())
+            .catch(function () {});
+          return;
+        }
         if (e.defaultPrevented || e.repeat ||
             e.ctrlKey || e.metaKey || e.altKey) {
           return;

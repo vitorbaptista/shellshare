@@ -96,6 +96,17 @@ header {
   overflow-x: auto;
 }
 
+/* Hide the scrollback scrollbar: xterm handles wheel and touch
+   scrolling itself, the native scrollbar is only a visual mirror
+   (and Chrome draws it with the ugly default chrome) */
+#terminal .xterm-viewport {
+  scrollbar-width: none;
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
 /* Fullscreen toggle: hidden until the terminal is hovered or the
    button is focused */
 #fullscreen-toggle {
