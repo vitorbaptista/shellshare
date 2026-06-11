@@ -11,7 +11,7 @@
 }
 
 .online {
-  float: right;
+  order: 1;
 }
 
 .broadcast-status::before {
@@ -29,6 +29,9 @@
 }
 
 header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   text-align: left;
 }
 
