@@ -67,6 +67,31 @@ dokku builder-dockerfile:set shellshare dockerfile-path Dockerfile.production
 make deploy
 ```
 
+## Analytics (optional, off by default)
+
+The server can send anonymous usage events (rooms created, broadcast
+durations, viewer counts) to [PostHog](https://posthog.com). Nothing is
+collected unless you opt in by setting both variables:
+
+```bash
+SHELLSHARE_POSTHOG_KEY=phc_yourprojectkey \
+SHELLSHARE_POSTHOG_SALT=some-long-random-secret \
+shellshare server
+```
+
+(Set `SHELLSHARE_POSTHOG_HOST` for self-hosted PostHog. The equivalent
+`--posthog-*` flags also exist, but prefer the environment variables:
+the salt is a secret, and command-line arguments are visible to other
+local users.)
+
+No personal data is sent: no IP addresses, no room names, no passwords.
+Broadcasters are identified only by `HMAC-SHA256(salt, password)` and
+rooms by `HMAC-SHA256(salt, room_name)`, which lets the operator count
+returning users without being able to identify anyone. Keep the salt
+stable across restarts and servers so returning users stay recognizable;
+rotating it resets all identities. Events are fire-and-forget and never
+block or slow down broadcasting.
+
 ## Releasing
 
 ```bash

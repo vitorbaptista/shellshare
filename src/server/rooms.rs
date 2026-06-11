@@ -60,6 +60,15 @@ impl std::fmt::Display for RoomId {
 #[derive(Debug)]
 pub struct Unauthorized;
 
+/// What an authorized [`Rooms::append`] did to the room.
+#[derive(Debug)]
+pub enum Appended {
+    /// The room did not exist; this call claimed it.
+    Claimed,
+    /// The room existed and the password matched.
+    Verified,
+}
+
 /// Everything a late joiner needs to catch up with a live room.
 pub struct RoomSnapshot {
     /// Current terminal size; must be applied before the history
@@ -78,6 +87,12 @@ struct Room {
     messages: MessageHistory,
     /// Terminal size, forwarded verbatim to viewers
     size: Option<serde_json::Value>,
+    /// When the current live segment started (broadcaster count went
+    /// 0 -> 1). Broadcast durations are measured per segment, so a
+    /// reconnect yields two events whose durations sum to the real
+    /// broadcast time instead of overlapping spans measured from the
+    /// claim. `None` while no broadcaster is attached.
+    live_since: Option<Instant>,
     /// Last activity (broadcast or viewer join), drives eviction
     last_activity: Instant,
     /// Ingest connections currently attached. More than one is possible
@@ -92,6 +107,7 @@ impl Room {
             password: password.to_string(),
             messages: MessageHistory::new(MAX_HISTORY_MESSAGES),
             size: None,
+            live_since: None,
             last_activity: Instant::now(),
             broadcasters: 0,
         }
@@ -113,6 +129,9 @@ impl Rooms {
     /// by the caller (see `protocol::size_has_dimensions`); `message` is
     /// raw terminal bytes (`Bytes` clones share the buffer, so the caller
     /// keeps emitting from the same payload without copying).
+    ///
+    /// Reports whether this call [`Appended::Claimed`] the room, so the
+    /// caller can observe room creation without a separate lookup.
     #[allow(clippy::significant_drop_tightening)] // the lock spanning verify+mutate IS the invariant
     pub async fn append(
         &self,
@@ -120,11 +139,13 @@ impl Rooms {
         secret: &str,
         size: Option<&serde_json::Value>,
         message: Option<&Bytes>,
-    ) -> Result<(), Unauthorized> {
+    ) -> Result<Appended, Unauthorized> {
         let mut rooms = self.inner.write().await;
-        let entry = rooms
-            .entry(room.clone())
-            .or_insert_with(|| Room::new(secret));
+        let mut appended = Appended::Verified;
+        let entry = rooms.entry(room.clone()).or_insert_with(|| {
+            appended = Appended::Claimed;
+            Room::new(secret)
+        });
 
         if entry.password != secret {
             return Err(Unauthorized);
@@ -140,7 +161,7 @@ impl Rooms {
             entry.messages.push(message.clone());
         }
 
-        Ok(())
+        Ok(appended)
     }
 
     /// Catch-up data for a joining viewer; refreshes the room's activity.
@@ -159,40 +180,69 @@ impl Rooms {
 
     /// Record that a broadcaster's ingest connection attached to the
     /// room. Returns the new connection count (0 when the room vanished
-    /// between the handshake and the upgrade).
-    pub async fn broadcaster_connected(&self, room: &RoomId) -> usize {
+    /// between the handshake and the upgrade, or was re-claimed by
+    /// another password in that window - this connection must not touch
+    /// the new owner's bookkeeping).
+    pub async fn broadcaster_connected(&self, room: &RoomId, secret: &str) -> usize {
         let mut rooms = self.inner.write().await;
         rooms.get_mut(room).map_or(0, |entry| {
+            if entry.password != secret {
+                return 0;
+            }
+            if entry.broadcasters == 0 {
+                entry.live_since = Some(Instant::now());
+            }
             entry.broadcasters += 1;
             entry.broadcasters
         })
     }
 
     /// Record that a broadcaster's ingest connection detached. Returns
-    /// the remaining count; 0 also covers a room already deleted (the
-    /// `{"delete": true}` path removes the room before the loop ends).
-    pub async fn broadcaster_disconnected(&self, room: &RoomId) -> usize {
+    /// the remaining count - 0 also covers a room already deleted (the
+    /// `{"delete": true}` path removes the room before the loop ends) -
+    /// and, when this detach ended the room's live segment, how long
+    /// that segment ran.
+    ///
+    /// A stale loop whose room was meanwhile re-claimed by another
+    /// password must not decrement the new owner's count or consume its
+    /// segment; the mismatch leaves the room untouched.
+    pub async fn broadcaster_disconnected(
+        &self,
+        room: &RoomId,
+        secret: &str,
+    ) -> (usize, Option<Duration>) {
         let mut rooms = self.inner.write().await;
-        rooms.get_mut(room).map_or(0, |entry| {
+        rooms.get_mut(room).map_or((0, None), |entry| {
+            if entry.password != secret {
+                return (entry.broadcasters, None);
+            }
             entry.broadcasters = entry.broadcasters.saturating_sub(1);
-            entry.broadcasters
+            let duration = if entry.broadcasters == 0 {
+                entry.live_since.take().map(|since| since.elapsed())
+            } else {
+                None
+            };
+            (entry.broadcasters, duration)
         })
     }
 
     /// Delete a room and release its password.
     ///
     /// Deleting a room that does not exist succeeds (the caller's goal -
-    /// "this room is gone" - already holds).
+    /// "this room is gone" - already holds). Deletion cutting short a
+    /// live segment reports the segment's duration, since nobody can ask
+    /// the room afterwards; `Ok(None)` means no broadcast was live.
     #[allow(clippy::significant_drop_tightening)] // verify + remove must be one atomic step
-    pub async fn delete(&self, room: &RoomId, secret: &str) -> Result<(), Unauthorized> {
+    pub async fn delete(&self, room: &RoomId, secret: &str) -> Result<Option<Duration>, Unauthorized> {
         let mut rooms = self.inner.write().await;
         match rooms.get(room) {
             Some(entry) if entry.password != secret => Err(Unauthorized),
-            Some(_) => {
+            Some(entry) => {
+                let duration = entry.live_since.map(|since| since.elapsed());
                 rooms.remove(room);
-                Ok(())
+                Ok(duration)
             }
-            None => Ok(()),
+            None => Ok(None),
         }
     }
 
