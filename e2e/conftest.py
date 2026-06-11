@@ -78,6 +78,9 @@ def _resolve_shared_port():
     return port, False
 
 
+# _PORT_WAS_PINNED is only meaningful in the xdist controller: workers
+# always see the env var (the controller sets it) but never consult the
+# flag - they return early from pytest_configure
 SHARED_PORT, _PORT_WAS_PINNED = _resolve_shared_port()
 # 127.0.0.1, not localhost: on Windows localhost can resolve to ::1 first
 # while the server listens on IPv4 (see ServerHandle.url)
@@ -109,15 +112,19 @@ def _spawn_server(port, *extra_args):
             f"shellshare binary not found at {CLI_PATH}. "
             "Run `cargo build --release` first."
         )
-    log_path = Path(tempfile.gettempdir()) / f"shellshare-e2e-{port}.log"
-    with open(log_path, "wb") as log:
+    # mkstemp, not a fixed name: a stale log owned by another user on a
+    # shared machine would make a fixed path unopenable
+    fd, log_path = tempfile.mkstemp(
+        prefix=f"shellshare-e2e-{port}-", suffix=".log"
+    )
+    with os.fdopen(fd, "wb") as log:
         proc = subprocess.Popen(
             [str(CLI_PATH), "server", "--host", "127.0.0.1", "--port", str(port)]
             + [str(a) for a in extra_args],
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-    proc.log_path = log_path
+    proc.log_path = Path(log_path)
     return proc
 
 
@@ -242,31 +249,39 @@ def poll_until(predicate, timeout=5, interval=0.1):
     return False
 
 
+def _server_log_tail(proc, limit=2000):
+    """Tail of the server's log file, or '' when unavailable."""
+    log_path = getattr(proc, "log_path", None)
+    if log_path is None:
+        return ""
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n" + text[-limit:]
+
+
 def wait_for_server(url, timeout_seconds=30, proc=None):
     """Wait for server to be ready.
 
     Given the server's process, a crash before it answers fails
-    immediately with the server's output instead of timing out.
+    immediately with the server's output instead of timing out, and a
+    timeout includes that output too.
     """
     start = time.time()
     while time.time() - start < timeout_seconds:
         if proc is not None and proc.poll() is not None:
-            log_path = getattr(proc, "log_path", None)
-            output = (
-                "\n" + Path(log_path).read_text(errors="replace")[-2000:]
-                if log_path is not None
-                else ""
-            )
             raise RuntimeError(
                 f"server exited with code {proc.returncode} "
-                f"before answering at {url}{output}"
+                f"before answering at {url}{_server_log_tail(proc)}"
             )
         try:
             urllib.request.urlopen(url, timeout=1)
             return True
         except Exception:
             time.sleep(0.5)
-    raise TimeoutError(f"Server not ready after {timeout_seconds}s")
+    tail = _server_log_tail(proc) if proc is not None else ""
+    raise TimeoutError(f"Server not ready after {timeout_seconds}s{tail}")
 
 
 _UNSET = object()  # Sentinel for distinguishing None from unset
