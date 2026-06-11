@@ -36,24 +36,6 @@ jobs:
       - name: Build Rust binary
         run: cargo build --release
 
-      - name: Start server
-        run: |
-          ./target/release/shellshare server --host 0.0.0.0 --port 3000 &
-          sleep 2
-
-      - name: Wait for server
-        run: |
-          for i in {1..30}; do
-            if curl -s http://localhost:3000 > /dev/null; then
-              echo "Server is up after $i attempt(s)."
-              exit 0
-            fi
-            echo "Waiting for server... ($i)"
-            sleep 2
-          done
-          echo "Server did not become ready after 30 attempts."
-          exit 1
-
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 

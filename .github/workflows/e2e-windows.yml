@@ -43,36 +43,6 @@ jobs:
       - name: Run E2E tests
         shell: pwsh
         run: |
-          # Start server as background job (stays alive within this step)
-          $job = Start-Job -ScriptBlock {
-            Set-Location $using:PWD
-            & ".\target\release\shellshare.exe" server --host "127.0.0.1" --port "3000"
-          }
-
-          # Wait for server to be ready
-          $timeout = 60
-          $elapsed = 0
-          while ($elapsed -lt $timeout) {
-            try {
-              $response = Invoke-WebRequest -Uri "http://127.0.0.1:3000" -UseBasicParsing -TimeoutSec 2
-              if ($response.StatusCode -eq 200) {
-                Write-Host "Server is up after $elapsed seconds"
-                break
-              }
-            } catch {
-              Write-Host "Waiting for server... ($elapsed s)"
-            }
-            Start-Sleep -Seconds 2
-            $elapsed += 2
-          }
-
-          if ($elapsed -ge $timeout) {
-            Write-Host "Server did not start within $timeout seconds"
-            Receive-Job -Id $job.Id
-            exit 1
-          }
-
-          # Run E2E tests
           cd e2e
           uv run pytest -n 10
         env:
