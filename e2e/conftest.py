@@ -8,6 +8,7 @@ This module provides:
 """
 
 import json
+import os
 import random
 import socket
 import string
@@ -41,7 +42,18 @@ else:
 CLI_COMMAND = [str(CLI_PATH)]
 # 127.0.0.1, not localhost: on Windows localhost can resolve to ::1 first
 # while the server listens on IPv4 (see ServerHandle.url)
-SERVER_URL = "http://127.0.0.1:3000"
+# SHELLSHARE_E2E_PORT moves the shared server off :3000, e.g. when
+# another process already occupies it
+try:
+    SHARED_PORT = int(os.environ.get("SHELLSHARE_E2E_PORT", "3000"))
+    if not 1 <= SHARED_PORT <= 65535:
+        raise ValueError
+except ValueError:
+    raise RuntimeError(
+        "SHELLSHARE_E2E_PORT must be a port number (1-65535), got: "
+        f"{os.environ['SHELLSHARE_E2E_PORT']!r}"
+    ) from None
+SERVER_URL = f"http://127.0.0.1:{SHARED_PORT}"
 
 
 def _server_responds(url, timeout=1):
@@ -79,7 +91,7 @@ def _spawn_server(port, *extra_args):
 
 
 def pytest_configure(config):
-    """Start the shared server on :3000 if none is running.
+    """Start the shared server (default :3000) if none is running.
 
     Runs only in the xdist controller (or in a single-process run), so the
     server is started exactly once no matter how many workers there are.
@@ -90,7 +102,7 @@ def pytest_configure(config):
         return
     config._shellshare_server = None
     if not _server_responds(SERVER_URL):
-        config._shellshare_server = _spawn_server(3000)
+        config._shellshare_server = _spawn_server(SHARED_PORT)
         wait_for_server(SERVER_URL)
 
 

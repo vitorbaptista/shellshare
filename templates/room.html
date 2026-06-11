@@ -3,12 +3,14 @@
 <head>
   <title>shellshare - live terminal broadcast</title>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
   <meta name="description" content="Shellshare allows you to broadcast your terminal live with a single command.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="shellshare: live terminal broadcast">
   <meta property="og:site_name" content="shellshare">
   <meta property="og:description" content="Shellshare allows you to broadcast your terminal live with a single command.">
-  <meta property="og:image" content="/shellshare-og-image.png">
+  <meta property="og:image" content="https://shellshare.net/shellshare-og-image.png">
   <link rel="stylesheet" href="/stylesheet/vendor/ansi2html.css">
   <link rel="stylesheet" href="/stylesheet/room.css">
   <link id="favicon" rel="icon" type="image/png" href="/favicon.png">
@@ -17,8 +19,10 @@
   <div class="wrapper">
     <header>
       <div class="online">
-        <span id="broadcast-status" class="broadcast-status">connecting</span>
-        &middot;
+        <span id="broadcast-status" class="broadcast-status offline"
+              role="status" title="offline"><span
+              id="broadcast-status-text" class="visually-hidden"
+              >broadcaster offline</span></span>
         <span id="online-counter">0</span> user<span id="online-counter-plural">s</span> online
       </div>
       <h1 class="title">
@@ -39,7 +43,7 @@
     </main>
     <footer>
       <p>shellshare is a free software (Apache License). Source code on <a href="https://github.com/vitorbaptista/shellshare">GitHub</a>.</p>
-      <p>Made by <a href="http://vitorbaptista.com">Vitor Baptista</a>.</p>
+      <p>Made by <a href="https://vitorbaptista.com">Vitor Baptista</a>.</p>
     </footer>
   </div>
   <script src="/javascript/vendor/socket.io.min.js"></script>
@@ -61,6 +65,8 @@
       var onlineCounter = document.getElementById('online-counter');
       var onlineCounterPlural = document.getElementById('online-counter-plural');
       var broadcastStatus = document.getElementById('broadcast-status');
+      var broadcastStatusText =
+        document.getElementById('broadcast-status-text');
       var terminalContainer = document.getElementById('terminal');
       var fullscreenToggle = document.getElementById('fullscreen-toggle');
       var favicon = document.getElementById('favicon');
@@ -131,17 +137,23 @@
       // open, not that output is flowing). The server reports the
       // current state on join and every transition afterwards.
       socket.on('broadcasting', function (live) {
-        broadcastStatus.textContent = live ? 'live' : 'offline';
-        broadcastStatus.className =
-          'broadcast-status ' + (live ? 'live' : 'offline');
+        setBroadcastStatus(live ? 'online' : 'offline');
         setFaviconBlink(live);
       });
-      // Our own connection is down: we can't know the broadcaster's state
+      // Our own connection is down: we can't know the broadcaster's
+      // state, so report the session as offline until we rejoin
       socket.on('disconnect', function () {
-        broadcastStatus.textContent = 'connecting';
-        broadcastStatus.className = 'broadcast-status';
+        setBroadcastStatus('offline');
         setFaviconBlink(false);
       });
+
+      function setBroadcastStatus(state) {
+        broadcastStatus.title = state;
+        broadcastStatus.className = 'broadcast-status ' + state;
+        // A real (visually hidden) text node, not an aria-label:
+        // role="status" live regions only announce content changes
+        broadcastStatusText.textContent = 'broadcaster ' + state;
+      }
       socket.on('message', function (message) {
         if (term && message) {
           term.write(decoder.decode(message, {stream: true}));
