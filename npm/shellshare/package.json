@@ -1,0 +1,28 @@
+{
+  "name": "shellshare",
+  "version": "0.0.0-dev",
+  "description": "Live terminal broadcasting - share your terminal via a web link",
+  "bin": {
+    "shellshare": "bin/shellshare.js"
+  },
+  "files": [
+    "bin/shellshare.js"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vitorbaptista/shellshare.git"
+  },
+  "homepage": "https://shellshare.net",
+  "keywords": [
+    "terminal",
+    "broadcast",
+    "shell",
+    "live",
+    "tty"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "optionalDependencies": {}
+}

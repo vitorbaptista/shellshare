@@ -19,6 +19,12 @@ Copy and paste the following line in your terminal:
 curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare && ./shellshare
 ```
 
+If you have Node.js, you can also run it with no manual download on Linux, macOS, or Windows:
+
+```bash
+npx shellshare
+```
+
 You'll see a line saying `Sharing session in
 https://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
 Anyone that opens this link will be able to see what you're doing in your

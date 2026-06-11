@@ -258,3 +258,47 @@ jobs:
             assets/shellshare-macos-x86_64
             assets/shellshare-macos-aarch64
           generate_release_notes: true
+
+  # Publish to npm so `npx shellshare` works: four platform packages carrying
+  # the binaries (esbuild-style optionalDependencies, no postinstall) plus the
+  # meta package with the launcher shim. Auth via npm Trusted Publishing (OIDC).
+  publish-npm:
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download embedded binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 'shellshare-*'
+          path: npm-binaries
+
+      - name: Stage npm packages
+        run: node npm/scripts/prepare-packages.js "${GITHUB_REF_NAME#v}" npm-binaries dist-npm
+
+      - name: Smoke-test the Linux package binary
+        run: dist-npm/shellshare-linux-x64/bin/shellshare --version
+
+      # Platform packages first so the meta package never points at versions
+      # that don't exist yet. The shellshare-* glob skips the meta dir.
+      - name: Publish platform packages
+        run: |
+          for dir in dist-npm/shellshare-*; do
+            (cd "$dir" && npm publish --provenance --access public)
+          done
+
+      - name: Publish meta package
+        run: cd dist-npm/shellshare && npm publish --provenance --access public
