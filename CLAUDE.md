@@ -81,3 +81,4 @@ The suite in `e2e/` uses Python pytest + Playwright and manages its own servers:
 - When adding new dependency, always use `cargo add`
 - Before committing run `make lint` and fix any issues
 - When fixing a lint issue, don't simply disable the check unless we really don't need it
+- Run local servers in a random port to avoid conflicts
