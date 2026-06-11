@@ -12,6 +12,13 @@ RUN cargo build --release
 # Stage 2: Runtime image
 FROM debian:bookworm-slim
 
+# ca-certificates supplies the system trust store that reqwest's rustls
+# platform verifier reads root certs from; without it, the analytics HTTP
+# client fails to build (outbound HTTPS to PostHog).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy the compiled binary
