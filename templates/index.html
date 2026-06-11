@@ -88,7 +88,7 @@ PS&gt; exit</span>
         <h3>Can I install it with npm?</h3>
         <p>Yes. If you have Node.js, <code>npx shellshare</code> runs it without installing anything by hand, and <code>npm install -g shellshare</code> installs it permanently. The <a href="https://www.npmjs.com/package/shellshare">npm package</a> ships the same prebuilt binaries as the downloads above.</p>
         <h3>Can I self-host shellshare?</h3>
-        <p>Yes. The shellshare binary also includes the server. You can start it by running <code>shellshare serve</code> and accessing the server at <a href="http://localhost:3000">http://localhost:3000</a>. No data leaves your computer. I suggest <a href="https://ngrok.com">ngrok</a> as an easy way to allow other people to access your server.</p>
+        <p>Yes. The shellshare binary also includes the server. You can start it by running <code>shellshare serve</code> and accessing the server at <a href="http://localhost:3000">http://localhost:3000</a>. No data leaves your computer. To let other people access your server, add <code>--tunnel</code> (e.g. <code>shellshare serve --tunnel</code>): it uses <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/">cloudflared</a> (which you need installed) to create a public <code>https://*.trycloudflare.com</code> link for your broadcast.</p>
         <h3>I found a problem! What do I do?</h3>
         <p>Please, open an issue at our <a href="https://github.com/vitorbaptista/shellshare/issues">issues page</a> describing what the problem was, your shellshare version, and your operating system.</p>
         <h3>How can I help?</h3>
