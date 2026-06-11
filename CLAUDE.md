@@ -47,11 +47,11 @@ Key files:
 Async Tokio + Axum web server with Socket.IO for real-time updates:
 - `mod.rs`: Router and HTTP/Socket.IO handlers - thin translators that delegate to the modules below
 - `rooms.rs`: All room lifecycle behind one interface - first-caller-wins password claiming, message history (max 100), canonical room names (`RoomId`), activity tracking and TTL eviction. One map, one lock: authorization and mutation are a single critical section
-- `pages.rs`: Home page (OS detection for the install command), viewer page, embedded static assets
+- `pages.rs`: Home page (install options: npx by default, plus per-OS binary downloads), viewer page, embedded static assets
 - `binaries.rs`: Platform detection and binary downloads at `/bin/shellshare`
 
 Routes:
-- `GET /` - Home page with OS detection for install command
+- `GET /` - Home page with install instructions (npx selected by default)
 - `GET /r/:room` - Viewer page
 - `GET /ws/r/:room` - WebSocket ingest (the only broadcast transport): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked. Each open connection counts as an attached broadcaster: viewers get a `broadcasting` Socket.IO event (current state on join, plus every transition) driving the live/offline indicator in the viewer page; a connection silent past 90s (clients ping every 30s) is treated as dead
 - `POST /r/:room` - Retired: always 410 Gone with an upgrade message, so pre-WebSocket clients fail loudly instead of silently

@@ -9,7 +9,7 @@ claimed - or its password verified - at the WS handshake. The legacy
 POST /r/:room ingest route is retired and always returns 410 Gone.
 
 Endpoints tested:
-- GET / (home page, OS detection)
+- GET / (home page, install options)
 - GET /r/:room (room page)
 - POST /r/:room (retired: 410 Gone)
 - DELETE /r/:room (delete room)
@@ -134,75 +134,46 @@ class TestHomePage:
         assert status == 200, f"Expected 200, got {status}"
 
 
-class TestOSDetection:
-    """Tests for server-side OS detection via User-Agent header.
+class TestInstallOptions:
+    """Tests for the install option radios on the home page.
 
-    The server detects OS from User-Agent and pre-checks the corresponding radio input:
-    - User-Agent contains "windows" → id="os-windows" has checked attribute
-    - User-Agent contains "mac" → id="os-macos" has checked attribute
-    - Default (Linux or unknown) → id="os-linux" has checked attribute
+    The npx option (id="os-node") is checked by default regardless of
+    User-Agent; the per-OS binary download options are present but unchecked.
     """
 
-    def test_linux_user_agent_checks_linux_radio(self):
-        """Linux User-Agent should pre-check the os-linux radio button."""
+    def test_node_checked_by_default(self):
+        """The npx install option should be pre-checked for any User-Agent."""
         wait_for_server(SERVER_URL)
-        status, headers, body = make_request(
-            'GET', '/',
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
-        assert status == 200, f"Expected 200, got {status}"
-        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
-        assert linux_input, "Could not find os-linux input element"
-        assert 'checked' in linux_input.group(), f"os-linux should be checked, got: {linux_input.group()}"
+        for ua in [
+            "",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        ]:
+            status, headers, body = make_request('GET', '/', headers={"User-Agent": ua})
+            assert status == 200, f"Expected 200, got {status}"
+            node_input = re.search(r'<input[^>]*id="os-node"[^>]*>', body)
+            assert node_input, "Could not find os-node input element"
+            assert 'checked' in node_input.group(), \
+                f"os-node should be checked for UA {ua!r}, got: {node_input.group()}"
 
-    def test_macos_user_agent_checks_macos_radio(self):
-        """Mac User-Agent should pre-check the os-macos radio button."""
+    def test_npx_command_present(self):
+        """The npx install command should be on the page."""
         wait_for_server(SERVER_URL)
-        status, headers, body = make_request(
-            'GET', '/',
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-        )
+        status, headers, body = make_request('GET', '/')
         assert status == 200, f"Expected 200, got {status}"
-        macos_input = re.search(r'<input[^>]*id="os-macos"[^>]*>', body)
-        assert macos_input, "Could not find os-macos input element"
-        assert 'checked' in macos_input.group(), f"os-macos should be checked, got: {macos_input.group()}"
-        # Verify os-linux is NOT checked
-        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
-        assert linux_input, "Could not find os-linux input element"
-        assert 'checked' not in linux_input.group(), f"os-linux should NOT be checked when mac UA, got: {linux_input.group()}"
+        assert 'npx -y shellshare' in body, "Expected npx install command on home page"
 
-    def test_windows_user_agent_checks_windows_radio(self):
-        """Windows User-Agent should pre-check the os-windows radio button."""
+    def test_os_options_present_but_unchecked(self):
+        """The per-OS binary options should exist and be unchecked by default."""
         wait_for_server(SERVER_URL)
-        status, headers, body = make_request(
-            'GET', '/',
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        )
+        status, headers, body = make_request('GET', '/')
         assert status == 200, f"Expected 200, got {status}"
-        windows_input = re.search(r'<input[^>]*id="os-windows"[^>]*>', body)
-        assert windows_input, "Could not find os-windows input element"
-        assert 'checked' in windows_input.group(), f"os-windows should be checked, got: {windows_input.group()}"
-        # Verify os-linux is NOT checked
-        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
-        assert linux_input, "Could not find os-linux input element"
-        assert 'checked' not in linux_input.group(), f"os-linux should NOT be checked when windows UA, got: {linux_input.group()}"
-
-    def test_default_checks_linux_radio(self):
-        """No/unknown User-Agent should default to pre-checking os-linux radio."""
-        wait_for_server(SERVER_URL)
-        # Test with empty/missing User-Agent
-        status, headers, body = make_request(
-            'GET', '/',
-            headers={"User-Agent": ""}
-        )
-        assert status == 200, f"Expected 200, got {status}"
-        linux_input = re.search(r'<input[^>]*id="os-linux"[^>]*>', body)
-        assert linux_input, "Could not find os-linux input element"
-        assert 'checked' in linux_input.group(), f"os-linux should be checked by default, got: {linux_input.group()}"
-        # Verify os-macos is NOT checked
-        macos_input = re.search(r'<input[^>]*id="os-macos"[^>]*>', body)
-        assert macos_input, "Could not find os-macos input element"
-        assert 'checked' not in macos_input.group(), f"os-macos should NOT be checked by default, got: {macos_input.group()}"
+        for os_id in ["os-linux", "os-macos", "os-windows"]:
+            os_input = re.search(rf'<input[^>]*id="{os_id}"[^>]*>', body)
+            assert os_input, f"Could not find {os_id} input element"
+            assert 'checked' not in os_input.group(), \
+                f"{os_id} should NOT be checked by default, got: {os_input.group()}"
 
 
 class TestRoomPage:

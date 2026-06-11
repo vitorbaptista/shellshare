@@ -29,12 +29,6 @@
   margin: 4em 0;
 }
 
-.instructions .alt-install {
-  text-align: center;
-  margin: -3em 0 4em;
-  color: #888;
-}
-
 .main h2 {
   text-transform: uppercase;
   font-size: 2em;
@@ -102,10 +96,16 @@ pre {
   font-style: italic;
 }
 
+body:has(#os-node:checked) .linux:not(.node),
+body:has(#os-node:checked) .macos:not(.node),
+body:has(#os-node:checked) .windows:not(.node),
+body:has(#os-linux:checked) .node:not(.linux),
 body:has(#os-linux:checked) .windows:not(.linux),
 body:has(#os-linux:checked) .macos:not(.linux),
+body:has(#os-macos:checked) .node:not(.macos),
 body:has(#os-macos:checked) .windows:not(.macos),
 body:has(#os-macos:checked) .linux:not(.macos),
+body:has(#os-windows:checked) .node:not(.windows),
 body:has(#os-windows:checked) .macos:not(.windows),
 body:has(#os-windows:checked) .linux:not(.windows) {
   display: none;
@@ -123,6 +123,14 @@ body:has(#os-windows:checked) .linux:not(.windows) {
 
 label[for] {
   cursor: pointer;
+}
+
+.operating-systems .node-logo {
+  height: 1.9em;
+  width: auto;
+  vertical-align: -0.25em;
+  /* the nav's letter-spacing would split the JS glyphs apart */
+  letter-spacing: normal;
 }
 
 .operating-systems input:not(:checked) + label {
