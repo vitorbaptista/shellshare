@@ -29,7 +29,7 @@ import urllib.request
 import pytest
 import socketio
 
-SERVER_URL = "http://localhost:3000"
+from conftest import SERVER_URL
 
 
 def random_id(length=12):

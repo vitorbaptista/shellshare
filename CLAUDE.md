@@ -53,7 +53,7 @@ Async Tokio + Axum web server with Socket.IO for real-time updates:
 Routes:
 - `GET /` - Home page with install instructions (npx selected by default)
 - `GET /r/:room` - Viewer page
-- `GET /ws/r/:room` - WebSocket ingest (the only broadcast transport): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked. Each open connection counts as an attached broadcaster: viewers get a `broadcasting` Socket.IO event (current state on join, plus every transition) driving the live/offline indicator in the viewer page; a connection silent past 90s (clients ping every 30s) is treated as dead
+- `GET /ws/r/:room` - WebSocket ingest (the only broadcast transport): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked. Each open connection counts as an attached broadcaster: viewers get a `broadcasting` Socket.IO event (current state on join, plus every transition) driving the online/offline indicator in the viewer page; a connection silent past 90s (clients ping every 30s) is treated as dead
 - `POST /r/:room` - Retired: always 410 Gone with an upgrade message, so pre-WebSocket clients fail loudly instead of silently
 - `DELETE /r/:room` - Cleanup room
 
