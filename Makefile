@@ -22,7 +22,7 @@ benchmark:
 		$(SERVER)/r/$(ROOM)
 
 deploy:
-	git push dokku master:master
+	git push dokku main:master
 
 # make release            -> bump patch (2.0.6 -> 2.0.7), tag, push; CI does the rest
 # make release VERSION=x.y.z
