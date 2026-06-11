@@ -2,7 +2,7 @@
 E2E tests for room TTL cleanup.
 
 These need a server with a short TTL, so each test spawns its own via the
-dedicated_server fixture instead of using the shared one on :3000.
+dedicated_server fixture instead of using the shared one.
 """
 
 import time

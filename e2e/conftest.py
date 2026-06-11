@@ -40,19 +40,37 @@ else:
     CLI_PATH = _DEBUG_PATH
 
 CLI_COMMAND = [str(CLI_PATH)]
+
+
+def _free_port():
+    """Ask the OS for a free TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+# SHELLSHARE_E2E_PORT pins the shared server's port (and reuses any
+# server already answering there). Without it the suite picks a free
+# port, so whatever happens to occupy :3000 never breaks a test run.
+_env_port = os.environ.get("SHELLSHARE_E2E_PORT")
+if _env_port is not None:
+    try:
+        SHARED_PORT = int(_env_port)
+        if not 1 <= SHARED_PORT <= 65535:
+            raise ValueError
+    except ValueError:
+        raise RuntimeError(
+            "SHELLSHARE_E2E_PORT must be a port number (1-65535), got: "
+            f"{_env_port!r}"
+        ) from None
+else:
+    SHARED_PORT = _free_port()
+    # xdist workers re-import this module in fresh processes spawned
+    # after this point; the env var carries the controller's choice so
+    # every worker agrees on the port
+    os.environ["SHELLSHARE_E2E_PORT"] = str(SHARED_PORT)
 # 127.0.0.1, not localhost: on Windows localhost can resolve to ::1 first
 # while the server listens on IPv4 (see ServerHandle.url)
-# SHELLSHARE_E2E_PORT moves the shared server off :3000, e.g. when
-# another process already occupies it
-try:
-    SHARED_PORT = int(os.environ.get("SHELLSHARE_E2E_PORT", "3000"))
-    if not 1 <= SHARED_PORT <= 65535:
-        raise ValueError
-except ValueError:
-    raise RuntimeError(
-        "SHELLSHARE_E2E_PORT must be a port number (1-65535), got: "
-        f"{os.environ['SHELLSHARE_E2E_PORT']!r}"
-    ) from None
 SERVER_URL = f"http://127.0.0.1:{SHARED_PORT}"
 
 
@@ -66,13 +84,6 @@ def _server_responds(url, timeout=1):
         return True
     except Exception:
         return False
-
-
-def _free_port():
-    """Ask the OS for a free TCP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _spawn_server(port, *extra_args):
@@ -91,12 +102,12 @@ def _spawn_server(port, *extra_args):
 
 
 def pytest_configure(config):
-    """Start the shared server (default :3000) if none is running.
+    """Start the shared server if none is answering at SERVER_URL.
 
     Runs only in the xdist controller (or in a single-process run), so the
     server is started exactly once no matter how many workers there are.
-    CI keeps working unchanged: it starts its own server, which we detect
-    and leave alone.
+    With SHELLSHARE_E2E_PORT pinned, a server someone already started on
+    that port is detected and left alone.
     """
     if hasattr(config, "workerinput"):  # xdist worker: controller handles it
         return
