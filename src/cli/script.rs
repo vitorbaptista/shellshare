@@ -398,9 +398,6 @@ pub fn run_script_mode(
         }
     }
 
-    // Signal threads to stop
-    running.store(false, Ordering::SeqCst);
-
     // Close our copy of the slave BEFORE joining the reader thread.
     // The child has exited (or been killed and reaped, bounded) in every
     // path that reaches here, so this is safe on Windows too (portable-pty
@@ -409,9 +406,18 @@ pub fn run_script_mode(
     // forever, hanging the join below.
     drop(pair.slave);
 
-    // Wait for threads to finish
+    // Do NOT flip `running` before joining: a short-lived child (e.g.
+    // `shellshare exec -- echo hi`) can exit before the reader thread
+    // gets scheduled, and the flag would make it quit without draining
+    // the output still buffered in the PTY. With the slave closed the
+    // reader drains to EOF and exits on its own; dropping its sender
+    // then ends the network thread after the channel is emptied. On
+    // Ctrl+C `running` is already false, keeping interrupts immediate.
     let _ = stream_thread.join();
     let _ = http_thread.join();
+
+    // Signal the remaining helper threads (stdin forwarder, SIGWINCH) to stop
+    running.store(false, Ordering::SeqCst);
 
     // Join SIGWINCH handler thread (Unix only)
     #[cfg(unix)]
