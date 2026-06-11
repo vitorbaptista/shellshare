@@ -413,8 +413,21 @@ pub fn run_script_mode(
     // reader drains to EOF and exits on its own; dropping its sender
     // then ends the network thread after the channel is emptied. On
     // Ctrl+C `running` is already false, keeping interrupts immediate.
+    //
+    // The drain must be bounded, though: an orphan that outlived the
+    // child (e.g. `ping example.com & exit`) holds the slave open and
+    // keeps writing, so EOF never comes. The watchdog flips the flag
+    // after a grace period and the reader stops at its next read.
+    let drain_watchdog = {
+        let running = running.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(2));
+            running.store(false, Ordering::SeqCst);
+        })
+    };
     let _ = stream_thread.join();
     let _ = http_thread.join();
+    drop(drain_watchdog);
 
     // Signal the remaining helper threads (stdin forwarder, SIGWINCH) to stop
     running.store(false, Ordering::SeqCst);

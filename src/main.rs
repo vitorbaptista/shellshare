@@ -37,9 +37,10 @@ const DEFAULT_ROOM_TTL_SECS: u64 = 21600;
     Run with 'server' subcommand to start the broadcasting server.")]
 #[command(after_long_help = "Scripting & AI agents:\n  \
     Add --json for a machine-readable output contract. The first line on\n  \
-    stdout is `{\"event\":\"sharing\",\"url\":\"...\"}` - parse it to get the share\n  \
-    link. A final `{\"event\":\"end\",\"exit_code\":N}` line is printed when the\n  \
-    broadcast finishes. Errors go to stderr as `ERROR: ...` and exit non-zero.\n\n  \
+    stdout is a JSON object with event \"sharing\" - parse its \"url\" field to\n  \
+    get the share link. A final `{\"event\":\"end\",\"exit_code\":N}` line is\n  \
+    printed when the broadcast finishes. Errors go to stderr as `ERROR: ...`\n  \
+    and exit non-zero.\n\n  \
     Recipes:\n    \
     shellshare exec --json -- npm test     # share one command, exit with its code\n    \
     tail -f build.log | shellshare --stdin --json\n\n  \
@@ -313,6 +314,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Some(Commands::Exec { command }) => {
+            // The stdin branch would win and silently drop the command
+            if cli.stdin {
+                eprintln!("ERROR: --stdin cannot be combined with 'exec'");
+                std::process::exit(1);
+            }
             let args = cli::ClientArgs {
                 server: cli.server,
                 display_server: None,

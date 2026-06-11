@@ -1,32 +1,10 @@
 # Rooms are ephemeral live broadcasts - never index them.
-# Everything else (home page, llms.txt, downloads) is welcome,
-# including AI crawlers.
+# Everything else (home page, llms.txt, downloads) is welcome to all
+# crawlers, AI crawlers (GPTBot, ClaudeBot, PerplexityBot, ...) included.
+# Note: a bot-specific group would NOT inherit from this one - keep a
+# single group so every rule applies to every crawler.
 
 User-agent: *
-Disallow: /r/
-
-User-agent: GPTBot
-Disallow: /r/
-
-User-agent: ClaudeBot
-Disallow: /r/
-
-User-agent: Claude-Web
-Disallow: /r/
-
-User-agent: anthropic-ai
-Disallow: /r/
-
-User-agent: PerplexityBot
-Disallow: /r/
-
-User-agent: Google-Extended
-Disallow: /r/
-
-User-agent: Applebot-Extended
-Disallow: /r/
-
-User-agent: CCBot
 Disallow: /r/
 
 Sitemap: https://shellshare.net/sitemap.xml

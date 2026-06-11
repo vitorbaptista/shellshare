@@ -128,6 +128,20 @@ class TestExecSubcommand:
         assert events[-1] == {"event": "end", "exit_code": 3}, \
             f"stdout was: {proc.stdout!r}"
 
+    def test_exec_rejects_stdin_flag(self, unique_room, unique_password):
+        # --stdin would win over exec and silently drop the command
+        proc = subprocess.run(
+            CLI_COMMAND
+            + ["exec", "--stdin", "--json", "-s", SERVER_URL]
+            + ["-r", unique_room, "-W", unique_password, "--", "echo", "hi"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            stdin=subprocess.DEVNULL,
+        )
+        assert proc.returncode != 0
+        assert "ERROR" in proc.stderr
+
     def test_exec_requires_command(self):
         proc = subprocess.run(
             CLI_COMMAND + ["exec", "--"],

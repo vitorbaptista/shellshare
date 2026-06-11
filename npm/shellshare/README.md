@@ -18,8 +18,8 @@ shellshare
 ## Scripting & AI agents
 
 Add `--json` for a machine-readable contract: the first line on stdout is
-`{"event":"sharing","url":"https://shellshare.net/r/..."}` (parse `url` and
-share it), and a final `{"event":"end","exit_code":N}` is printed when the
+`{"event":"sharing", ..., "url":"https://shellshare.net/r/..."}` (parse `url`
+and share it), and a final `{"event":"end","exit_code":N}` is printed when the
 broadcast finishes. Errors go to stderr as `ERROR: ...` with a non-zero exit.
 
 ```bash

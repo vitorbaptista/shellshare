@@ -23,7 +23,7 @@ Binaries exist for Linux x64, macOS x64/arm64, and Windows x64
 With `--json`, shellshare prints newline-delimited JSON events to stdout:
 
 - First line, before any terminal output:
-  `{"event":"sharing","url":"https://shellshare.net/r/<room>","room":"<room>","server":"https://shellshare.net"}`
+  `{"event":"sharing","room":"<room>","server":"https://shellshare.net","url":"https://shellshare.net/r/<room>"}`
 - Last line: `{"event":"end","exit_code":0}`
 
 Errors are printed to stderr as `ERROR: ...` and the process exits non-zero.
@@ -40,7 +40,9 @@ shellshare exec --json -- npm test
 ```
 
 `exec` runs the command in a PTY, streams it live, and exits with the
-command's exit code. Note the `--` separator before the command.
+command's exit code (a signal-killed command reports exit code 1). Note
+the `--` separator before the command. `exec` cannot be combined with
+`--stdin`.
 
 **Stream a log or pipe** (no PTY, reads stdin until EOF):
 
@@ -51,10 +53,14 @@ tail -f build.log | shellshare --stdin --json
 **Background it and capture the URL while you keep working:**
 
 ```bash
-shellshare exec --json -- ./long-task.sh > /tmp/ss.out 2>/tmp/ss.err &
+shellshare exec --json -- ./long-task.sh </dev/null >/tmp/ss.out 2>/tmp/ss.err &
 until URL=$(head -1 /tmp/ss.out | jq -re .url) 2>/dev/null; do sleep 0.2; done
 echo "Watch live: $URL"
 ```
+
+(The `</dev/null` matters when backgrounding from an interactive shell:
+without it the broadcast keeps the TTY as stdin and job control suspends
+it with SIGTTIN.)
 
 **Stable room name across restarts** (same link every time):
 
@@ -76,7 +82,7 @@ get a public `https://*.trycloudflare.com` link without using shellshare.net
 - The share link is unguessable (18 random alphanumerics) but public —
   anyone with the link can watch. Don't broadcast secrets.
 - Broadcasts are live-only and not recorded; rooms are deleted when the
-  broadcast ends (or after a few hours of inactivity).
+  broadcast ends (or after a period of inactivity).
 - Late joiners see recent history, so the page is not blank if the user
   opens the link mid-run.
 - Transient network failures are handled: output is buffered and replayed

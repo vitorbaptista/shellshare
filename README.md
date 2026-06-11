@@ -35,8 +35,8 @@ terminal. When you're done, type `exit` or hit CTRL+D.
 shellshare is built to be driven by scripts and AI agents — for example, an
 agent sharing a live view of a long build with its user. Add `--json` for a
 machine-readable contract: the first line on stdout is
-`{"event":"sharing","url":"https://shellshare.net/r/..."}` (parse `url` and
-hand it to your user), and a final `{"event":"end","exit_code":N}` line is
+`{"event":"sharing", ..., "url":"https://shellshare.net/r/..."}` (parse `url`
+and hand it to your user), and a final `{"event":"end","exit_code":N}` line is
 printed when the broadcast finishes. Errors go to stderr as `ERROR: ...`
 with a non-zero exit.
 
