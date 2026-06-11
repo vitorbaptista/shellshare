@@ -11,8 +11,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 branch=$(git rev-parse --abbrev-ref HEAD)
-if [ "$branch" != "master" ]; then
-  echo "error: releases must be cut from master (currently on $branch)" >&2
+if [ "$branch" != "main" ]; then
+  echo "error: releases must be cut from main (currently on $branch)" >&2
   exit 1
 fi
 if [ -n "$(git status --porcelain)" ]; then
@@ -20,7 +20,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-git pull --ff-only origin master
+git pull --ff-only origin main
 
 current=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 
@@ -46,7 +46,7 @@ cargo check --quiet  # refresh Cargo.lock
 
 git commit -am "chore: release v$version"
 git tag "v$version"
-git push --atomic origin master "v$version"
+git push --atomic origin main "v$version"
 
 echo
 echo "v$version pushed. CI takes it from here:"
