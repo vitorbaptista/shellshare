@@ -51,8 +51,7 @@
   text-align: left;
 }
 
-.compare th,
-.compare thead + tbody tr:first-child td {
+.compare th {
   border-top: none;
 }
 

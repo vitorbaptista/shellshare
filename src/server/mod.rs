@@ -49,7 +49,7 @@ impl Default for CleanupConfig {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(60 * 60),         // 1 hour
-            inactive_ttl: Duration::from_secs(24 * 60 * 60), // 24 hours
+            inactive_ttl: Duration::from_secs(6 * 60 * 60), // 6 hours, same as the CLI default
         }
     }
 }
