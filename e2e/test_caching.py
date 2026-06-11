@@ -67,7 +67,9 @@ class TestPageCaching:
         wait_for_server(SERVER_URL)
         _, headers, body = make_request('GET', '/r/some-room')
         link = headers.get('Link', '')
-        for asset in ['xterm.js', 'socket.io.min.js', 'Inconsolata-latin.woff2']:
+        for asset in ['xterm.js', 'xterm-addon-webgl.js',
+                      'xterm-addon-unicode11.js', 'socket.io.min.js',
+                      'Inconsolata-latin.woff2']:
             assert asset in link, f"Link preload header must announce {asset}"
             assert re.search(rf'{re.escape(asset)}\?v=[0-9a-f]+', body), \
                 f"{asset} must be referenced with a content-hash version"

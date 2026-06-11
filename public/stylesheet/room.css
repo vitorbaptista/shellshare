@@ -166,5 +166,9 @@ header {
   left: 0;
   z-index: 100;
   overflow: auto;
+  /* No padding while fullscreen: the viewer's font-fit measures the
+     grid against the container's clientWidth/Height, which include
+     padding, so restoring it would reintroduce overflow the fit loop
+     then eats on every pass */
   padding: 0;
 }

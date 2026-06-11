@@ -125,10 +125,14 @@
           // The Unicode 11 addon needs the proposed API surface
           allowProposedApi: true,
         });
-        term.loadAddon(new Unicode11Addon.Unicode11Addon());
         // Wide-character widths per Unicode 11 instead of xterm's
-        // Unicode 6 default (emoji and CJK render at correct width)
-        term.unicode.activeVersion = '11';
+        // Unicode 6 default (emoji and CJK render at correct width).
+        // A failed addon script must cost only character widths, not
+        // the whole viewer.
+        if (typeof Unicode11Addon !== 'undefined') {
+          term.loadAddon(new Unicode11Addon.Unicode11Addon());
+          term.unicode.activeVersion = '11';
+        }
         applyTheme(currentSize.theme);
         term.open(terminalContainer);
         enableWebglRenderer();
@@ -201,10 +205,15 @@
           // The server replays the room history on join; start from a
           // clean screen instead of appending a duplicate. The size
           // is kept: the server re-sends it (before the history)
-          // whenever the room has one.
+          // whenever the room has one. RIS through the write queue,
+          // not term.reset(): writes are asynchronous, so an
+          // out-of-band reset could run before leftover pre-disconnect
+          // chunks parse; queued RIS is ordered after them and also
+          // resets the VT parser and UTF-8 decoder state they may
+          // have left mid-sequence.
           pendingWrites = [];
           if (term) {
-            term.reset();
+            term.write('\x1bc');
           }
         }
         joinedBefore = true;
@@ -260,17 +269,32 @@
       });
       socket.on('size', onSize);
 
+      // The broadcaster controls the size: sanitize it so resize()
+      // never throws (it requires positive integers) and a hostile
+      // value can't make every viewer allocate a million-row buffer
+      var MAX_DIMENSION = 1000;
+
+      function clampDimension(value) {
+        var n = Math.floor(value);
+        return n >= 1 ? Math.min(n, MAX_DIMENSION) : 0;
+      }
+
       function onSize(size) {
-        if (!size || !size.cols || !size.rows) {
+        if (!size) {
+          return;
+        }
+        var cols = clampDimension(size.cols);
+        var rows = clampDimension(size.rows);
+        if (!cols || !rows) {
           return;
         }
         var themeChanged = currentSize.theme !== size.theme;
-        currentSize = size;
+        currentSize = {cols: cols, rows: rows, theme: size.theme};
         if (!term) {
           // Applied when the terminal is created
           return;
         }
-        term.resize(size.cols, size.rows);
+        term.resize(cols, rows);
         if (themeChanged) {
           applyTheme(size.theme);
         }
@@ -294,7 +318,7 @@
           background: entry ? entry.background : '#000000',
           foreground: entry ? entry.foreground : '#f0f0f0',
         };
-        if (entry) {
+        if (entry && entry.palette && entry.palette.length >= 16) {
           for (var i = 0; i < ANSI_SLOTS.length; i++) {
             colors[ANSI_SLOTS[i]] = entry.palette[i];
           }
