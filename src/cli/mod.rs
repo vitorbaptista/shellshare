@@ -28,6 +28,10 @@ fn get_terminal_size() -> TermSize {
 /// Client configuration arguments
 pub struct ClientArgs {
     pub server: String,
+    /// URL viewers should use when it differs from the broadcast URL
+    /// (e.g. a tunnel in front of the local server); the share link is
+    /// printed with this, while the transport still talks to `server`
+    pub display_server: Option<String>,
     pub room: Option<String>,
     pub password: Option<String>,
     pub stdin: bool,
@@ -78,6 +82,9 @@ fn normalize_server_url(server: &str) -> String {
 /// Run the shellshare client
 pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
     let server = normalize_server_url(&args.server);
+    let share_base = args
+        .display_server
+        .map_or_else(|| server.clone(), |s| normalize_server_url(&s));
     let room = args.room.unwrap_or_else(generate_room_id);
     let password = args.password.unwrap_or_else(get_default_password);
 
@@ -86,16 +93,10 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // Connecting claims the room (or fails on a password mismatch), so
     // a broadcast that can never work is reported before the terminal
-    // is handed over to the shell
+    // is handed over to the shell. Failures must propagate (not exit):
+    // the caller may hold a tunnel whose cleanup an exit would skip
     let size = get_terminal_size();
-    let transport = match ws::Transport::connect(&server, &room_path, &password, size, args.theme)
-    {
-        Ok(transport) => transport,
-        Err(e) => {
-            eprintln!("ERROR: {e}");
-            std::process::exit(1);
-        }
-    };
+    let transport = ws::Transport::connect(&server, &room_path, &password, size, args.theme)?;
 
     // Ctrl+C only flips the flag; the sending thread owns the transport
     // and performs cleanup (flush, room deletion) when it stops
@@ -107,7 +108,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     if args.stdin {
         // Stdin mode - print to stderr
-        eprintln!("Sharing terminal in {server}/{room_path}");
+        eprintln!("Sharing terminal in {share_base}/{room_path}");
 
         // Read from stdin and stream to server
         stream_stdin(transport, &running)?;
@@ -121,7 +122,7 @@ pub fn run(args: ClientArgs) -> Result<(), Box<dyn std::error::Error>> {
             println!("You can resize it anytime.");
         }
 
-        println!("Sharing terminal in {server}/{room_path}");
+        println!("Sharing terminal in {share_base}/{room_path}");
 
         // Run script mode with PTY
         script::run_script_mode(transport, &running)?;
