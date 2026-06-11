@@ -117,8 +117,9 @@ class TestThemeValidation:
 class TestThemeRendering:
     """The browser must render the broadcast in the chosen colors.
 
-    These use dedicated servers: the shared one on :3000 may be an older
-    binary whose viewer page predates themes.
+    These use dedicated servers: the shared one (when pinned to a port
+    with a pre-started server) may be an older binary whose viewer page
+    predates themes.
     """
 
     def test_theme_colors_render_in_browser(self, dedicated_server):
