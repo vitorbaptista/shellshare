@@ -18,6 +18,7 @@ from conftest import (
     CLI_COMMAND,
     SERVER_URL,
     SocketListener,
+    parse_share_key,
     random_id,
     wait_for_content,
     wait_for_server,
@@ -60,7 +61,10 @@ class TestJsonContract:
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         first = json.loads(lines[0])
         assert first["event"] == "sharing"
-        assert first["url"] == f"{SERVER_URL}/r/{unique_room}"
+        # The share URL carries the decryption key in its #fragment, so
+        # an agent that relays it gives the viewer everything to decrypt
+        assert first["url"].startswith(f"{SERVER_URL}/r/{unique_room}#")
+        assert parse_share_key(first["url"]) is not None
         assert first["room"] == unique_room
         assert first["server"] == SERVER_URL
 
@@ -99,6 +103,10 @@ class TestExecSubcommand:
                 stdin=subprocess.DEVNULL,
             )
             assert proc.returncode == 0
+            # The broadcast is encrypted: take the key from the JSON
+            # share link so the listener can read the command's output
+            events = parse_json_events(proc.stdout)
+            listener.set_key(parse_share_key(events[0]["url"]))
             # The command's output reaches the viewers...
             assert wait_for_content(listener, lambda text: marker in text), \
                 "viewer never received the exec'd command output"
@@ -106,9 +114,8 @@ class TestExecSubcommand:
             listener.disconnect()
 
         # ...and the local stdout carries the JSON contract around it
-        events = parse_json_events(proc.stdout)
         assert events[0]["event"] == "sharing"
-        assert events[0]["url"] == f"{SERVER_URL}/r/{unique_room}"
+        assert events[0]["url"].startswith(f"{SERVER_URL}/r/{unique_room}#")
         assert events[-1] == {"event": "end", "exit_code": 0}, \
             f"stdout was: {proc.stdout!r}"
 

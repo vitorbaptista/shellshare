@@ -46,6 +46,18 @@ div.online {
   margin-right: 0.5rem;
 }
 
+/* Why an encrypted broadcast isn't rendering (missing/wrong key,
+   insecure context). Shown above the terminal, which stays empty. */
+.crypto-notice {
+  background-color: #3b2f00;
+  border: 1px solid #b8860b;
+  border-radius: 4px;
+  color: #ffd866;
+  font-family: 'Inconsolata', monospace;
+  margin-bottom: 0.75em;
+  padding: 0.75em 1em;
+}
+
 .broadcast-status::before {
   content: "\25CF"; /* ● */
   /* Empty alt text: the visually hidden text inside the span carries

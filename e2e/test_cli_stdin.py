@@ -23,6 +23,7 @@ from conftest import (
     CLI_COMMAND,
     SERVER_URL,
     SocketListener,
+    parse_share_key,
     random_id,
     wait_for_content,
 )
@@ -62,6 +63,7 @@ class TestBasicFunctionality:
 
         assert returncode == 0, f"CLI failed: {stderr}"
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5, containing=test_message)
         assert received is not None, "Message not received via Socket.IO"
         assert test_message in received
@@ -101,8 +103,9 @@ class TestMessageEncoding:
         """Simple text 'hello world' should be transmitted correctly."""
         test_message = "hello world"
 
-        run_cli_stdin(test_message, unique_room, unique_password)
+        _, _, stderr = run_cli_stdin(test_message, unique_room, unique_password)
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5, containing=test_message)
         assert received is not None
         assert test_message in received
@@ -111,8 +114,9 @@ class TestMessageEncoding:
         """Special characters !@#$%^&*() should be preserved."""
         test_message = "!@#$%^&*()"
 
-        run_cli_stdin(test_message, unique_room, unique_password)
+        _, _, stderr = run_cli_stdin(test_message, unique_room, unique_password)
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5)
         assert received is not None
         assert test_message in received
@@ -125,8 +129,9 @@ class TestMessageEncoding:
         """Unicode characters (Japanese, emoji) should be preserved."""
         test_message = "日本語テスト 🎉"
 
-        run_cli_stdin(test_message, unique_room, unique_password)
+        _, _, stderr = run_cli_stdin(test_message, unique_room, unique_password)
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5)
         assert received is not None
         assert "日本語" in received
@@ -136,8 +141,9 @@ class TestMessageEncoding:
         """Newlines and tabs should be preserved."""
         test_message = "line1\nline2\ttabbed"
 
-        run_cli_stdin(test_message, unique_room, unique_password)
+        _, _, stderr = run_cli_stdin(test_message, unique_room, unique_password)
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5)
         assert received is not None
         assert "line1" in received
@@ -149,8 +155,9 @@ class TestMessageEncoding:
         # Red text: \x1b[31m
         test_message = "\x1b[31mRed Text\x1b[0m"
 
-        run_cli_stdin(test_message, unique_room, unique_password)
+        _, _, stderr = run_cli_stdin(test_message, unique_room, unique_password)
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5)
         assert received is not None
         # The escape codes should be preserved (URL-encoded then base64)
@@ -164,21 +171,22 @@ class TestMessageEncoding:
         msg1 = f"FIRST-{random_id(6)}"
         msg2 = f"SECOND-{random_id(6)}"
 
-        # Send first message and wait for it
-        run_cli_stdin(msg1, unique_room, unique_password)
-        listener.wait_for_message(timeout=5, containing=msg1)
+        # Each CLI run uses a fresh random encryption key, so the listener
+        # decrypts one run at a time with that run's key.
+        _, _, stderr1 = run_cli_stdin(msg1, unique_room, unique_password)
+        key1 = parse_share_key(stderr1)
+        listener.set_key(key1)
+        first = listener.wait_for_message(timeout=5, containing=msg1)
+        assert first is not None, "First message not received"
+        assert msg1 in first
 
         # Send second message (same room, same password) and wait for it
-        run_cli_stdin(msg2, unique_room, unique_password)
-        listener.wait_for_message(timeout=5, containing=msg2)
-
-        # Both messages should be accumulated
-        accumulated = listener.get_accumulated_messages()
-        assert msg1 in accumulated, f"First message not found in: {accumulated}"
-        assert msg2 in accumulated, f"Second message not found in: {accumulated}"
-
-        # Verify order
-        assert accumulated.index(msg1) < accumulated.index(msg2), "Messages not in order"
+        _, _, stderr2 = run_cli_stdin(msg2, unique_room, unique_password)
+        key2 = parse_share_key(stderr2)
+        listener.set_key(key2)
+        second = listener.wait_for_message(timeout=5, containing=msg2)
+        assert second is not None, "Second message not received"
+        assert msg2 in second
 
         listener.disconnect()
 
@@ -475,6 +483,7 @@ class TestErrorHandling:
 
         assert returncode == 0, f"CLI failed with large input: {stderr}"
 
+        socket_listener.set_key(parse_share_key(stderr))
         # Verify marker was transmitted (use longer timeout for large data)
         received = socket_listener.wait_for_message(timeout=30, containing=marker)
         
@@ -549,6 +558,7 @@ class TestLargeMessages:
 
         assert returncode == 0
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=10, containing=marker)
         assert received is not None
         assert marker in received
@@ -573,6 +583,9 @@ class TestConcurrency:
 
         assert returncode == 0
 
+        key = parse_share_key(stderr)
+        listener1.set_key(key)
+        listener2.set_key(key)
         received1 = listener1.wait_for_message(timeout=5, containing=test_message)
         received2 = listener2.wait_for_message(timeout=5, containing=test_message)
 
@@ -604,6 +617,7 @@ class TestDefaultPassword:
 
         assert proc.returncode == 0, f"CLI failed: {stderr}"
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5, containing="test")
         assert received is not None, "Message not received"
 
@@ -629,10 +643,12 @@ class TestDefaultPassword:
             stderr=subprocess.PIPE,
             text=True,
         )
-        proc1.communicate(input=msg1, timeout=10)
+        _, stderr1 = proc1.communicate(input=msg1, timeout=10)
 
-        # Wait for message to arrive via Socket.IO
-        listener.wait_for_message(timeout=5, containing=msg1)
+        # Each CLI run uses a fresh random key, so decrypt one run at a time.
+        listener.set_key(parse_share_key(stderr1))
+        first = listener.wait_for_message(timeout=5, containing=msg1)
+        assert first is not None and msg1 in first, "First message not received"
 
         # Second write without -W (same machine = same MAC = same password)
         args2 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
@@ -647,13 +663,10 @@ class TestDefaultPassword:
 
         assert proc2.returncode == 0, f"Second write failed: {stderr}"
 
-        # Wait for second message to arrive
-        listener.wait_for_message(timeout=5, containing=msg2)
-
-        # Both messages should be received
-        accumulated = listener.get_accumulated_messages()
-        assert msg1 in accumulated, f"First message not found in: {accumulated}"
-        assert msg2 in accumulated, f"Second message not found in: {accumulated}"
+        # Wait for second message to arrive, decrypted with its own run's key.
+        listener.set_key(parse_share_key(stderr))
+        second = listener.wait_for_message(timeout=5, containing=msg2)
+        assert second is not None and msg2 in second, "Second message not received"
 
         listener.disconnect()
 
@@ -780,6 +793,7 @@ class TestEdgeCases:
 
         assert returncode == 0
 
+        socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5)
         assert received is not None
         # Carriage returns should be preserved in the output
@@ -791,26 +805,23 @@ class TestEdgeCases:
         listener = SocketListener(unique_room)
         listener.connect()
 
+        # Each rapid CLI run uses a fresh random key, so each marker is
+        # decrypted with its own run's key.
         markers = []
         for i in range(5):
             marker = f"MSG{i}-{random_id(4)}"
             markers.append(marker)
-            run_cli_stdin(marker, unique_room, unique_password)
+            _, _, stderr = run_cli_stdin(marker, unique_room, unique_password)
+            key = parse_share_key(stderr)
+            listener.set_key(key)
 
-        # Wait for all messages using the helper
-        def all_markers_received(accumulated):
-            return all(marker in accumulated for marker in markers)
+            def this_marker_received(accumulated, marker=marker):
+                return marker in accumulated
 
-        assert wait_for_content(listener, all_markers_received, timeout=10), \
-            f"Not all markers received in accumulated messages"
-
-        accumulated = listener.get_accumulated_messages()
+            assert wait_for_content(listener, this_marker_received, timeout=10), \
+                f"Missing message: {marker}"
 
         listener.disconnect()
-
-        # All markers should be present
-        for marker in markers:
-            assert marker in accumulated, f"Missing message: {marker}"
 
 
 if __name__ == "__main__":

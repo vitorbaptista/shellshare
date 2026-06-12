@@ -30,6 +30,7 @@
       </h1>
     </header>
     <main class="main">
+      <div id="crypto-notice" class="crypto-notice" role="alert" hidden></div>
       <div id="terminal">
         <button id="fullscreen-toggle" type="button" title="Fullscreen (f)" aria-label="Toggle fullscreen">
           <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -63,6 +64,13 @@
       // the polling-then-upgrade dance avoids its races entirely
       var socket = io({transports: ['websocket']});
       var room = window.location.pathname;
+      // Every broadcast is end-to-end encrypted: the key rides in the
+      // URL fragment, which browsers never send to the server. Each
+      // message is a sequence of whole records -
+      // [u32 BE: N][12-byte nonce][ciphertext+16-byte tag], AES-256-GCM
+      // - that only this page can open; the server relays opaque
+      // bytes. Must stay in lockstep with src/cli/crypto.rs.
+      var keyHex = window.location.hash.replace(/^#/, '');
       var term = null;
       var currentSize = {cols: 80, rows: 30};
       // Output that arrives before the terminal exists (creation waits
@@ -77,6 +85,146 @@
       var terminalContainer = document.getElementById('terminal');
       var fullscreenToggle = document.getElementById('fullscreen-toggle');
       var favicon = document.getElementById('favicon');
+      var cryptoNotice = document.getElementById('crypto-notice');
+
+      function showCryptoNotice(text) {
+        cryptoNotice.textContent = text;
+        cryptoNotice.hidden = false;
+      }
+
+      function hexToBytes(hexString) {
+        if (hexString.length % 2 || !/^[0-9a-fA-F]*$/.test(hexString)) {
+          return null;
+        }
+        var out = new Uint8Array(hexString.length / 2);
+        for (var i = 0; i < out.length; i++) {
+          out[i] = parseInt(hexString.substr(i * 2, 2), 16);
+        }
+        return out;
+      }
+
+      // Resolves to the AES-GCM key, or stays null when the fragment
+      // is absent or unusable (the notice explains why; ciphertext is
+      // then dropped rather than rendered as garbage)
+      var cryptoKeyPromise = null;
+      if (!keyHex) {
+        showCryptoNotice('This broadcast is end-to-end encrypted; ' +
+          "this link is missing its decryption key (the part after " +
+          "'#'). Ask the broadcaster for the full share link.");
+      } else if (!(window.crypto && window.crypto.subtle)) {
+        // WebCrypto only exists in secure contexts
+        showCryptoNotice('This broadcast is end-to-end encrypted, ' +
+          'which needs a secure connection. Open this link over ' +
+          'https:// or from localhost.');
+      } else {
+        var keyBytes = hexToBytes(keyHex);
+        if (!keyBytes || keyBytes.length !== 32) {
+          showCryptoNotice('The decryption key in this link (after ' +
+            "'#') is invalid. Ask the broadcaster for the full " +
+            'share link.');
+        } else {
+          cryptoKeyPromise = window.crypto.subtle.importKey(
+            'raw', keyBytes, {name: 'AES-GCM'}, false, ['decrypt']);
+        }
+      }
+
+      // Each message is a run of whole records (the server stores and
+      // concatenates whole frames). Resolves to {chunks, decryptable}:
+      // every record this key opens, in order, plus whether any did.
+      //
+      // A record that fails to decrypt is SKIPPED, not fatal - history
+      // can mix keys when a room is re-broadcast (old-key records sit
+      // in front of the new-key ones), and the records this key opens
+      // may be a suffix, not a prefix. Only a structurally broken
+      // length frame (not our wire format at all - e.g. a plaintext
+      // room opened with a key) rejects, since we can't resync past it.
+      function decryptRecords(key, bytes) {
+        var chunks = [];
+        var decryptable = false;
+        var offset = 0;
+        function step() {
+          if (offset >= bytes.length) {
+            return Promise.resolve(
+              {chunks: chunks, decryptable: decryptable});
+          }
+          if (bytes.length - offset < 4) {
+            return Promise.reject(new Error('malformed framing'));
+          }
+          var view = new DataView(
+            bytes.buffer, bytes.byteOffset + offset, 4);
+          var recordLen = view.getUint32(0);
+          // Minimum: 12-byte nonce + 16-byte tag
+          if (recordLen < 28 || bytes.length - offset - 4 < recordLen) {
+            return Promise.reject(new Error('malformed framing'));
+          }
+          var body = offset + 4;
+          var iv = bytes.subarray(body, body + 12);
+          var ciphertext = bytes.subarray(body + 12, body + recordLen);
+          offset = body + recordLen;
+          return window.crypto.subtle.decrypt(
+            {name: 'AES-GCM', iv: iv}, key, ciphertext
+          ).then(function (plain) {
+            decryptable = true;
+            chunks.push(new Uint8Array(plain));
+            return step();
+          }, function () {
+            // Wrong key for this record; the framing is intact, so
+            // advance and keep trying the rest
+            return step();
+          });
+        }
+        return step();
+      }
+
+      function showWrongKeyNotice() {
+        showCryptoNotice("Couldn't decrypt this broadcast - the key " +
+          'in this link does not match it. Ask the broadcaster for ' +
+          'the current share link.');
+      }
+
+      // Decryption is asynchronous, so writes go through one promise
+      // chain to stay in receive order. The epoch discards in-flight
+      // decryptions across a rejoin: the server replays history then,
+      // and pre-disconnect output resolving late would garble it.
+      var decryptEpoch = 0;
+      var decryptChain = Promise.resolve();
+      function enqueueEncrypted(bytes) {
+        var epoch = decryptEpoch;
+        decryptChain = decryptChain.then(function () {
+          return cryptoKeyPromise.then(function (key) {
+            return decryptRecords(key, bytes);
+          }).then(function (result) {
+            if (epoch !== decryptEpoch) {
+              return;
+            }
+            for (var i = 0; i < result.chunks.length; i++) {
+              writeBytes(result.chunks[i]);
+            }
+            // Records that opened prove the key is right (some history
+            // records may predate a re-broadcast and stay sealed under
+            // the old key - that's expected, not an error). Flag the
+            // stream only when nothing in this message decrypted.
+            if (result.chunks.length > 0) {
+              cryptoNotice.hidden = true;
+            } else if (bytes.length > 0) {
+              showWrongKeyNotice();
+            }
+          }, function () {
+            // Not our record framing at all (wrong/plaintext stream)
+            if (epoch === decryptEpoch) {
+              showWrongKeyNotice();
+            }
+          });
+        });
+      }
+
+      function writeBytes(bytes) {
+        if (term) {
+          term.write(bytes);
+        } else {
+          pendingWrites.push(bytes);
+        }
+      }
 
       // While the room is live the favicon's underscore cursor blinks:
       // alternate between the regular icon and one with the cursor
@@ -229,6 +377,14 @@
           // chunks parse; queued RIS is ordered after them and also
           // resets the VT parser and UTF-8 decoder state they may
           // have left mid-sequence.
+          //
+          // Encrypted rooms additionally discard in-flight
+          // decryptions: their plaintext would otherwise resolve
+          // after this reset, replaying pre-disconnect output on top
+          // of the fresh history (which re-delivers it anyway). A
+          // fresh chain also keeps it from deepening across rejoins.
+          decryptEpoch++;
+          decryptChain = Promise.resolve();
           pendingWrites = [];
           if (term) {
             term.write('\x1bc');
@@ -273,17 +429,12 @@
         broadcastStatusText.textContent = 'broadcaster ' + state;
       }
       socket.on('message', function (message) {
-        if (!message) {
+        if (!message || !cryptoKeyPromise) {
+          // No usable key: the notice already explains why; dropping
+          // the ciphertext beats rendering it as garbage
           return;
         }
-        // Raw terminal bytes: xterm.js does its own streaming UTF-8
-        // decode, so sequences may split across messages
-        var bytes = new Uint8Array(message);
-        if (term) {
-          term.write(bytes);
-        } else {
-          pendingWrites.push(bytes);
-        }
+        enqueueEncrypted(new Uint8Array(message));
       });
       socket.on('size', onSize);
 

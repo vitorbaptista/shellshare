@@ -12,6 +12,7 @@
 //! giving at-least-once delivery. The only fatal error is authorization:
 //! the room now belongs to another password.
 
+use crate::cli::crypto::Encryptor;
 use crate::protocol::TermSize;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -88,6 +89,11 @@ pub struct Transport {
     /// server stores and forwards the size verbatim, so late joiners
     /// get the theme with no server-side knowledge of it)
     theme: Option<String>,
+    /// End-to-end encryption. Chunks are sealed as they enter the
+    /// replay buffer, so acks, the buffer cap, and reconnect replay all
+    /// operate on ciphertext - a replayed record is byte-identical,
+    /// never re-encrypted (no nonce reuse)
+    cipher: Encryptor,
     backoff: Duration,
     /// Do not attempt to reconnect before this instant
     next_attempt: Option<Instant>,
@@ -105,6 +111,7 @@ impl Transport {
         password: &str,
         size: TermSize,
         theme: Option<String>,
+        cipher: Encryptor,
     ) -> Result<Self, TransportError> {
         let ws_base = if let Some(rest) = server_url.strip_prefix("https://") {
             format!("wss://{rest}")
@@ -128,6 +135,7 @@ impl Transport {
             size,
             sent_size: None,
             theme,
+            cipher,
             backoff: INITIAL_BACKOFF,
             next_attempt: None,
             last_ping: Instant::now(),
@@ -139,10 +147,14 @@ impl Transport {
     /// Buffer terminal output and deliver everything pending. Network
     /// failures keep data buffered and schedule a reconnect; only
     /// authorization failures surface.
-    pub fn send(&mut self, data: Vec<u8>, size: TermSize) -> Result<(), TransportError> {
+    pub fn send(&mut self, data: &[u8], size: TermSize) -> Result<(), TransportError> {
         if !data.is_empty() {
+            // Sealed here, before buffering: everything downstream
+            // (acks, the cap, replay) counts ciphertext bytes, exactly
+            // what the server sees and acknowledges
+            let data: Bytes = self.cipher.seal(data).into();
             self.buffered_bytes += data.len();
-            self.pending.push_back(data.into());
+            self.pending.push_back(data);
             // Drop the oldest buffered output (acked data is already
             // gone; the oldest is the front of `unacked`, then `pending`)
             while self.buffered_bytes > MAX_BUFFERED_BYTES {

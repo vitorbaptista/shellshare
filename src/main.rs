@@ -302,16 +302,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "WARNING: --server is ignored by 'serve'; broadcasting to the local server"
                 );
             }
-            serve(
-                &host,
-                port,
-                tunnel,
-                cli.room,
-                cli.password,
-                cli.stdin,
-                cli.json,
-                cli.theme,
-            );
+            let share = ShareArgs {
+                room: cli.room,
+                password: cli.password,
+                stdin: cli.stdin,
+                json: cli.json,
+                theme: cli.theme,
+            };
+            serve(&host, port, tunnel, share);
         }
         Some(Commands::Exec { command }) => {
             // The stdin branch would win and silently drop the command
@@ -350,19 +348,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// `shellshare serve`: boot the embedded server, optionally tunnel it,
-/// and broadcast this terminal to it.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)] // Mirrors the CLI surface
-fn serve(
-    host: &str,
-    port: u16,
-    tunnel: bool,
+/// Client-side options `serve` forwards to the broadcaster untouched;
+/// only the server URLs are `serve`'s to compute.
+struct ShareArgs {
     room: Option<String>,
     password: Option<String>,
     stdin: bool,
     json: bool,
     theme: Option<String>,
-) {
+}
+
+/// `shellshare serve`: boot the embedded server, optionally tunnel it,
+/// and broadcast this terminal to it.
+fn serve(host: &str, port: u16, tunnel: bool, share: ShareArgs) {
     let addr = match start_local_server(host, port) {
         Ok(addr) => addr,
         Err(e) => {
@@ -432,12 +430,12 @@ fn serve(
     let args = cli::ClientArgs {
         server: format!("http://{url_host}:{}", addr.port()),
         display_server: tunnel_handle.as_ref().map(|t| t.url.clone()),
-        room,
-        password,
-        stdin,
-        json,
+        room: share.room,
+        password: share.password,
+        stdin: share.stdin,
+        json: share.json,
         exec: None,
-        theme,
+        theme: share.theme,
     };
     let result = cli::run(args);
     // Close the tunnel before a possible exit: process::exit
