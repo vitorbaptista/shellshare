@@ -171,3 +171,62 @@ label[for] {
 .operating-systems input:not(:checked) + label:hover {
   color: #888;
 }
+
+/* Phones: fluid wrapper with breathing room, smaller hero title, and
+   install commands that wrap inside the pill instead of overflowing it */
+@media (max-width: 47em) {
+  .wrapper {
+    width: auto;
+    padding: 0 1em;
+  }
+
+  .title {
+    margin: 2em 0;
+  }
+
+  .title h1 {
+    /* 13vw keeps "shellshare" inside ~320px viewports */
+    font-size: clamp(2.25em, 13vw, 3em);
+  }
+
+  .title h2 {
+    font-size: 1em;
+  }
+
+  .instructions .download {
+    margin: 2em 0;
+  }
+
+  .download code {
+    padding: 1em 1.25em;
+    border-radius: 20px;
+  }
+
+  /* Long unbreakable code tokens (install commands in the pill, share
+     links and JSON events inline in the FAQ) wrap instead of widening
+     the page */
+  code {
+    overflow-wrap: anywhere;
+  }
+
+  .operating-systems {
+    text-align: center;
+    /* compensate the trailing letter-spacing after the last label,
+       which would otherwise shift the centered row left */
+    padding-left: 0.5em;
+  }
+
+  pre {
+    font-size: 0.8em;
+    /* On phones even instructional lines (e.g. the --password example)
+       fall past the clip; let them scroll instead. The scrollbar is
+       hidden so its height doesn't disturb the demo's min-height
+       measurement. */
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  pre::-webkit-scrollbar {
+    display: none;
+  }
+}

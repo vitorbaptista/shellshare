@@ -71,3 +71,15 @@ section {
   margin: 4em 0;
 }
 
+/* Phones: the desktop min-width would force horizontal panning of the
+   whole page; let the layout shrink to the viewport instead */
+@media (max-width: 47em) {
+  body {
+    min-width: 0;
+  }
+
+  section {
+    margin: 2.5em 0;
+  }
+}
+
