@@ -750,8 +750,17 @@ async fn ws_ingest_loop(
             break;
         }
         if ack {
+            // Bounded like the viewer writes: a broadcaster that stops
+            // reading would otherwise block this send forever, pinning
+            // the task past INGEST_IDLE_TIMEOUT and keeping the room
+            // "live" with a dead connection
             let frame = format!("{{\"ack\":{received_bytes}}}");
-            if socket.send(WsMessage::Text(frame.into())).await.is_err() {
+            let sent = tokio::time::timeout(
+                INGEST_IDLE_TIMEOUT,
+                socket.send(WsMessage::Text(frame.into())),
+            )
+            .await;
+            if !matches!(sent, Ok(Ok(()))) {
                 break;
             }
         }
