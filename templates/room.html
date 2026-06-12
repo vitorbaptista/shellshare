@@ -59,52 +59,6 @@
       // the polling-then-upgrade dance avoids its races entirely
       var socket = io({transports: ['websocket']});
       var room = window.location.pathname;
-
-      // TEMPORARY DIAGNOSTICS for issue #132: timestamped log of every
-      // socket lifecycle event and payload, readable by the e2e suite
-      // via window.__rxLog. Remove once the Windows flake is diagnosed.
-      var RXLOG = [];
-      window.__rxLog = RXLOG;
-      function rxlog(kind, info) {
-        RXLOG.push(Date.now() + ' ' + kind + ' ' + info);
-        if (RXLOG.length > 300) { RXLOG.shift(); }
-      }
-      function hexdump(buf) {
-        var bytes = new Uint8Array(buf);
-        var head = [];
-        for (var i = 0; i < Math.min(bytes.length, 48); i++) {
-          head.push(bytes[i].toString(16).padStart(2, '0'));
-        }
-        return 'len=' + bytes.length + ' ' + head.join('');
-      }
-      rxlog('page-load', location.href);
-      socket.io.on('error', function (e) { rxlog('mgr-error', String(e)); });
-      socket.io.on('reconnect_attempt', function (n) {
-        rxlog('reconnect-attempt', n);
-      });
-      socket.io.engine.on('close', function (reason) {
-        rxlog('engine-close', String(reason));
-      });
-      socket.on('connect_error', function (e) {
-        rxlog('connect-error', String(e && e.message || e));
-      });
-      socket.on('disconnect', function (reason) {
-        rxlog('socket-disconnect', String(reason));
-      });
-      socket.on('connect', function () {
-        rxlog('connect', socket.id + ' via ' +
-              socket.io.engine.transport.name);
-      });
-      socket.on('message', function (m) {
-        try { rxlog('message', hexdump(m)); }
-        catch (e) { rxlog('message-unhexable', String(e) + ' ' + typeof m); }
-      });
-      socket.on('size', function (s) {
-        rxlog('size', JSON.stringify(s));
-      });
-      socket.on('broadcasting', function (b) { rxlog('broadcasting', b); });
-      socket.on('usersCount', function (n) { rxlog('usersCount', n); });
-      // END TEMPORARY DIAGNOSTICS
       var term;
       var currentSize = {};
       // Messages are binary: raw terminal bytes, decoded as one
