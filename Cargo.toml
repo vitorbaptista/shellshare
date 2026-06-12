@@ -75,6 +75,8 @@ sha2 = "0.10.9"
 reqwest = { version = "=0.13.3", default-features = false, features = ["rustls-no-provider", "json"] }
 rustls = { version = "0.23.40", default-features = false, features = ["ring", "std"] }
 aes-gcm = "0.10.3"
+machine-uid = "0.6.0"
+hkdf = "0.12.4"
 
 [profile.release]
 lto = true

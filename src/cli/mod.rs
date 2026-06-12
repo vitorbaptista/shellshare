@@ -134,8 +134,9 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
     // Every broadcast is end-to-end encrypted. The key goes only into
     // the printed link's #fragment - browsers never send fragments, so
-    // the server cannot see it
-    let (cipher, key) = crypto::Encryptor::generate();
+    // the server cannot see it. Derived from this machine and the room
+    // name, so a named room keeps one reusable link across restarts
+    let (cipher, key) = crypto::Encryptor::for_room(&room);
     let share_url = format!("{share_base}/{room_path}#{key}");
     if !is_secure_context_url(&share_base) {
         eprintln!(

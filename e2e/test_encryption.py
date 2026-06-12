@@ -12,6 +12,7 @@ Assertions on what the server relays must use raw bytes
 own via the fragment.
 """
 
+import os
 import re
 import subprocess
 import time
@@ -23,6 +24,7 @@ from conftest import (
     CLI_COMMAND,
     SERVER_URL,
     SocketListener,
+    broadcast_message,
     open_records,
     parse_share_key,
     poll_until,
@@ -109,13 +111,26 @@ class TestShareLink:
             f"Fragment is not a 64-char hex key: {share_url}"
         )
 
-    def test_keys_are_unique_per_run(self, unique_password):
+    def test_keys_differ_across_rooms(self, unique_password):
         urls = [
             run_cli("x", f"key-{random_id()}", unique_password)[2]
             for _ in range(2)
         ]
         keys = [KEY_FRAGMENT_RE.search(u).group(1) for u in urls]
         assert keys[0] != keys[1]
+
+    def test_named_room_key_is_stable_across_runs(
+        self, unique_room, unique_password
+    ):
+        """The key is derived from this machine and the room name, so
+        re-broadcasting to the same named room reproduces the same key -
+        a link shared once keeps working after the broadcaster restarts.
+        """
+        _, _, url1 = run_cli("first\n", unique_room, unique_password)
+        _, _, url2 = run_cli("second\n", unique_room, unique_password)
+        key1, key2 = parse_share_key(url1), parse_share_key(url2)
+        assert key1 is not None
+        assert key1 == key2, "named-room key must be stable across runs"
 
 
 class TestServerSeesOnlyCiphertext:
@@ -281,54 +296,40 @@ class TestViewerDecryption:
 
 
 class TestEdgeCases:
-    def test_mixed_key_history_renders_new_key_records(self, unique_password):
-        """A room re-broadcast with a new key leaves the old-key records
-        ahead of the new ones in history. A late joiner with the new key
-        must still see the new output (the decryptable records are a
-        suffix, not a prefix) and get no false 'wrong key' notice."""
-        room = f"enc-mixed-{random_id()}"
-        old_marker = f"OLDKEY-{random_id(6)}"
-        new_marker = f"NEWKEY-{random_id(6)}"
+    def test_viewer_skips_records_it_cannot_decrypt(
+        self, unique_room, unique_password
+    ):
+        """History can mix keys - e.g. a different machine (different
+        derived key) re-broadcast to the same room name, leaving its
+        records in history. A record the viewer's key can't open is
+        skipped, not fatal: the records it CAN open still render, with
+        no false 'wrong key' notice. Injected over raw WebSockets with
+        two distinct keys, since one machine+room now yields one key."""
+        key_a = os.urandom(32).hex()
+        key_b = os.urandom(32).hex()
+        old_marker = f"OTHERKEY-{random_id(6)}"
+        new_marker = f"MYKEY-{random_id(6)}"
 
-        # First broadcaster: store an old-key record, then die WITHOUT a
-        # clean shutdown (kill = no delete), so the room and its history
-        # survive for the second broadcaster to append to.
-        proc1, _ = start_broadcaster(room, unique_password, f"{old_marker}\n")
-        watcher = SocketListener(room)
-        watcher.connect()
-        assert poll_until(
-            lambda: len(watcher.get_raw_bytes()) > 0, timeout=10
-        ), "Old-key record was never stored"
-        watcher.disconnect()
-        proc1.kill()
-        proc1.wait(timeout=10)
-
-        # Second broadcaster: same room and password, fresh key.
-        proc2, share_url2 = start_broadcaster(
-            room, unique_password, f"{new_marker}\n"
+        # Two records in one room's history, sealed under different keys
+        broadcast_message(
+            SERVER_URL, unique_room, unique_password,
+            text=f"{old_marker}\n", key=key_a,
         )
-        try:
-            watcher2 = SocketListener(room)
-            watcher2.connect()
-            old_len = len(watcher.get_raw_bytes())
-            assert poll_until(
-                lambda: len(watcher2.get_raw_bytes()) > old_len, timeout=10
-            ), "New-key record was never appended"
-            watcher2.disconnect()
+        broadcast_message(
+            SERVER_URL, unique_room, unique_password,
+            text=f"{new_marker}\n", key=key_b,
+        )
 
-            with sync_playwright() as p:
-                browser = p.chromium.launch()
-                page = browser.new_page()
-                page.goto(share_url2)
-                # The new-key suffix decrypts and renders...
-                wait_for_terminal_text(page, new_marker)
-                # ...with no false notice, and the old-key plaintext
-                # (sealed under a key this viewer lacks) never appears
-                assert page.is_hidden("#crypto-notice")
-                assert old_marker not in terminal_text(page)
-                browser.close()
-        finally:
-            finish_broadcaster(proc2)
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"{SERVER_URL}/r/{unique_room}#{key_b}")
+            # The key_b record decrypts and renders...
+            wait_for_terminal_text(page, new_marker)
+            # ...with no notice, and the key_a record never appears
+            assert page.is_hidden("#crypto-notice")
+            assert old_marker not in terminal_text(page)
+            browser.close()
 
     def test_encrypted_viewer_survives_reconnect(self, unique_password):
         """After a viewer's socket drops and rejoins, the server replays
