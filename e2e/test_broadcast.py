@@ -71,9 +71,9 @@ def test_happy_path_broadcast_appears_in_browser():
         page.wait_for_selector("#terminal", timeout=10000)
         print("Terminal element found")
 
-        # Wait for Socket.IO to connect (user count becomes 1)
+        # Wait for the viewer WebSocket to connect (user count becomes 1)
         page.wait_for_function("document.getElementById('online-counter').textContent !== '0'", timeout=10000)
-        print("Socket.IO connected (user count updated)")
+        print("Viewer connected (user count updated)")
 
         # Broadcast (sealed with the room's key)
         print(f"Broadcasting: {test_message}")
@@ -148,7 +148,7 @@ def test_user_counter_shows_in_browser():
         page2.close()
 
         # Wait for counter to show 1 again
-        # Windows needs longer timeout as Socket.IO disconnect detection is slower
+        # Windows needs longer timeout as disconnect detection is slower
         disconnect_timeout = 60000 if sys.platform == "win32" else 10000
         page1.wait_for_function(
             "document.getElementById('online-counter').textContent === '1'",
@@ -244,7 +244,7 @@ def test_multiple_broadcasts_no_duplication():
             "document.getElementById('online-counter').textContent !== '0'",
             timeout=10000
         )
-        print("Terminal ready and Socket.IO connected")
+        print("Terminal ready and viewer connected")
 
         # First broadcast (sealed with the room's key)
         print(f"Broadcasting first message: {marker_a}")
@@ -337,7 +337,7 @@ def test_late_joiner_sees_history_in_browser():
 def test_unicode_renders_in_browser():
     """
     Unicode from the real CLI must survive the whole encoding pipeline
-    (Rust encode -> server -> Socket.IO -> xterm.js decode + render).
+    (Rust encode -> server -> viewer WebSocket -> xterm.js decode + render).
     """
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"

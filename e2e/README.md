@@ -7,7 +7,7 @@ interacting only through public interfaces to ensure 100% API compatibility.
 
 This test suite is designed to:
 1. **Validate API compatibility** - Ensure any rewrite (e.g., Go) behaves identically
-2. **Test all endpoints** - Cover every HTTP endpoint and Socket.IO event
+2. **Test all endpoints** - Cover every HTTP endpoint and viewer WebSocket event
 3. **Verify edge cases** - Test authorization, error handling, and special cases
 
 ## Test Files
@@ -15,7 +15,7 @@ This test suite is designed to:
 | File | Description |
 |------|-------------|
 | `test_api.py` | HTTP endpoint tests (GET, POST, DELETE) |
-| `test_socketio.py` | Real-time WebSocket tests |
+| `test_viewer_ws.py` | Viewer WebSocket protocol tests |
 | `test_broadcast.py` | End-to-end CLI to browser test |
 
 ## What's Tested
@@ -57,11 +57,11 @@ This test suite is designed to:
   - Special characters (unicode, emoji, escapes)
   - 404 for nonexistent files
 
-### Socket.IO (`test_socketio.py`)
+### Viewer WebSocket (`test_viewer_ws.py`)
 
 - **Connection**
-  - Can establish Socket.IO connection
-  - Can join rooms
+  - Connecting to `/ws/v/r/:room` delivers the room snapshot
+    (size, history, broadcasting, usersCount - in that order)
 
 - **Real-time Messages**
   - Receive messages broadcast after joining
@@ -109,14 +109,39 @@ This test suite is designed to:
    uv run pytest
    ```
 
+## Benchmarks
+
+Not pytest tests - run them directly. `benchmark.py` measures the
+single-viewer pipeline; `benchmark_fanout.py` measures fan-out to many
+viewers (paced latency, burst loss/throughput, `--capacity` ramps until
+the server fails criteria, `--rooms R` runs R concurrent broadcasters).
+
+```bash
+# Build the server and the Rust viewer swarm (used automatically when present)
+cargo build --release
+(cd loadgen && cargo build --release)
+
+uv run python benchmark_fanout.py                       # default sweep
+uv run python benchmark_fanout.py --capacity            # max sustainable viewers
+uv run python benchmark_fanout.py --rooms 16 --viewers 4000
+```
+
+Without the loadgen binary a pure-Python fallback runs, but its numbers
+are harness-bound well below the server's limits - build loadgen for
+anything you intend to compare. `FANOUT_LOADGEN=` (empty) forces the
+fallback; `LOADGEN_THREADS` caps the harness runtime so it doesn't
+starve the server it measures. Results land in gitignored
+`fanout-*`/`capacity-*`/`multiroom-*.json` files; `--out`/`--compare`
+support before/after workflows.
+
 ## Running Specific Tests
 
 ```bash
 # Run only API tests
 uv run pytest test_api.py
 
-# Run only Socket.IO tests
-uv run pytest test_socketio.py
+# Run only viewer WebSocket tests
+uv run pytest test_viewer_ws.py
 
 # Run only browser tests
 uv run pytest test_broadcast.py
@@ -137,7 +162,7 @@ Both environments run the full test suite to ensure cross-platform compatibility
 
 If all tests pass on a new implementation:
 - All HTTP endpoints behave identically
-- Socket.IO events work the same way
+- Viewer WebSocket events work the same way
 - Authorization logic is preserved
 - Message storage and retrieval is compatible
 - The CLI will work without modification

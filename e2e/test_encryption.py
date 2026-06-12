@@ -353,7 +353,7 @@ class TestEdgeCases:
                 page.goto(share_url)
                 wait_for_terminal_text(page, marker)
 
-                # Force a socket.io disconnect + reconnect
+                # Force a viewer WebSocket disconnect + reconnect
                 context.set_offline(True)
                 time.sleep(1)
                 context.set_offline(False)

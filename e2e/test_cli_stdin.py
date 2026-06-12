@@ -54,7 +54,7 @@ class TestBasicFunctionality:
     """Tests for basic CLI functionality."""
 
     def test_basic_message_received(self, unique_room, unique_password, socket_listener):
-        """Send 'hello', verify message arrives via Socket.IO."""
+        """Send 'hello', verify message arrives on the viewer WebSocket."""
         test_message = "hello"
 
         returncode, stdout, stderr = run_cli_stdin(
@@ -65,7 +65,7 @@ class TestBasicFunctionality:
 
         socket_listener.set_key(parse_share_key(stderr))
         received = socket_listener.wait_for_message(timeout=5, containing=test_message)
-        assert received is not None, "Message not received via Socket.IO"
+        assert received is not None, "Message not received by the viewer"
         assert test_message in received
 
     def test_prints_room_url_to_stderr(self, unique_room, unique_password):
@@ -568,7 +568,7 @@ class TestConcurrency:
     """Tests for concurrent CLI usage."""
 
     def test_two_viewers_receive_message(self, unique_room, unique_password):
-        """Two Socket.IO viewers should both receive the same message."""
+        """Two viewers should both receive the same message."""
         listener1 = SocketListener(unique_room)
         listener2 = SocketListener(unique_room)
 
@@ -702,7 +702,7 @@ class TestEdgeCases:
         """
         Room name with unicode characters should work.
 
-        Note: The server supports unicode room names (verified by Socket.IO tests),
+        Note: The server supports unicode room names (verified by viewer tests),
         but the CLI has encoding issues with non-ASCII room names.
         This is a known CLI limitation.
         """

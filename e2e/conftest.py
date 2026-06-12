@@ -3,7 +3,7 @@ Shared fixtures and constants for CLI E2E tests.
 
 This module provides:
 - CLI path constants for testing the shellshare CLI
-- Socket.IO listener class for verifying messages via WebSocket
+- Viewer WebSocket listener class for verifying broadcast data
 - Pytest fixtures for unique rooms, passwords, and socket listeners
 """
 
@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-import socketio
 import websocket
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -175,7 +174,7 @@ class ServerHandle:
     def url(self):
         # 127.0.0.1, not localhost: the server binds IPv4 only, and on
         # Windows localhost can resolve to ::1 first, making fresh
-        # Socket.IO connections slow or flaky
+        # WebSocket connections slow or flaky
         return f"http://127.0.0.1:{self.port}"
 
 
@@ -341,8 +340,8 @@ def broadcast_message(server_url, room, password, text=None, size=_UNSET, key=No
 
 
 def decode_message(data):
-    """Decode a received message: raw terminal bytes, sent as a Socket.IO
-    binary attachment."""
+    """Decode a received message: raw terminal bytes from a binary
+    WebSocket frame."""
     return bytes(data).decode("utf-8", errors="replace")
 
 
@@ -447,7 +446,8 @@ class SocketListener:
     server_url: str = SERVER_URL
 
     # Internal state - all protected by _condition
-    _sio: socketio.Client = field(default=None, init=False, repr=False)
+    _ws: object = field(default=None, init=False, repr=False)
+    _reader: threading.Thread = field(default=None, init=False, repr=False)
     _messages: list = field(default_factory=list, init=False, repr=False)
     _sizes: list = field(default_factory=list, init=False, repr=False)
     _user_counts: list = field(default_factory=list, init=False, repr=False)
@@ -464,75 +464,80 @@ class SocketListener:
             self._key = bytes.fromhex(key_hex) if key_hex else None
 
     def connect(self, wait_for_join=True):
-        """Connect to the server and join the room."""
+        """Connect to the room's viewer WebSocket.
+
+        The room is the URL - there is no join handshake to confirm.
+        The server pushes the room snapshot on connect and always ends
+        it with usersCount, so `wait_for_join` waits for that as proof
+        the snapshot was delivered."""
         wait_for_server(self.server_url)
 
-        self._sio = socketio.Client()
-
-        @self._sio.on('message')
-        def on_message(data):
-            with self._condition:
-                self._messages.append(data)
-                self._condition.notify_all()
-
-        @self._sio.on('size')
-        def on_size(data):
-            with self._condition:
-                self._sizes.append(data)
-                self._condition.notify_all()
-
-        @self._sio.on('usersCount')
-        def on_users_count(count):
-            with self._condition:
-                self._user_counts.append(count)
-                self._condition.notify_all()
-
-        @self._sio.on('broadcasting')
-        def on_broadcasting(live):
-            with self._condition:
-                self._broadcasting.append(live)
-                self._condition.notify_all()
-
-        # WebSocket only, like the viewer page: the server rejects HTTP
-        # long-polling (its engine.io polling path corrupts binary frames)
-        self._sio.connect(self.server_url, transports=["websocket"])
+        ws_base = self.server_url.replace("http://", "ws://")
+        self._ws = websocket.create_connection(
+            f"{ws_base}/ws/v/r/{self.room_id}", timeout=30
+        )
         self._connected = True
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
 
         if not wait_for_join:
-            self._sio.emit('join', f'/r/{self.room_id}')
             return
 
-        # Joining must be confirmed, not fire-and-forget: a bare emit has
-        # no delivery guarantee, and a join lost in transit means the test
-        # silently misses every event afterwards. The server confirms each
-        # join with usersCount, and re-joining is idempotent, so emit and
-        # re-emit until confirmed.
-        attempts = 3
-        per_attempt = 5
-        for _ in range(attempts):
-            self._sio.emit('join', f'/r/{self.room_id}')
-            with self._condition:
-                deadline = time.time() + per_attempt
-                while not self._user_counts:
-                    remaining = deadline - time.time()
-                    if remaining <= 0:
-                        break
-                    self._condition.wait(timeout=remaining)
-                if self._user_counts:
-                    return
-        # Don't leak the connected client: this raise typically happens in
+        with self._condition:
+            deadline = time.time() + 10
+            while not self._user_counts:
+                remaining = deadline - time.time()
+                if remaining <= 0 or not self._connected:
+                    break
+                self._condition.wait(timeout=remaining)
+            if self._user_counts:
+                return
+        # Don't leak the connection: this raise typically happens in
         # fixture setup, where teardown (and its disconnect) never runs
         self.disconnect()
         raise TimeoutError(
-            f"Socket.IO join to room {self.room_id!r} on {self.server_url} "
-            f"not confirmed after {attempts} attempts"
+            f"viewer connect to room {self.room_id!r} on {self.server_url} "
+            f"got no usersCount snapshot"
         )
+
+    def _read_loop(self):
+        """Capture frames: binary is terminal bytes, JSON text frames
+        carry size/usersCount/broadcasting control events."""
+        ws = self._ws
+        while True:
+            try:
+                frame = ws.recv()
+            except (websocket.WebSocketException, OSError, ValueError):
+                break
+            with self._condition:
+                if isinstance(frame, bytes):
+                    self._messages.append(frame)
+                else:
+                    try:
+                        control = json.loads(frame)
+                    except ValueError:
+                        continue
+                    if "size" in control:
+                        self._sizes.append(control["size"])
+                    if "usersCount" in control:
+                        self._user_counts.append(control["usersCount"])
+                    if "broadcasting" in control:
+                        self._broadcasting.append(control["broadcasting"])
+                self._condition.notify_all()
+        with self._condition:
+            self._connected = False
+            self._condition.notify_all()
 
     def disconnect(self):
         """Disconnect from the server."""
-        if self._sio and self._connected:
-            self._sio.disconnect()
+        if self._ws and self._connected:
             self._connected = False
+            try:
+                self._ws.close()
+            except (websocket.WebSocketException, OSError):
+                pass
+        if self._reader and self._reader.is_alive():
+            self._reader.join(timeout=5)
 
     def wait_for_message(self, timeout=5, containing=None):
         """

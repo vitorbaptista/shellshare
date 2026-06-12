@@ -8,17 +8,19 @@
 //!   kept per room for late joiners.
 //! - **Canonical names**: a [`RoomId`] is normalized at construction, so
 //!   no caller can accidentally address a phantom room.
-//! - **Atomicity**: password, history, size, and activity live in one map
-//!   behind one lock, so authorization and mutation cannot race - claims,
-//!   appends, deletions, and eviction are each a single critical section.
+//! - **Atomicity**: password, history, size, and activity live in one
+//!   entry behind one per-room lock (a sharded [`DashMap`]), so
+//!   authorization and mutation cannot race - claims, appends, and
+//!   deletions are each a single critical section on their room. Locking
+//!   per room instead of per map keeps concurrent broadcasters from
+//!   serializing each other's ingest on a shared lock.
 
 use crate::protocol::MessageHistory;
 use bytes::Bytes;
+use dashmap::DashMap;
 use percent_encoding::percent_decode_str;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 
 /// Maximum number of messages to store per room for late joiners.
 /// This prevents unbounded memory growth while keeping enough history
@@ -29,7 +31,7 @@ const MAX_HISTORY_MESSAGES: usize = 100;
 ///
 /// Construction is the only place normalization happens: the `/r/` route
 /// prefix is stripped and percent-encoding is decoded (Axum auto-decodes
-/// HTTP paths, but Socket.IO sends raw strings).
+/// HTTP paths, but other callers may pass raw strings).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RoomId(String);
 
@@ -117,7 +119,7 @@ impl Room {
 /// All live rooms. Cheap to clone; clones share state.
 #[derive(Clone, Default)]
 pub struct Rooms {
-    inner: Arc<RwLock<HashMap<RoomId, Room>>>,
+    inner: Arc<DashMap<RoomId, Room>>,
 }
 
 impl Rooms {
@@ -132,17 +134,18 @@ impl Rooms {
     ///
     /// Reports whether this call [`Appended::Claimed`] the room, so the
     /// caller can observe room creation without a separate lookup.
-    #[allow(clippy::significant_drop_tightening)] // the lock spanning verify+mutate IS the invariant
-    pub async fn append(
+    #[allow(clippy::significant_drop_tightening)] // the guard spanning verify+mutate IS the invariant
+    pub fn append(
         &self,
         room: &RoomId,
         secret: &str,
         size: Option<&serde_json::Value>,
         message: Option<&Bytes>,
     ) -> Result<Appended, Unauthorized> {
-        let mut rooms = self.inner.write().await;
         let mut appended = Appended::Verified;
-        let entry = rooms.entry(room.clone()).or_insert_with(|| {
+        // The entry guard is the room's lock: verify + mutate is one
+        // critical section on this room and no others
+        let mut entry = self.inner.entry(room.clone()).or_insert_with(|| {
             appended = Appended::Claimed;
             Room::new(secret)
         });
@@ -166,10 +169,8 @@ impl Rooms {
 
     /// Catch-up data for a joining viewer; refreshes the room's activity.
     /// Returns `None` (and creates nothing) when the room does not exist.
-    #[allow(clippy::significant_drop_tightening)] // touch + read must be one atomic step
-    pub async fn snapshot(&self, room: &RoomId) -> Option<RoomSnapshot> {
-        let mut rooms = self.inner.write().await;
-        let entry = rooms.get_mut(room)?;
+    pub fn snapshot(&self, room: &RoomId) -> Option<RoomSnapshot> {
+        let mut entry = self.inner.get_mut(room)?;
         entry.last_activity = Instant::now();
         Some(RoomSnapshot {
             size: entry.size.clone(),
@@ -183,9 +184,8 @@ impl Rooms {
     /// between the handshake and the upgrade, or was re-claimed by
     /// another password in that window - this connection must not touch
     /// the new owner's bookkeeping).
-    pub async fn broadcaster_connected(&self, room: &RoomId, secret: &str) -> usize {
-        let mut rooms = self.inner.write().await;
-        rooms.get_mut(room).map_or(0, |entry| {
+    pub fn broadcaster_connected(&self, room: &RoomId, secret: &str) -> usize {
+        self.inner.get_mut(room).map_or(0, |mut entry| {
             if entry.password != secret {
                 return 0;
             }
@@ -206,13 +206,12 @@ impl Rooms {
     /// A stale loop whose room was meanwhile re-claimed by another
     /// password must not decrement the new owner's count or consume its
     /// segment; the mismatch leaves the room untouched.
-    pub async fn broadcaster_disconnected(
+    pub fn broadcaster_disconnected(
         &self,
         room: &RoomId,
         secret: &str,
     ) -> (usize, Option<Duration>) {
-        let mut rooms = self.inner.write().await;
-        rooms.get_mut(room).map_or((0, None), |entry| {
+        self.inner.get_mut(room).map_or((0, None), |mut entry| {
             if entry.password != secret {
                 return (entry.broadcasters, None);
             }
@@ -232,27 +231,37 @@ impl Rooms {
     /// "this room is gone" - already holds). Deletion cutting short a
     /// live segment reports the segment's duration, since nobody can ask
     /// the room afterwards; `Ok(None)` means no broadcast was live.
-    #[allow(clippy::significant_drop_tightening)] // verify + remove must be one atomic step
-    pub async fn delete(&self, room: &RoomId, secret: &str) -> Result<Option<Duration>, Unauthorized> {
-        let mut rooms = self.inner.write().await;
-        match rooms.get(room) {
-            Some(entry) if entry.password != secret => Err(Unauthorized),
-            Some(entry) => {
-                let duration = entry.live_since.map(|since| since.elapsed());
-                rooms.remove(room);
+    pub fn delete(&self, room: &RoomId, secret: &str) -> Result<Option<Duration>, Unauthorized> {
+        // Entry, not get+remove: verify + remove must be one atomic
+        // step on the room's lock
+        match self.inner.entry(room.clone()) {
+            dashmap::Entry::Occupied(entry) if entry.get().password != secret => {
+                Err(Unauthorized)
+            }
+            dashmap::Entry::Occupied(entry) => {
+                let duration = entry.get().live_since.map(|since| since.elapsed());
+                entry.remove();
                 Ok(duration)
             }
-            None => Ok(None),
+            dashmap::Entry::Vacant(_) => Ok(None),
         }
     }
 
     /// Remove rooms that have been inactive for longer than `ttl`.
     /// Returns how many rooms were evicted.
-    pub async fn evict_stale(&self, ttl: Duration) -> usize {
+    pub fn evict_stale(&self, ttl: Duration) -> usize {
         let now = Instant::now();
-        let mut rooms = self.inner.write().await;
-        let before = rooms.len();
-        rooms.retain(|_, room| now.duration_since(room.last_activity) <= ttl);
-        before - rooms.len()
+        // Count inside the closure: a before/after len() difference is
+        // not atomic across shards, so a room claimed mid-retain would
+        // make it underflow
+        let mut evicted = 0;
+        self.inner.retain(|_, room| {
+            let keep = now.duration_since(room.last_activity) <= ttl;
+            if !keep {
+                evicted += 1;
+            }
+            keep
+        });
+        evicted
     }
 }

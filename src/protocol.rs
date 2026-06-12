@@ -2,8 +2,8 @@
 //!
 //! Terminal output travels as **raw bytes** end to end: the CLI sends
 //! binary WebSocket frames, the server stores raw bytes, and viewers
-//! receive binary Socket.IO attachments which the browser decodes with a
-//! streaming `TextDecoder` (`templates/room.html`). The Python e2e
+//! receive binary WebSocket frames which xterm.js decodes with its
+//! streaming UTF-8 decoder (`templates/room.html`). The Python e2e
 //! helpers (`e2e/conftest.py`) must stay in lockstep.
 //!
 //! End-to-end encryption changes none of this: every broadcast's bytes
@@ -60,9 +60,8 @@ impl MessageHistory {
     }
 }
 
-/// Terminal dimensions, as carried in the `size` control message of
-/// broadcast transports and the `size` Socket.IO event the viewer
-/// listens for.
+/// Terminal dimensions, as carried in the `size` control message on
+/// both the ingest and viewer `WebSockets`.
 ///
 /// The client may attach extra fields next to `cols`/`rows` - today a
 /// `theme` name (see `themes.rs`) - which ride along verbatim to the

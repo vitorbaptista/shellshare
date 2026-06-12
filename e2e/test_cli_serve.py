@@ -161,7 +161,7 @@ class TestBroadcasting:
             received = listener.wait_for_message(
                 timeout=10, containing="hello from serve mode"
             )
-            assert received is not None, "Message not received via Socket.IO"
+            assert received is not None, "Message not received by the viewer"
         finally:
             listener.disconnect()
             returncode, _, stderr = finish(proc)

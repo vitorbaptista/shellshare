@@ -224,7 +224,7 @@ class TestReliability:
                 server.wait()
 
     def test_browser_viewer_survives_server_restart(self):
-        """The viewer re-joins after a Socket.IO reconnect instead of
+        """The viewer reconnects its WebSocket instead of
         going silently dead."""
         port = _free_port()
         room, password = f"test-{random_id()}", f"secret-{random_id()}"
@@ -257,7 +257,7 @@ class TestReliability:
                 wait_for_server(url)
 
                 # Re-claim the room and broadcast; the viewer must pick it
-                # up once socket.io reconnects and the page re-joins
+                # up once the viewer WebSocket reconnects and resyncs
                 deadline = time.time() + 20
                 seen = False
                 while time.time() < deadline and not seen:

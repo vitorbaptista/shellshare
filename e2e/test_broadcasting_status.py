@@ -3,7 +3,7 @@ E2E tests for the broadcaster aliveness indicator.
 
 The server tracks ingest WebSocket connections per room and tells
 viewers - on join and on every transition - whether a broadcaster's
-client is currently attached via the Socket.IO `broadcasting` event.
+client is currently attached via the `broadcasting` control event.
 "Live" means the connection is open, not that output is flowing: the
 CLI pings even when idle.
 """
@@ -31,7 +31,7 @@ def attach_broadcaster(room_id, password, server_url=SERVER_URL):
 
 
 class TestBroadcastingStatus:
-    """Socket.IO `broadcasting` event behavior."""
+    """`broadcasting` control event behavior."""
 
     def test_join_nonexistent_room_reports_offline(self, unique_room):
         """A viewer joining a room nobody broadcasts to is told so."""

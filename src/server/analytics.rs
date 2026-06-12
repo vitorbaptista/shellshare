@@ -136,7 +136,7 @@ impl Analytics {
                 name: "broadcast_started",
                 distinct_id: inner.broadcaster_id(password),
                 properties: serde_json::json!({
-                    "room": inner.room_id(room_name),
+                    "room": Inner::room_id(room_name),
                     "new_room": new_room,
                 }),
             });
@@ -153,7 +153,7 @@ impl Analytics {
                 name: "broadcast_ended",
                 distinct_id: inner.broadcaster_id(password),
                 properties: serde_json::json!({
-                    "room": inner.room_id(room_name),
+                    "room": Inner::room_id(room_name),
                     // Fractional: short segments would otherwise all
                     // truncate to 0 and undercount reconnect-heavy runs
                     "duration_seconds": duration.as_secs_f64(),
@@ -171,7 +171,7 @@ impl Analytics {
         if let Some(inner) = &self.inner {
             inner.send(Event {
                 name: "viewer_joined",
-                distinct_id: inner.room_id(room_name),
+                distinct_id: Inner::room_id(room_name),
                 properties: serde_json::json!({
                     "user_count": user_count,
                     "broadcasting": broadcasting,
@@ -199,7 +199,7 @@ impl Inner {
     /// property of broadcast events, so the two sides join on it.
     /// Plaintext by choice (see the module doc); the `room:` prefix
     /// keeps this id space disjoint from broadcaster ids.
-    fn room_id(&self, room_name: &str) -> String {
+    fn room_id(room_name: &str) -> String {
         format!("room:{room_name}")
     }
 }

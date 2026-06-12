@@ -909,7 +909,7 @@ class TestSizeFieldBehavior:
     """Tests for size control-frame leniency.
 
     Exact passthrough of a size with extra fields and the null-size case
-    are already covered by test_socketio.py (TestSocketIOSizePassthrough);
+    are already covered by test_viewer_ws.py (size passthrough tests);
     only the missing-cols/rows case is exercised here.
     """
 

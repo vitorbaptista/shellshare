@@ -23,7 +23,7 @@ def _room_has_history(server_url, room, marker, settle=1.0):
     try:
         if not poll_until(lambda: listener.get_last_user_count() >= 1, timeout=15):
             raise TimeoutError(
-                f"Socket.IO join to {server_url} was never confirmed"
+                f"viewer connect to {server_url} was never confirmed"
             )
         deadline = time.time() + settle
         while time.time() < deadline:

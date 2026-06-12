@@ -13,7 +13,7 @@ the release binary.
 Per viewer count, three phases against a fresh room:
 
 - idle:     viewers connected, broadcaster silent. Cost of just holding
-            N Socket.IO connections.
+            N viewer connections.
 - paced:    frames at a fixed rate (default 30/s of 256 B - a busy TUI).
             Reports broadcaster-send -> viewer-receive latency pooled
             across every viewer and frame, plus frame loss and server CPU.
@@ -28,8 +28,7 @@ latencies - and it still does, a little: 50 viewers per process adds
 ~10 ms to the latency percentiles; 10 per process adds ~2 ms. Use
 fewer viewers per worker when latency is the number under study, more
 when connection scale is. Loss counts are immune to this. Each
-worker speaks minimal Socket.IO over a raw WebSocket - no
-python-socketio client threads - and answers engine.io pings.
+worker speaks the raw viewer WebSocket protocol directly.
 
 Frame loss is real signal, not harness noise: delivery to each viewer
 is ordered, so a viewer that saw the end marker but counted fewer
@@ -60,15 +59,30 @@ from conftest import (
 VIEWERS_PER_WORKER = int(os.environ.get("FANOUT_VIEWERS_PER_WORKER", "50"))
 CLK_TCK = os.sysconf("SC_CLK_TCK")
 
+# The Rust viewer swarm (e2e/loadgen). The Python workers top out around
+# 60k frame-deliveries/sec in aggregate, which caps measurable server
+# capacity well below the server's limit; the Rust binary runs every
+# viewer in one process and speaks the same READY/QUIET/JSON protocol.
+# Build it with `cargo build --release` in e2e/loadgen; it is used
+# automatically when present (FANOUT_LOADGEN overrides the path, set it
+# empty to force the Python workers).
+_DEFAULT_LOADGEN = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "loadgen", "target", "release", "fanout-loadgen",
+)
+LOADGEN = os.environ.get("FANOUT_LOADGEN", _DEFAULT_LOADGEN)
+if LOADGEN and not os.path.exists(LOADGEN):
+    LOADGEN = None
+
 
 # --------------------------------------------------------------------
 # Worker: a batch of viewers in their own process
 # --------------------------------------------------------------------
 
 class Viewer:
-    """Minimal Socket.IO viewer over a raw WebSocket.
+    """One viewer on the raw WebSocket endpoint.
 
-    Joins the room, then records every binary frame it receives:
+    Connects to the room, then records every binary frame it receives:
     paced frames (`T:<seq>:<t_send>:...`) yield a latency sample,
     firehose frames (`F:<seq>:...`) a byte count. The end marker
     (`END:<paced_total>:<fire_total>`) stops the viewer: delivery is
@@ -92,25 +106,18 @@ class Viewer:
     def connect(self, timeout=15):
         ws_url = self.server_url.replace("http://", "ws://")
         self._ws = websocket.create_connection(
-            f"{ws_url}/socket.io/?EIO=4&transport=websocket", timeout=timeout
+            f"{ws_url}/ws/v/r/{self.room}", timeout=timeout
         )
-        opening = self._ws.recv()  # engine.io open packet
-        assert opening.startswith("0"), f"unexpected engine.io opening: {opening!r}"
-        self._ws.send("40")  # socket.io connect to the default namespace
+        # The connect snapshot always ends with usersCount: once it
+        # arrives the viewer is registered and caught up
         deadline = time.time() + timeout
         joined = False
-        join = json.dumps(["join", f"/r/{self.room}"])
         while time.time() < deadline:
             frame = self._ws.recv()
-            if isinstance(frame, str):
-                if frame.startswith("40"):  # connect ack: now join
-                    self._ws.send(f"42{join}")
-                elif frame.startswith('42["usersCount"'):  # join confirmed
-                    joined = True
-                    break
-                elif frame == "2":
-                    self._ws.send("3")
-        assert joined, "join never confirmed by usersCount"
+            if isinstance(frame, str) and "usersCount" in frame:
+                joined = True
+                break
+        assert joined, "connect snapshot never delivered usersCount"
 
     def start(self, stop_event):
         self._thread = threading.Thread(
@@ -130,12 +137,8 @@ class Viewer:
                 break
             self.last_activity = time.time()
             if isinstance(frame, str):
-                if frame == "2":  # engine.io ping
-                    try:
-                        self._ws.send("3")
-                    except (websocket.WebSocketException, OSError):
-                        self.disconnected = True
-                        break
+                # Control frames (usersCount/broadcasting/size) are not
+                # measured; WS pings are answered by websocket-client
                 continue
             self._on_payload(bytes(frame))
         try:
@@ -307,6 +310,43 @@ class Broadcaster:
         self.ws.close()
 
 
+class RustBroadcaster:
+    """Drives the loadgen's `broadcast` mode: the wire work happens in
+    Rust, Python only issues phase commands. 16 Python broadcaster
+    threads share a GIL and cap aggregate ingest far below the server's
+    limit; this keeps the harness out of the measurement."""
+
+    def __init__(self, url, room, password):
+        self.proc = subprocess.Popen(
+            [LOADGEN, "broadcast", url, room, password],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr,
+            text=True,
+            env={**os.environ, "LOADGEN_THREADS": "1"},
+        )
+        line = self.proc.stdout.readline().strip()
+        assert line == "CONNECTED", f"broadcaster failed: {line!r}"
+
+    def cmd(self, line):
+        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.flush()
+
+    def wait_done(self):
+        """Returns the phase's wall seconds (send start -> final ack)."""
+        line = self.proc.stdout.readline().strip()
+        assert line.startswith("DONE"), f"broadcaster failed: {line!r}"
+        return float(line.split()[1])
+
+    def close(self):
+        try:
+            self.cmd("QUIT")
+            self.proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            self.proc.kill()
+            self.proc.wait()
+
+
 def percentiles(samples_ms):
     s = sorted(samples_ms)
     pick = lambda q: s[min(len(s) - 1, int(q * len(s)))]
@@ -320,38 +360,62 @@ def percentiles(samples_ms):
     }
 
 
-def spawn_workers(server_url, room, n_viewers, deadline_s):
-    workers = []
-    remaining = n_viewers
-    while remaining > 0:
-        count = min(VIEWERS_PER_WORKER, remaining)
-        remaining -= count
-        config = json.dumps({
-            "server_url": server_url,
-            "room": room,
-            "count": count,
-            "deadline_s": deadline_s,
-        })
-        workers.append(subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "--worker", config],
+def spawn_workers(server_url, room_counts, deadline_s):
+    """All rooms' viewers in one Rust process (so the harness adds one
+    capped runtime to the machine, not one per room), or one Python
+    worker batch per room as the portable fallback."""
+    if LOADGEN:
+        spec = ",".join(f"{room}={n}" for room, n in room_counts)
+        return [subprocess.Popen(
+            [LOADGEN, server_url, spec, str(deadline_s)],
             stdout=subprocess.PIPE,
             stderr=sys.stderr,
             text=True,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-        ))
+            env={**os.environ,
+                 "LOADGEN_THREADS": os.environ.get("LOADGEN_THREADS", "4")},
+        )]
+    workers = []
+    for room, n in room_counts:
+        remaining = n
+        while remaining > 0:
+            count = min(VIEWERS_PER_WORKER, remaining)
+            remaining -= count
+            config = json.dumps({
+                "server_url": server_url,
+                "room": room,
+                "count": count,
+                "deadline_s": deadline_s,
+            })
+            workers.append(subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "--worker", config],
+                stdout=subprocess.PIPE,
+                stderr=sys.stderr,
+                text=True,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+            ))
     return workers
 
 
 def run_trial(url, server_pid, n_viewers, args):
-    room, password = f"fanout-{random_id()}", random_id()
+    """One trial: `n_viewers` total, split evenly across `args.rooms`
+    rooms, each with its own broadcaster (the self-hosted-VPS shape:
+    several modest rooms rather than one giant one). Every room sends
+    the same paced/firehose schedule, so the per-viewer expectations -
+    and all the loss accounting - are identical across rooms."""
     stats = ServerStats(server_pid)
+    rooms = [f"fanout-{random_id()}" for _ in range(args.rooms)]
 
-    # The broadcaster claims the room first, like a real session
-    caster = Broadcaster(url, room, password)
+    # Broadcasters claim their rooms first, like real sessions
+    caster_cls = RustBroadcaster if LOADGEN else Broadcaster
+    casters = [caster_cls(url, room, random_id()) for room in rooms]
     # Generous deadline: connect storm + quiet wait + idle + paced +
     # firehose + margin
     deadline_s = 30 + 120 + 3 + args.duration + 60
-    workers = spawn_workers(url, room, n_viewers, deadline_s)
+    base, extra = divmod(n_viewers, len(rooms))
+    room_counts = [
+        (room, base + (1 if i < extra else 0)) for i, room in enumerate(rooms)
+    ]
+    workers = spawn_workers(url, room_counts, deadline_s)
     try:
         connected = 0
         for w in workers:
@@ -368,40 +432,77 @@ def run_trial(url, server_pid, n_viewers, args):
         time.sleep(3)
         idle_after = stats.sample()
 
-        # Paced: fixed-rate frames with embedded send timestamps
+        # Paced: fixed-rate frames with embedded send timestamps, every
+        # room broadcasting on the same schedule
         pad = b"x" * args.frame_size
         paced_total = args.rate * args.duration
         paced_before = stats.sample()
-        t0 = time.time()
-        for seq in range(paced_total):
-            target = t0 + seq / args.rate
-            delay = target - time.time()
-            if delay > 0:
-                time.sleep(delay)
-            header = f"T:{seq}:{time.time():.6f}:".encode()
-            caster.send((header + pad)[: args.frame_size])
-        caster.wait_acked()
+        if LOADGEN:
+            for caster in casters:
+                caster.cmd(f"PACED {paced_total} {args.rate} {args.frame_size}")
+            for caster in casters:
+                caster.wait_done()
+        else:
+            t0 = time.time()
+            for seq in range(paced_total):
+                target = t0 + seq / args.rate
+                delay = target - time.time()
+                if delay > 0:
+                    time.sleep(delay)
+                for caster in casters:
+                    header = f"T:{seq}:{time.time():.6f}:".encode()
+                    caster.send((header + pad)[: args.frame_size])
+            for caster in casters:
+                caster.wait_acked()
         # The ack confirms storage, not delivery: fan-out may still be
         # draining. Grace before sampling so the CPU window charges the
         # paced phase with its own fan-out work
         time.sleep(1)
         paced_after = stats.sample()
 
-        # Firehose: 4 KB frames as fast as the socket accepts them
-        chunk_pad = b"y" * 4096
+        # Firehose: 4 KB frames as fast as the sockets accept them,
+        # every broadcaster bursting CONCURRENTLY - the worst case for
+        # cross-room interference
         fire_total = (args.firehose_mb * 1_000_000) // 4096
         fire_before = stats.sample()
         fire_start = time.time()
-        for seq in range(fire_total):
-            caster.send((f"F:{seq}:".encode() + chunk_pad)[:4096])
-        caster.wait_acked(timeout=120)
-        ingest_wall = time.time() - fire_start
+        if LOADGEN:
+            for caster in casters:
+                caster.cmd(f"FIRE {fire_total}")
+            # Each broadcaster reports send-start -> final-ack wall;
+            # they run concurrently, so the slowest is the phase wall
+            ingest_wall = max(caster.wait_done() for caster in casters)
+        else:
+            chunk_pad = b"y" * 4096
+
+            def blast(caster):
+                for seq in range(fire_total):
+                    caster.send((f"F:{seq}:".encode() + chunk_pad)[:4096])
+                caster.wait_acked(timeout=120)
+
+            blasters = [
+                threading.Thread(target=blast, args=(c,), daemon=True)
+                for c in casters
+            ]
+            for b in blasters:
+                b.start()
+            for b in blasters:
+                b.join()
+            ingest_wall = time.time() - fire_start
         # The end marker releases the viewers; delivery is ordered, so
         # any frame a viewer never counted before END was really lost
-        for _ in range(3):
-            caster.send(f"END:{paced_total}:{fire_total}".encode())
-            time.sleep(0.2)
-        caster.wait_acked()
+        if LOADGEN:
+            for caster in casters:
+                caster.cmd(f"END {paced_total} {fire_total}")
+            for caster in casters:
+                caster.wait_done()
+        else:
+            for _ in range(3):
+                for caster in casters:
+                    caster.send(f"END:{paced_total}:{fire_total}".encode())
+                time.sleep(0.2)
+            for caster in casters:
+                caster.wait_acked()
         # Sample before collecting results: a worker stuck on a viewer
         # that lost the end marker blocks for minutes, and folding that
         # idle time into the window would underreport CPU in exactly
@@ -417,15 +518,16 @@ def run_trial(url, server_pid, n_viewers, args):
 
         viewers = [v for r in results for v in r["viewers"]]
         latencies = [ms for r in results for ms in r["latencies"]]
-        fire_sent_bytes = fire_total * 4096
+        fire_sent_bytes = fire_total * 4096  # per room; each viewer sees this
+        fire_sent_total = fire_sent_bytes * len(casters)
         end_times = [v["end_at"] for v in viewers if v["end_at"]]
         delivery_wall = max(end_times) - fire_start if end_times else None
         firehose = None
         if fire_total:
             firehose = {
-                "sent_mb": round(fire_sent_bytes / 1e6, 2),
+                "sent_mb": round(fire_sent_total / 1e6, 2),
                 "ingest_s": round(ingest_wall, 3),
-                "ingest_mb_s": round(fire_sent_bytes / 1e6 / ingest_wall, 2),
+                "ingest_mb_s": round(fire_sent_total / 1e6 / ingest_wall, 2),
                 "delivery_s": round(delivery_wall, 3) if delivery_wall else None,
                 "fanout_mb_s": round(
                     fire_sent_bytes * len(viewers) / 1e6 / delivery_wall, 1
@@ -439,6 +541,7 @@ def run_trial(url, server_pid, n_viewers, args):
                 ),
             }
         return {
+            "rooms": len(rooms),
             "viewers_requested": n_viewers,
             "viewers_connected": connected,
             "viewers_disconnected": sum(v["disconnected"] for v in viewers),
@@ -467,7 +570,8 @@ def run_trial(url, server_pid, n_viewers, args):
             "server": {**stats.memory_mb(), "open_fds": stats.open_fds()},
         }
     finally:
-        caster.close()
+        for caster in casters:
+            caster.close()
         for w in workers:
             if w.poll() is None:
                 w.terminate()
@@ -506,7 +610,11 @@ def main():
     )
     parser.add_argument("--worker", help=argparse.SUPPRESS)
     parser.add_argument("--viewers", nargs="*", type=int, default=None)
-    parser.add_argument("--rate", type=int, default=30, help="paced frames/s")
+    parser.add_argument(
+        "--rooms", type=int, default=1,
+        help="concurrent broadcasters; viewers are split evenly across them",
+    )
+    parser.add_argument("--rate", type=int, default=30, help="paced frames/s per room")
     parser.add_argument(
         "--frame-size", type=int, default=256,
         help="paced frame bytes (>= 32, or the marker header gets truncated)",
