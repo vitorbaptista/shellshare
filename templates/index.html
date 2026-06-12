@@ -20,7 +20,7 @@
     "@type": "SoftwareApplication",
     "name": "shellshare",
     "url": "https://shellshare.net",
-    "description": "Broadcast your terminal live with a single command. Share a terminal session via a web link - no signup, no configuration, viewers watch read-only in the browser.",
+    "description": "Broadcast your terminal live with a single command. Share a terminal session via a web link - no signup, no configuration, end-to-end encrypted, viewers watch read-only in the browser.",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux, macOS, Windows",
     "downloadUrl": "https://get.shellshare.net",
@@ -66,6 +66,14 @@
       },
       {
         "@type": "Question",
+        "name": "How secure is it?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Broadcasts are end-to-end encrypted. The decryption key lives in the part of the share link after the '#', which your browser never sends to the server, so only the people you give the full link to can watch. Neither the server nor your network can read your terminal."
+        }
+      },
+      {
+        "@type": "Question",
         "name": "Can I save or record the broadcast?",
         "acceptedAnswer": {
           "@type": "Answer",
@@ -85,7 +93,7 @@
         "name": "Can I self-host shellshare?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Yes. The same binary contains the server: `shellshare server` hosts it, and `shellshare serve` shares your terminal through an embedded local server so nothing leaves your computer. Add --tunnel for a public Cloudflare quick-tunnel link."
+          "text": "Yes. The same binary contains the server: `shellshare server` hosts it, and `shellshare serve` shares your terminal through an embedded local server so nothing leaves your computer. Add --tunnel for a public Cloudflare quick-tunnel link. End-to-end encryption only works over HTTPS or localhost, so if your viewers reach a self-hosted server over plain HTTP (for example a teacher sharing with students on a lab's local network), broadcast with --disable-encryption to send in plaintext instead."
         }
       }
     ]
@@ -132,7 +140,7 @@ $ ./shellshare</span><span class="linux">$ wget -qO shellshare https://get.shell
 $ chmod +x shellshare
 $ ./shellshare</span><span class="windows">PS&gt; iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe
 PS&gt; .\shellshare.exe</span>
-<span class="shell-output">Sharing terminal in https://shellshare.net/r/EPbZJ7VZNakS9vwUlS</span>
+<span class="shell-output">Sharing terminal in https://shellshare.net/r/EPbZJ7VZNakS9vwUlS#59a4b6ba0447dd63268724ff49a61cabf45af81f9b8f539bda953df9ac65314e</span>
 <span class="node macos linux">$ # Everything you do now will be broadcast live on the URL above.
 $ # When you're done, hit CTRL+D
 $ exit</span><span class="windows">PS&gt; # Everything you do now will be broadcast live on the URL above.
@@ -144,6 +152,8 @@ PS&gt; exit</span>
         <h2>Frequently asked questions</h2>
         <h3>Can someone control my terminal through shellshare?</h3>
         <p>No. All communication is just one-way: from your terminal to shellshare. There's no way someone could send commands to your terminal. If you'd like to allow it, try <a href="https://savannah.gnu.org/projects/screen">screen</a> or <a href="https://tmux.github.io/">tmux</a> (especially with <a href="https://tmate.io">tmate</a>).</p>
+        <h3>How secure is it?</h3>
+        <p>Broadcasts are end-to-end encrypted. The decryption key lives in the part of the share link after the <code>#</code>, which your browser never sends to the server, so only the people you give the full link to can watch. Neither the server nor your network can read your terminal.</p>
         <h3>Can I save the broadcast?</h3>
         <p>No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
         <h3>Can I broadcast to a custom room name?</h3>
@@ -152,12 +162,12 @@ PS&gt; exit</span>
 $ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
 $ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="windows">PS&gt; iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe
 PS&gt; .\shellshare.exe --room MY-ROOM --password MY-PASS</span>
-<span class="shell-output">Sharing terminal in https://shellshare.net/r/MY-ROOM</span>
+<span class="shell-output">Sharing terminal in https://shellshare.net/r/MY-ROOM#5baafc7eedf22a42e13a2c760323912f655e06b996c26ed6b3f7655fb6ca5abc</span>
 <span class="node macos linux">$ # ...
 $ exit</span><span class="windows">PS&gt; # ...
 PS&gt; exit</span>
 <span class="shell-output">End of transmission.</span></code></pre>
-        <p>If you don't set a password, shellshare will use your network card's MAC address to uniquely identify your computer. This means you'll be able to transmit to the same room later only if you're using the same computer.</p>
+        <p>If you don't set a password, shellshare will use your network card's MAC address to uniquely identify your computer. This means you'll be able to transmit to the same room later only if you're using the same computer. The share link is reproduced too: broadcasting to the same room from the same computer prints the same link (decryption key included), so a link you've already shared keeps working.</p>
         <h3>Can I change the colors viewers see?</h3>
         <p>Yes. Start shellshare with <code>--theme</code> (e.g. <code>./shellshare --theme dracula</code>) and viewers will see your broadcast in that color scheme. We support the same themes as <a href="https://docs.asciinema.org/manual/player/themes/">asciinema</a>: <code>asciinema</code>, <code>dracula</code>, <code>gruvbox-dark</code>, <code>monokai</code>, <code>nord</code>, <code>seti</code>, <code>solarized-dark</code>, <code>solarized-light</code> and <code>tango</code>.</p>
         <h3>Can AI agents or scripts use shellshare?</h3>
@@ -168,7 +178,8 @@ PS&gt; exit</span>
         <p>Yes. We have pre-built binaries for Linux, macOS (Intel and Apple Silicon), and Windows. When you download from <a href="https://get.shellshare.net">https://get.shellshare.net</a>, we automatically detect your operating system and give you the correct binary.</p>
         <p>You can also pass the <code>os</code> query parameter to explicitly download a specific binary. The options are <code>linux</code>, <code>windows</code>, <code>mac</code> and <code>mac-arm</code>. For example, if you want to download the Linux binary regardless of your operating system, access <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a>.</p>
         <h3>Can I self-host shellshare?</h3>
-        <p>Yes. The shellshare binary also includes the server. You can start it by running <code>shellshare serve</code> and accessing the server at <a href="http://localhost:3000">http://localhost:3000</a>. No data leaves your computer. To let other people access your server, add <code>--tunnel</code> (e.g. <code>shellshare serve --tunnel</code>): it uses <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/">cloudflared</a> (which you need installed) to create a public <code>https://*.trycloudflare.com</code> link for your broadcast.</p>
+        <p>Yes. The shellshare binary also includes the server. You can start it by running <code>shellshare serve</code> and accessing the server at <a href="http://localhost:3000">http://localhost:3000</a>. No data leaves your computer. To let other people access your server, add <code>--tunnel</code> (e.g. <code>shellshare serve --tunnel</code>): it uses <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/">cloudflared</a> (which you need installed) to create a public link for your broadcast.</p>
+        <p>End-to-end encryption only works over HTTPS or localhost. If your viewers reach a self-hosted server over plain HTTP, for example a teacher sharing their terminal with students on a lab's local network, broadcast with <code>--disable-encryption</code> to send in plaintext instead.</p>
         <h3>I found a problem! What do I do?</h3>
         <p>Please, open an issue at our <a href="https://github.com/vitorbaptista/shellshare/issues">issues page</a> describing what the problem was, your shellshare version, and your operating system.</p>
         <h3>How can I help?</h3>

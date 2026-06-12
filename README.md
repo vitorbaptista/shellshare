@@ -30,6 +30,13 @@ https://shellshare.net/r/h2Uont4F8bvZ8VDjHb` (your link will be different).
 Anyone that opens this link will be able to see what you're doing in your
 terminal. When you're done, type `exit` or hit CTRL+D.
 
+Broadcasts are end-to-end encrypted. The decryption key travels in the part
+of the link after the `#`, which your browser never sends to the server, so
+only the people you hand the full link to can watch, not the server and not
+your network. The key is derived from your computer and the room name, so
+re-broadcasting to a named room from the same machine reproduces the same
+link, and a link you've already shared keeps working.
+
 ### Scripting & AI agents
 
 shellshare is built to be driven by scripts and AI agents — for example, an
@@ -58,6 +65,8 @@ The same `shellshare` binary also includes the server code, allowing you to broa
 To do so you just need to run `shellshare server` in one terminal and access [http://localhost:3000](http://localhost:3000). You can broadcast to this server using `shellshare --server http://localhost:3000`.
 
 `shellshare serve` does both at once: it starts a local server in the background and broadcasts your terminal to it.
+
+End-to-end encryption only works over HTTPS or localhost. If your viewers reach a self-hosted server over plain HTTP, for example a teacher sharing their terminal with students on a lab's local network, broadcast with `--disable-encryption` to send in plaintext instead.
 
 ### Sharing a public link without shellshare.net
 
