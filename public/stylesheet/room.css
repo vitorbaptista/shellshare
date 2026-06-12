@@ -43,6 +43,7 @@
    `online` class when the broadcaster is live, and must not match */
 div.online {
   order: 1;
+  margin-right: 0.5rem;
 }
 
 .broadcast-status::before {
