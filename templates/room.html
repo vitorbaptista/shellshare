@@ -54,7 +54,10 @@
 
       // Theme definitions injected by the server from themes.json
       var THEMES = {{THEMES_JSON}};
-      var socket = io();
+      // WebSocket only - the server rejects HTTP long-polling (its
+      // engine.io polling path corrupts binary frames), and skipping
+      // the polling-then-upgrade dance avoids its races entirely
+      var socket = io({transports: ['websocket']});
       var room = window.location.pathname;
       var term;
       var currentSize = {};
@@ -109,6 +112,24 @@
       // Join on every connect: socket.io reconnects by itself after a
       // network blip, but room membership is lost server-side, so a
       // viewer that doesn't re-join goes silently dead.
+      //
+      // The join must be confirmed, not fire-and-forget: a bare emit
+      // can be lost (e.g. it reaches the server before the connection
+      // handler finished registering events), and a viewer whose join
+      // vanished would stare at an empty terminal forever. The server
+      // answers every join with usersCount, re-joining is idempotent,
+      // and the history catch-up is only sent for a socket's first
+      // join - so emit and re-emit until confirmed.
+      var joinConfirmed = false;
+      var joinTimer = null;
+      function joinUntilConfirmed() {
+        joinTimer = null;
+        if (joinConfirmed || !socket.connected) {
+          return;
+        }
+        socket.emit('join', room);
+        joinTimer = setTimeout(joinUntilConfirmed, 500);
+      }
       socket.on('connect', function () {
         if (joinedBefore) {
           // The server replays the room history on join; start from a
@@ -122,9 +143,14 @@
           onSize({cols: 80, rows: 30});
         }
         joinedBefore = true;
-        socket.emit('join', room);
+        joinConfirmed = false;
+        if (joinTimer) {
+          clearTimeout(joinTimer);
+        }
+        joinUntilConfirmed();
       });
       socket.on('usersCount', function (onlineUsers) {
+        joinConfirmed = true;
         onlineCounter.innerHTML = onlineUsers;
         if (onlineUsers == 1) {
           onlineCounterPlural.innerHTML = '';

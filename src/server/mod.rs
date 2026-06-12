@@ -147,8 +147,16 @@ pub async fn serve_on(
         ..Default::default()
     };
 
-    // Socket.IO setup
+    // Socket.IO setup. WebSocket only, no HTTP long-polling: the
+    // engine.io polling encoder corrupts binary events when an emit
+    // lands on a parked long-poll (the announce and its attachment are
+    // concatenated without the packet separator - engineioxide bug,
+    // still present in 0.17.3), which intermittently garbled history
+    // replay and live output for viewers. Every consumer is ours (the
+    // viewer page below connects websocket-only), so there is nothing
+    // that needs the fallback.
     let (sio_layer, io) = SocketIo::builder()
+        .transports([socketioxide::TransportType::Websocket])
         .with_state(app_state.clone())
         .build_layer();
 
@@ -194,8 +202,16 @@ pub async fn serve_on(
 }
 
 /// Setup Socket.IO event handlers
+///
+/// The connect handler MUST stay synchronous: socketioxide sends the
+/// connect ack to the client and only then runs this handler - an async
+/// handler is tokio::spawn'ed, so under load a client's first `join`
+/// (emitted as soon as it sees the ack) could arrive before
+/// `socket.on("join")` is registered and be silently dropped, leaving a
+/// viewer stuck on an empty terminal. A sync handler registers
+/// everything inline before the connect task yields.
 fn setup_socket_handlers(io: &SocketIo) {
-    io.ns("/", |socket: SocketRef, _state: SioState<AppState>| async move {
+    io.ns("/", |socket: SocketRef, _state: SioState<AppState>| {
         info!("Client connected: {}", socket.id);
 
         // Handle join event
@@ -232,11 +248,15 @@ fn setup_socket_handlers(io: &SocketIo) {
                 // Release before the room snapshot below takes its own lock
                 drop(socket_rooms);
 
-                // Catch the viewer up if the room is live
+                // Catch the viewer up if the room is live - but only on
+                // the socket's FIRST join to this room: clients re-emit
+                // `join` until they see the usersCount confirmation, and
+                // replaying history for a retry that merely overtook a
+                // slow confirmation would duplicate terminal content
                 let snapshot = state.rooms.snapshot(&room_id).await;
                 let room_exists = snapshot.is_some();
                 let broadcasting = snapshot.as_ref().is_some_and(|s| s.broadcasting);
-                if let Some(snapshot) = snapshot {
+                if let Some(snapshot) = snapshot.filter(|_| newly_joined) {
                     // Send size FIRST - terminal must be sized before receiving content
                     if let Some(ref size) = snapshot.size {
                         if let Err(e) = socket.emit("size", size) {
