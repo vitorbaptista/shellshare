@@ -155,7 +155,7 @@ or [other terminal recording tools](https://github.com/topics/terminal-recording
 
 # License
 
-Copyright 2015 Vitor Baptista
+Copyright 2026 Vitor Baptista
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
