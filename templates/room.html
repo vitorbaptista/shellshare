@@ -371,7 +371,6 @@
         var ws = new WebSocket(WS_URL);
         ws.binaryType = 'arraybuffer';
         ws.onopen = function () {
-          reconnectDelayMs = RECONNECT_MIN_MS;
           if (joinedBefore) {
             // The server replays the room history on connect; start
             // from a clean screen instead of appending a duplicate.
@@ -409,6 +408,11 @@
               onSize(control.size);
             }
             if (typeof control.usersCount === 'number') {
+              // The snapshot terminator: only a connection that got
+              // this far resets the reconnect backoff - a server that
+              // accepts and immediately closes (overload) keeps
+              // backing off instead of hammering every 500ms
+              reconnectDelayMs = RECONNECT_MIN_MS;
               onUsersCount(control.usersCount);
             }
             if (typeof control.broadcasting === 'boolean') {

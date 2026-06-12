@@ -7,7 +7,7 @@ interacting only through public interfaces to ensure 100% API compatibility.
 
 This test suite is designed to:
 1. **Validate API compatibility** - Ensure any rewrite (e.g., Go) behaves identically
-2. **Test all endpoints** - Cover every HTTP endpoint and Socket.IO event
+2. **Test all endpoints** - Cover every HTTP endpoint and viewer WebSocket event
 3. **Verify edge cases** - Test authorization, error handling, and special cases
 
 ## Test Files
@@ -15,7 +15,7 @@ This test suite is designed to:
 | File | Description |
 |------|-------------|
 | `test_api.py` | HTTP endpoint tests (GET, POST, DELETE) |
-| `test_socketio.py` | Real-time WebSocket tests |
+| `test_viewer_ws.py` | Viewer WebSocket protocol tests |
 | `test_broadcast.py` | End-to-end CLI to browser test |
 
 ## What's Tested
@@ -57,11 +57,11 @@ This test suite is designed to:
   - Special characters (unicode, emoji, escapes)
   - 404 for nonexistent files
 
-### Socket.IO (`test_socketio.py`)
+### Viewer WebSocket (`test_viewer_ws.py`)
 
 - **Connection**
-  - Can establish Socket.IO connection
-  - Can join rooms
+  - Connecting to `/ws/v/r/:room` delivers the room snapshot
+    (size, history, broadcasting, usersCount - in that order)
 
 - **Real-time Messages**
   - Receive messages broadcast after joining
@@ -115,8 +115,8 @@ This test suite is designed to:
 # Run only API tests
 uv run pytest test_api.py
 
-# Run only Socket.IO tests
-uv run pytest test_socketio.py
+# Run only viewer WebSocket tests
+uv run pytest test_viewer_ws.py
 
 # Run only browser tests
 uv run pytest test_broadcast.py
@@ -137,7 +137,7 @@ Both environments run the full test suite to ensure cross-platform compatibility
 
 If all tests pass on a new implementation:
 - All HTTP endpoints behave identically
-- Socket.IO events work the same way
+- Viewer WebSocket events work the same way
 - Authorization logic is preserved
 - Message storage and retrieval is compatible
 - The CLI will work without modification

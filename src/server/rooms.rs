@@ -31,7 +31,7 @@ const MAX_HISTORY_MESSAGES: usize = 100;
 ///
 /// Construction is the only place normalization happens: the `/r/` route
 /// prefix is stripped and percent-encoding is decoded (Axum auto-decodes
-/// HTTP paths, but Socket.IO sends raw strings).
+/// HTTP paths, but other callers may pass raw strings).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RoomId(String);
 

@@ -224,7 +224,7 @@ class TestReliability:
                 server.wait()
 
     def test_browser_viewer_survives_server_restart(self):
-        """The viewer re-joins after a Socket.IO reconnect instead of
+        """The viewer reconnects its WebSocket instead of
         going silently dead."""
         port = _free_port()
         room, password = f"test-{random_id()}", f"secret-{random_id()}"

@@ -286,7 +286,7 @@ struct FanoutItem {
 /// see a frame shape the client couldn't already have produced.
 const FANOUT_MAX_BATCH: usize = 64 * 1024;
 
-/// The viewer fan-out task: drains the queue and emits to Socket.IO.
+/// The viewer fan-out task: drains the queue and emits to viewers.
 ///
 /// Whatever queued up while the previous emits ran is coalesced - each
 /// room's payloads are concatenated (up to [`FANOUT_MAX_BATCH`] per
@@ -423,8 +423,23 @@ async fn ws_view_handler(
 /// How long a viewer may go without sending anything (pong frames
 /// answer our pings automatically in every browser) before the
 /// connection is presumed dead. Pings go out every 25s, so a healthy
-/// peer is never close to this.
+/// peer is never close to this. The same bound caps every write: a
+/// peer that stops reading (frozen tab, zero TCP window) would
+/// otherwise block `sink.send` forever, pinning the task and its
+/// backlog - the select loop can't reach its idle check while a send
+/// is in flight.
 const VIEWER_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
+
+/// Send with [`VIEWER_IDLE_TIMEOUT`] as the stall bound.
+async fn timed_send<S>(sink: &mut S, msg: WsMessage) -> Result<(), axum::Error>
+where
+    S: futures_util::Sink<WsMessage, Error = axum::Error> + Unpin,
+{
+    match tokio::time::timeout(VIEWER_IDLE_TIMEOUT, sink.send(msg)).await {
+        Ok(result) => result,
+        Err(elapsed) => Err(axum::Error::new(elapsed)),
+    }
+}
 /// Viewer ping cadence; keeps NATs open and detects dead peers.
 const VIEWER_PING_INTERVAL: Duration = Duration::from_secs(25);
 
@@ -445,21 +460,28 @@ async fn ws_view_loop(mut socket: WebSocket, state: AppState, room_id: RoomId) {
         if let Some(snap) = snapshot {
             if let Some(size) = snap.size {
                 let frame = serde_json::json!({ "size": size }).to_string();
-                socket.send(WsMessage::Text(frame.into())).await?;
+                timed_send(&mut socket, WsMessage::Text(frame.into())).await?;
             }
             if let Some(history) = snap.history {
-                socket.send(WsMessage::Binary(history)).await?;
+                timed_send(&mut socket, WsMessage::Binary(history)).await?;
             }
         }
         let frame = format!("{{\"broadcasting\":{broadcasting}}}");
-        socket.send(WsMessage::Text(frame.into())).await?;
+        timed_send(&mut socket, WsMessage::Text(frame.into())).await?;
         let count = total_viewers(&state, &room);
-        socket
-            .send(WsMessage::Text(format!("{{\"usersCount\":{count}}}").into()))
-            .await
+        timed_send(
+            &mut socket,
+            WsMessage::Text(format!("{{\"usersCount\":{count}}}").into()),
+        )
+        .await
     };
     if catch_up.await.is_err() {
         state.viewers.leave(&room, viewer_id);
+        // The room may have seen this viewer in a count broadcast
+        // during its brief membership; converge the others
+        if let Some(tx) = state.usercount.get() {
+            let _ = tx.send(room);
+        }
         return;
     }
     // The rest of the room learns the new count via the coalescing task
@@ -480,17 +502,16 @@ async fn ws_view_loop(mut socket: WebSocket, state: AppState, room_id: RoomId) {
     // peer is alive (pongs and anything else it sends) and reports
     // when the connection dies.
     let (mut sink, mut stream) = socket.split();
+    let started = tokio::time::Instant::now();
     let last_seen_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let seen = last_seen_ms.clone();
     let mut reader = tokio::spawn(async move {
-        let t0 = tokio::time::Instant::now();
         while let Some(Ok(_)) = stream.next().await {
-            let elapsed_ms = t0.elapsed().as_millis().min(u128::from(u64::MAX));
+            let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX));
             #[allow(clippy::cast_possible_truncation)] // bounded by the min above
             seen.store(elapsed_ms as u64, std::sync::atomic::Ordering::Relaxed);
         }
     });
-    let started = tokio::time::Instant::now();
     let mut ping = tokio::time::interval(VIEWER_PING_INTERVAL);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -513,13 +534,23 @@ async fn ws_view_loop(mut socket: WebSocket, state: AppState, room_id: RoomId) {
                     info!("WS viewer {viewer_id} in {room_id:?} timed out");
                     break;
                 }
-                if sink.send(WsMessage::Ping(Vec::new().into())).await.is_err() {
+                if timed_send(&mut sink, WsMessage::Ping(Vec::new().into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
         }
     }
     reader.abort();
+    // Best effort: a Close frame lets the page distinguish a server
+    // close from a network drop (it reconnects either way)
+    let _ = tokio::time::timeout(
+        Duration::from_secs(1),
+        sink.send(WsMessage::Close(None)),
+    )
+    .await;
     state.viewers.leave(&room, viewer_id);
     info!("WS viewer {viewer_id} left room {room_id:?}");
     if let Some(tx) = state.usercount.get() {
@@ -564,7 +595,7 @@ async fn relay(
             Some(viewers::ViewerMsg::Bytes(payload)) => {
                 if pending_len + payload.len() > MAX_MERGED && !chunks.is_empty() {
                     let merged = take_merged(&mut chunks, &mut pending_len);
-                    sink.send(WsMessage::Binary(merged)).await?;
+                    timed_send(sink, WsMessage::Binary(merged)).await?;
                 }
                 pending_len += payload.len();
                 chunks.push(payload);
@@ -572,9 +603,9 @@ async fn relay(
             Some(viewers::ViewerMsg::Control(json)) => {
                 if !chunks.is_empty() {
                     let merged = take_merged(&mut chunks, &mut pending_len);
-                    sink.send(WsMessage::Binary(merged)).await?;
+                    timed_send(sink, WsMessage::Binary(merged)).await?;
                 }
-                sink.send(WsMessage::Text(json.into())).await?;
+                timed_send(sink, WsMessage::Text(json.into())).await?;
             }
             None => break,
         }
@@ -585,7 +616,7 @@ async fn relay(
     }
     if !chunks.is_empty() {
         let merged = take_merged(&mut chunks, &mut pending_len);
-        sink.send(WsMessage::Binary(merged)).await?;
+        timed_send(sink, WsMessage::Binary(merged)).await?;
     }
     Ok(())
 }

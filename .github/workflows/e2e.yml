@@ -17,7 +17,7 @@ jobs:
           - os: ubuntu-latest
             workers: 10
           # macOS runners have 3 cores; 10 workers oversubscribes them
-          # enough that Socket.IO joins flake on 5-15s timeouts
+          # enough that viewer connects flake on 5-15s timeouts
           - os: macos-latest
             workers: 4
     runs-on: ${{ matrix.os }}
