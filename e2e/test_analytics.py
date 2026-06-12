@@ -126,16 +126,17 @@ def test_full_lifecycle_emits_the_three_events(dedicated_server, mock_posthog):
     ended = mock_posthog.events_named("broadcast_ended")[0]
     viewed = mock_posthog.events_named("viewer_joined")[0]
 
-    # The broadcaster identity is stable across events and prefixed,
-    # the room identity is the plaintext room name in its own id space
+    # Broadcast events share the stable bc: identity (a machine running
+    # the CLI); the viewer join is an anonymous per-join id, never the
+    # broadcaster. Every event carries the plaintext room name, which is
+    # what ties the viewer join back to the broadcast events.
     assert started["distinct_id"].startswith("bc:")
     assert ended["distinct_id"] == started["distinct_id"]
-    assert viewed["distinct_id"] == f"room:{room}"
-
-    # Broadcast events carry the room id, so they join with viewer
-    # events (whose distinct_id IS the room)
-    assert started["properties"]["room"] == viewed["distinct_id"]
-    assert ended["properties"]["room"] == viewed["distinct_id"]
+    assert viewed["distinct_id"].startswith("viewer:")
+    assert viewed["distinct_id"] != started["distinct_id"]
+    assert started["properties"]["room"] == room
+    assert ended["properties"]["room"] == room
+    assert viewed["properties"]["room"] == room
     # This segment claimed the room - a fresh share, not a reconnect
     assert started["properties"]["new_room"] is True
 
@@ -230,7 +231,7 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
     first, second = mock_posthog.events_named("broadcast_started")
     assert first["properties"]["new_room"] is True
     assert second["properties"]["new_room"] is False
-    assert first["properties"]["room"] == f"room:{room}"
+    assert first["properties"]["room"] == room
     assert second["properties"]["room"] == first["properties"]["room"]
     assert second["distinct_id"] == first["distinct_id"]
 

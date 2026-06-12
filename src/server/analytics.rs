@@ -14,12 +14,15 @@
 //!   password)`: the default client password is MAC-derived, so the
 //!   HMAC is stable per machine (recurring-user detection) while the
 //!   secret salt keeps the small MAC space safe from enumeration and
-//!   keeps custom passwords uncrackable from the analytics data. Room
-//!   names, by contrast, are sent in plaintext - they are share-link
-//!   slugs, visible to anyone with the link, and readable dashboards
-//!   beat hiding them. Broadcast events carry the room id as a
-//!   property, linking a broadcaster to its rooms so the operator can
-//!   join broadcast metrics to viewer metrics.
+//!   keeps custom passwords uncrackable from the analytics data. That
+//!   `bc:` identity is the distinct id of every broadcast event, so a
+//!   "person" in `PostHog` is a machine running the CLI. Viewers send
+//!   no credentials and have no server-side identity, so `viewer_joined`
+//!   gets a throwaway random distinct id per join - an anonymous viewer,
+//!   never conflated with the broadcaster. Room names ride along as a
+//!   plain `room` property on every event: they are share-link slugs,
+//!   visible to anyone with the link, readable dashboards beat hiding
+//!   them, and they tie viewer joins back to the broadcast events.
 //! - **Stateless server**: the salt is operator-supplied, not generated,
 //!   so identities survive restarts and server moves (reuse the salt).
 //!
@@ -136,7 +139,7 @@ impl Analytics {
                 name: "broadcast_started",
                 distinct_id: inner.broadcaster_id(password),
                 properties: serde_json::json!({
-                    "room": Inner::room_id(room_name),
+                    "room": room_name,
                     "new_room": new_room,
                 }),
             });
@@ -153,7 +156,7 @@ impl Analytics {
                 name: "broadcast_ended",
                 distinct_id: inner.broadcaster_id(password),
                 properties: serde_json::json!({
-                    "room": Inner::room_id(room_name),
+                    "room": room_name,
                     // Fractional: short segments would otherwise all
                     // truncate to 0 and undercount reconnect-heavy runs
                     "duration_seconds": duration.as_secs_f64(),
@@ -164,15 +167,20 @@ impl Analytics {
 
     /// A viewer joined an existing room - live (`broadcasting`) or a
     /// replay of one whose broadcaster dropped but wasn't evicted yet.
-    /// Viewers send no credentials, so the identity is the room's, not
-    /// the viewer's: this measures rooms that got an audience and how
-    /// big it was, not unique viewers.
+    /// Viewers send no credentials and have no server-side identity, so
+    /// each join gets a throwaway random distinct id: the event honestly
+    /// represents an anonymous viewer (not the broadcaster), and the
+    /// `room` property still ties it back to the broadcast events. This
+    /// measures which rooms drew an audience and how big it was (via
+    /// `user_count`), not unique viewers - the id deliberately carries
+    /// no information to dedupe on.
     pub fn viewer_joined(&self, room_name: &str, user_count: usize, broadcasting: bool) {
         if let Some(inner) = &self.inner {
             inner.send(Event {
                 name: "viewer_joined",
-                distinct_id: Inner::room_id(room_name),
+                distinct_id: format!("viewer:{:032x}", rand::random::<u128>()),
                 properties: serde_json::json!({
+                    "room": room_name,
                     "user_count": user_count,
                     "broadcasting": broadcasting,
                 }),
@@ -189,18 +197,10 @@ impl Inner {
         }
     }
 
-    /// Stable pseudonymous broadcaster identity. The `bc:` prefix keeps
-    /// this id space disjoint from room-derived ids.
+    /// Stable pseudonymous broadcaster identity - the distinct id of
+    /// every event. The `bc:` prefix marks the id as a broadcaster's.
     fn broadcaster_id(&self, password: &str) -> String {
         format!("bc:{}", hmac_hex(&self.salt, password))
-    }
-
-    /// Room identity: the distinct id of viewer events and the `room`
-    /// property of broadcast events, so the two sides join on it.
-    /// Plaintext by choice (see the module doc); the `room:` prefix
-    /// keeps this id space disjoint from broadcaster ids.
-    fn room_id(room_name: &str) -> String {
-        format!("room:{room_name}")
     }
 }
 
