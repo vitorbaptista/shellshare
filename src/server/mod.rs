@@ -205,7 +205,7 @@ pub async fn serve_on(
 ///
 /// The connect handler MUST stay synchronous: socketioxide sends the
 /// connect ack to the client and only then runs this handler - an async
-/// handler is tokio::spawn'ed, so under load a client's first `join`
+/// handler is `tokio::spawn`'ed, so under load a client's first `join`
 /// (emitted as soon as it sees the ack) could arrive before
 /// `socket.on("join")` is registered and be silently dropped, leaving a
 /// viewer stuck on an empty terminal. A sync handler registers
