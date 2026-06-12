@@ -18,6 +18,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
+    serve::ListenerExt,
     Router,
 };
 use crate::protocol;
@@ -62,6 +63,10 @@ struct AppState {
     /// Socket.IO instance - set once at startup, lock-free to read on the
     /// broadcast hot path
     io: Arc<OnceLock<SocketIo>>,
+    /// Queue feeding the fan-out task - set once at startup, like `io`
+    fanout: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<FanoutItem>>>,
+    /// Rooms whose user count changed and needs re-broadcasting
+    usercount: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<String>>>,
     /// Track which rooms each socket is in (for disconnect handling)
     socket_rooms: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Cleanup configuration for abandoned rooms
@@ -157,6 +162,13 @@ pub async fn serve_on(
     // that needs the fallback.
     let (sio_layer, io) = SocketIo::builder()
         .transports([socketioxide::TransportType::Websocket])
+        // Per-viewer send queue, in packets (default 128). Queued
+        // packets are refcounted clones of one broadcast payload, so
+        // depth is nearly free - but overflow silently drops frames for
+        // that viewer, losing content with no signal to anyone. Deep
+        // queue + fan-out coalescing makes a viewer have to fall
+        // ~128MB behind before that can happen.
+        .max_buffer_size(2048)
         .with_state(app_state.clone())
         .build_layer();
 
@@ -165,6 +177,20 @@ pub async fn serve_on(
 
     // Store io in shared state (handlers will see this via Arc)
     let _ = app_state.io.set(io);
+
+    // The viewer fan-out task: ingest stores and acks, this emits.
+    // Both tasks get only the io cell, not AppState: AppState holds
+    // their senders, and a task holding its own sender would keep its
+    // channel (and itself) alive forever
+    let (fanout_tx, fanout_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _ = app_state.fanout.set(fanout_tx);
+    tokio::spawn(fanout_loop(fanout_rx, app_state.io.clone()));
+
+    // The user-count broadcast task: joins and disconnects queue the
+    // room here instead of broadcasting inline
+    let (usercount_tx, usercount_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _ = app_state.usercount.set(usercount_tx);
+    tokio::spawn(usercount_loop(usercount_rx, app_state.io.clone()));
 
     // Spawn background cleanup task for abandoned rooms
     spawn_cleanup_task(app_state.clone());
@@ -192,6 +218,12 @@ pub async fn serve_on(
     let mut servers = Vec::with_capacity(listeners.len());
     for listener in listeners {
         info!("Listening on {}", listener.local_addr()?);
+        // Terminal frames are small and frequent - exactly the case
+        // Nagle's algorithm stalls (up to ~40ms against delayed ACKs).
+        // The client side already sets nodelay on its socket
+        let listener = listener.tap_io(|tcp| {
+            let _ = tcp.set_nodelay(true);
+        });
         servers.push(tokio::spawn(axum::serve(listener, app.clone()).into_future()));
     }
     for server in servers {
@@ -285,13 +317,17 @@ fn setup_socket_handlers(io: &SocketIo) {
                     .sockets()
                     .map_or(0, |s| s.len());
 
-                // Send user count directly to this client (guaranteed delivery)
+                // Send user count directly to this client (guaranteed
+                // delivery - clients treat it as the join confirmation)
                 if let Err(e) = socket.emit("usersCount", &user_count) {
                     warn!("Failed to emit usersCount: {:?}", e);
                 }
 
-                // Also broadcast to notify other clients in the room
-                let _ = socket.within(room_name).emit("usersCount", &user_count);
+                // Notify the rest of the room via the coalescing task:
+                // broadcasting from every join is O(N^2) in a connect storm
+                if let Some(tx) = state.usercount.get() {
+                    let _ = tx.send(room_name);
+                }
 
                 // Joins to nonexistent rooms (dead links) are not an
                 // audience and would only inflate the numbers; replay
@@ -317,18 +353,11 @@ fn setup_socket_handlers(io: &SocketIo) {
 
             info!("Socket {} was in rooms: {:?}", socket_id, rooms);
 
-            // Update user counts for each room
-            if let Some(io) = state.io.get() {
+            // Update user counts for each room (the coalescing task
+            // computes the count after this socket's removal)
+            if let Some(tx) = state.usercount.get() {
                 for room in rooms {
-                    // Count remaining users in room (this socket is already removed)
-                    let user_count = io.of("/").map_or(0, |ns| {
-                        ns.within(room.clone()).sockets().map_or(0, |s| s.len())
-                    });
-                    info!("Room {room:?} now has {user_count} users");
-                    // Emit with fresh ns reference
-                    if let Some(ns) = io.of("/") {
-                        let _ = ns.within(room).emit("usersCount", &user_count);
-                    }
+                    let _ = tx.send(room);
                 }
             }
         });
@@ -352,10 +381,15 @@ async fn broadcast_handler(Path(room_path): Path<String>, _body: Bytes) -> impl 
 /// Store a broadcast and forward it to viewers - the single ingest path
 /// shared by the HTTP and WebSocket transports.
 ///
-/// The room is claimed/verified and mutated atomically, BEFORE emitting,
-/// so a viewer joining mid-broadcast can't miss the message entirely.
-/// Size is forwarded FIRST, so the terminal is resized before content
-/// arrives.
+/// The room is claimed/verified and mutated atomically, BEFORE the
+/// fan-out is queued, so a viewer joining mid-broadcast can't miss the
+/// message entirely. Size is queued FIRST, so the terminal is resized
+/// before content arrives.
+///
+/// Forwarding goes through [`fanout_loop`] instead of emitting inline:
+/// emitting to N viewer sockets costs O(N), and paying it here would
+/// stall this broadcaster's ack turnaround - measurably collapsing
+/// ingest throughput as the audience grows.
 async fn ingest(
     state: &AppState,
     room_id: &RoomId,
@@ -365,23 +399,166 @@ async fn ingest(
 ) -> Result<(), rooms::Unauthorized> {
     let _ = state.rooms.append(room_id, secret, size, message).await?;
 
-    if let Some(io) = state.io.get() {
-        let room_name = room_id.as_str().to_string();
-        if let Some(size) = size {
-            if let Some(ns) = io.of("/") {
-                let _ = ns.within(room_name.clone()).emit("size", size);
-            }
-        }
-        // Emit ONLY the new message - as a binary attachment - and let
-        // joins deliver the accumulated history
-        if let Some(message) = message {
-            if let Some(ns) = io.of("/") {
-                let _ = ns.within(room_name).emit("message", message);
-            }
-        }
+    if let Some(tx) = state.fanout.get() {
+        // The channel is unbounded; depth is bounded in practice by the
+        // aggregate ingest rate across broadcasters, and queued payloads
+        // are refcounted slices of already-stored history. All rooms
+        // share one consumer, so a very large audience in one room can
+        // delay another room's emits - acceptable until multi-room load
+        // says otherwise (per-room ordering is the only hard requirement)
+        let _ = tx.send(FanoutItem {
+            room: room_id.as_str().to_string(),
+            size: size.cloned(),
+            payload: message.cloned(),
+        });
     }
 
     Ok(())
+}
+
+/// One unit of viewer fan-out work: a `size` control event and/or a
+/// binary terminal payload for a room, in broadcast order.
+struct FanoutItem {
+    room: String,
+    size: Option<serde_json::Value>,
+    payload: Option<Bytes>,
+}
+
+/// Max bytes coalesced into a single viewer frame. Matches the client's
+/// own send batching (`MAX_BATCH` in `cli/script.rs`), so viewers never
+/// see a frame shape the client couldn't already have produced.
+const FANOUT_MAX_BATCH: usize = 64 * 1024;
+
+/// The viewer fan-out task: drains the queue and emits to Socket.IO.
+///
+/// Whatever queued up while the previous emits ran is coalesced - each
+/// room's payloads are concatenated (up to [`FANOUT_MAX_BATCH`] per
+/// emit), exactly like the client's sender thread coalesces PTY output.
+/// Under burst load this collapses thousands of tiny per-socket sends
+/// into a few large ones, which is what keeps slow viewers' buffers
+/// from overflowing into silent content loss. Terminal output is a raw
+/// byte stream of whole frames, so concatenation is invisible to
+/// viewers (room history already concatenates the same way).
+///
+/// A single task consumes the queue, so per-room ordering is exactly
+/// the ingest order (cross-room ordering carries no meaning). The
+/// store-then-queue gap means a viewer joining mid-burst may see a
+/// queued frame around its history replay - duplicated, or even before
+/// the replay containing it. That race pre-exists this task (emits were
+/// always concurrent with the join handler); the queue widens it from
+/// microseconds to the drain latency. Same class as the duplicate
+/// render already accepted around client reconnect replay: delivery is
+/// at-least-once end to end.
+async fn fanout_loop(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<FanoutItem>,
+    io: Arc<OnceLock<SocketIo>>,
+) {
+    /// Payloads accumulated for one room, flushed as one emit.
+    #[derive(Default)]
+    struct Pending {
+        chunks: Vec<Bytes>,
+        len: usize,
+    }
+
+    fn flush(io: &SocketIo, room: &str, p: Pending) {
+        if p.chunks.is_empty() {
+            return;
+        }
+        let payload = if p.chunks.len() == 1 {
+            p.chunks.into_iter().next().unwrap_or_default()
+        } else {
+            let mut buf = bytes::BytesMut::with_capacity(p.len);
+            for chunk in p.chunks {
+                buf.extend_from_slice(&chunk);
+            }
+            buf.freeze()
+        };
+        if let Some(ns) = io.of("/") {
+            let _ = ns.within(room.to_string()).emit("message", &payload);
+        }
+    }
+
+    while let Some(first) = rx.recv().await {
+        let mut batch = vec![first];
+        while let Ok(item) = rx.try_recv() {
+            batch.push(item);
+        }
+        // `io` is set before the channel exists; an unset value here
+        // would silently drop the whole batch, so keep that invariant
+        let Some(io) = io.get() else { continue };
+        let mut pending: HashMap<String, Pending> = HashMap::new();
+        for item in batch {
+            if let Some(size) = item.size {
+                // A size event is an ordering barrier within its room:
+                // anything queued before it must reach viewers first
+                if let Some(p) = pending.remove(&item.room) {
+                    flush(io, &item.room, p);
+                }
+                if let Some(ns) = io.of("/") {
+                    let _ = ns.within(item.room.clone()).emit("size", &size);
+                }
+            }
+            if let Some(payload) = item.payload {
+                match pending.entry(item.room) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        if e.get().len + payload.len() > FANOUT_MAX_BATCH {
+                            let full = std::mem::take(e.get_mut());
+                            flush(io, e.key(), full);
+                        }
+                        let p = e.get_mut();
+                        p.len += payload.len();
+                        p.chunks.push(payload);
+                    }
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        v.insert(Pending {
+                            len: payload.len(),
+                            chunks: vec![payload],
+                        });
+                    }
+                }
+            }
+        }
+        for (room, p) in pending {
+            flush(io, &room, p);
+        }
+    }
+}
+
+/// The user-count broadcast task: re-announces a room's viewer count
+/// to the room whenever its membership changed.
+///
+/// Joins and disconnects queue the room name here instead of
+/// broadcasting inline: an audience of N joining produces N broadcasts
+/// to up to N members - O(N^2) emits in a connect storm. Draining and
+/// deduplicating turns that into at most one broadcast per room per
+/// pass, each carrying the count current at emit time, so every viewer
+/// still converges on the exact final number (intermediate values may
+/// be skipped, exactly as if the joins had raced the same broadcast).
+async fn usercount_loop(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    io: Arc<OnceLock<SocketIo>>,
+) {
+    let mut rooms = std::collections::HashSet::new();
+    while let Some(first) = rx.recv().await {
+        rooms.insert(first);
+        while let Ok(room) = rx.try_recv() {
+            rooms.insert(room);
+        }
+        // Set before the channel exists, like in fanout_loop
+        let Some(io) = io.get() else {
+            rooms.clear();
+            continue;
+        };
+        for room in rooms.drain() {
+            let count = io
+                .of("/")
+                .and_then(|ns| ns.within(room.clone()).sockets().ok())
+                .map_or(0, |sockets| sockets.len());
+            if let Some(ns) = io.of("/") {
+                let _ = ns.within(room).emit("usersCount", &count);
+            }
+        }
+    }
 }
 
 /// GET /ws/r/:room - WebSocket ingest for broadcasting clients.

@@ -22,6 +22,8 @@ e2e/.pytest_cache/
 
 # Benchmark results (machine-specific snapshots)
 e2e/bench-*.json
+e2e/fanout-*.json
+e2e/capacity-*.json
 
 # Misc
 ecosystem.json5
