@@ -19,7 +19,13 @@
     "broadcast",
     "shell",
     "live",
-    "tty"
+    "tty",
+    "terminal-sharing",
+    "screen-sharing",
+    "streaming",
+    "pty",
+    "cli",
+    "ai-agents"
   ],
   "engines": {
     "node": ">=14"

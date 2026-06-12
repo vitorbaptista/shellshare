@@ -86,12 +86,15 @@ impl RawModeGuard {
     }
 }
 
-/// Run script mode - spawn a shell in a PTY and stream output to server
+/// Run script mode - spawn a shell (or, for `exec`, a single command) in a
+/// PTY and stream output to server. Returns the exit code to propagate:
+/// the child's status when it can be observed, otherwise 0.
 #[allow(clippy::too_many_lines)] // Complex PTY setup with multiple threads
 pub fn run_script_mode(
     transport: ws::Transport,
     running: &Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error>> {
+    exec: Option<&[String]>,
+) -> Result<i32, Box<dyn std::error::Error>> {
     // Enable raw mode BEFORE spawning shell
     // This allows character-by-character input and proper escape sequence handling
     // for interactive TUI apps like vim, less, htop, etc.
@@ -119,8 +122,16 @@ pub fn run_script_mode(
     // Open a PTY pair
     let pair = pty_system.openpty(pty_size)?;
 
-    // Build command to spawn the shell, preserving current working directory
-    let mut cmd = CommandBuilder::new(&shell);
+    // Build the command to spawn - the user's shell, or the `exec`
+    // command verbatim - preserving the current working directory
+    let mut cmd = match exec {
+        Some([program, args @ ..]) => {
+            let mut cmd = CommandBuilder::new(program);
+            cmd.args(args);
+            cmd
+        }
+        _ => CommandBuilder::new(&shell),
+    };
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
@@ -343,6 +354,10 @@ pub fn run_script_mode(
         }
     });
 
+    // The child's exit status when it could be observed; `exec` forwards
+    // it to the caller (interrupted/unobservable children report 0)
+    let mut exit_code = 0;
+
     // Poll child status instead of blocking, so we can respond to Ctrl+C and resize requests
     loop {
         // Check if Ctrl+C was pressed
@@ -367,8 +382,9 @@ pub fn run_script_mode(
 
         // Check if child has exited (non-blocking)
         match child.try_wait() {
-            Ok(Some(_status)) => {
+            Ok(Some(status)) => {
                 // Child exited
+                exit_code = i32::try_from(status.exit_code()).unwrap_or(1);
                 break;
             }
             Ok(None) => {
@@ -382,9 +398,6 @@ pub fn run_script_mode(
         }
     }
 
-    // Signal threads to stop
-    running.store(false, Ordering::SeqCst);
-
     // Close our copy of the slave BEFORE joining the reader thread.
     // The child has exited (or been killed and reaped, bounded) in every
     // path that reaches here, so this is safe on Windows too (portable-pty
@@ -393,9 +406,31 @@ pub fn run_script_mode(
     // forever, hanging the join below.
     drop(pair.slave);
 
-    // Wait for threads to finish
+    // Do NOT flip `running` before joining: a short-lived child (e.g.
+    // `shellshare exec -- echo hi`) can exit before the reader thread
+    // gets scheduled, and the flag would make it quit without draining
+    // the output still buffered in the PTY. With the slave closed the
+    // reader drains to EOF and exits on its own; dropping its sender
+    // then ends the network thread after the channel is emptied. On
+    // Ctrl+C `running` is already false, keeping interrupts immediate.
+    //
+    // The drain must be bounded, though: an orphan that outlived the
+    // child (e.g. `ping example.com & exit`) holds the slave open and
+    // keeps writing, so EOF never comes. The watchdog flips the flag
+    // after a grace period and the reader stops at its next read.
+    let drain_watchdog = {
+        let running = running.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(2));
+            running.store(false, Ordering::SeqCst);
+        })
+    };
     let _ = stream_thread.join();
     let _ = http_thread.join();
+    drop(drain_watchdog);
+
+    // Signal the remaining helper threads (stdin forwarder, SIGWINCH) to stop
+    running.store(false, Ordering::SeqCst);
 
     // Join SIGWINCH handler thread (Unix only)
     #[cfg(unix)]
@@ -407,5 +442,5 @@ pub fn run_script_mode(
         let _ = handle.join();
     }
 
-    Ok(())
+    Ok(exit_code)
 }
