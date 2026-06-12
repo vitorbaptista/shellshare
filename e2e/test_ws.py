@@ -257,7 +257,7 @@ class TestReliability:
                 wait_for_server(url)
 
                 # Re-claim the room and broadcast; the viewer must pick it
-                # up once socket.io reconnects and the page re-joins
+                # up once the viewer WebSocket reconnects and resyncs
                 deadline = time.time() + 20
                 seen = False
                 while time.time() < deadline and not seen:

@@ -10,7 +10,7 @@ server spawned from the release binary. Not a pytest test: run it directly.
 Scenarios:
 - ingest_ack_rtt:     binary frame -> server ack round-trip on one
                       WebSocket connection (the client's send unit)
-- broadcast_latency:  frame sent -> Socket.IO message received by a viewer
+- broadcast_latency:  frame sent -> viewer WebSocket message received
 - cli_latency:        byte written to the CLI's PTY -> received by a viewer
                       (the headline number: the full real pipeline)
 - ingest_throughput:  4KB frames streamed on one connection until the
@@ -149,7 +149,7 @@ def bench_cli_latency(url, iters=30):
         for i in range(iters + 3):
             # Raw bytes typed at the terminal: the line discipline echoes
             # them, so they traverse PTY -> client batcher -> POST ->
-            # Socket.IO without shell command execution noise.
+            # the viewer WebSocket without shell command execution noise.
             marker = f"m{i}x{random_id(6)}"
             t0 = time.perf_counter()
             cli.write(marker.encode())

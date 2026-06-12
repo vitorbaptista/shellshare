@@ -24,6 +24,7 @@ e2e/.pytest_cache/
 e2e/bench-*.json
 e2e/fanout-*.json
 e2e/capacity-*.json
+e2e/multiroom-*.json
 
 # Misc
 ecosystem.json5

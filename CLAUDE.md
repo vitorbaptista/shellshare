@@ -47,8 +47,9 @@ Key files:
 - `crypto.rs`: end-to-end encryption, on by default (opt out with `--disable-encryption`). Every output chunk is sealed into a self-delimiting AES-256-GCM record (`[u32 BE len][nonce][ciphertext+tag]`) as it enters the replay buffer, so acks/replay operate on ciphertext and the server stays an opaque relay (zero server changes - it never knew about encryption). The key is HKDF-derived from this machine's id and the room name (so a named room keeps one reusable share link across restarts; nothing is written to disk) and rides only in the link's `#fragment`. The `size` message carries `encrypted: true` so the viewer knows whether to decrypt (via WebCrypto, needs https or localhost) or render plaintext, and shows an explanatory notice when an encrypted link's fragment is missing/invalid/wrong or the context is insecure. `--disable-encryption` broadcasts plaintext for viewers on plain HTTP (a classroom LAN), where browsers have no WebCrypto. Record format must stay in lockstep with `templates/room.html`. Threat model (honest-but-curious server serving the unmodified page; key secrecy rests on the high-entropy machine id; metadata/timing still visible) is documented in `crypto.rs`
 
 ### Server (`src/server/`)
-Async Tokio + Axum web server with Socket.IO for real-time updates. Socket.IO is WebSocket-only on both ends (server config + viewer page + e2e listeners): the engine.io HTTP long-polling encoder corrupts binary events delivered to a parked long-poll, so polling is rejected outright rather than left as a fallback.
-- `mod.rs`: Router and HTTP/Socket.IO handlers - thin translators that delegate to the modules below
+Async Tokio + Axum web server. Viewers connect over a raw WebSocket (`/ws/v/r/:room`) that mirrors the ingest protocol: binary frames are terminal bytes, JSON text frames are control events (`size`, `usersCount`, `broadcasting`). The room is the URL, so there is no join handshake; the server pushes the room snapshot (size, history, broadcasting, usersCount - in that order, usersCount always last) on every connect, making reconnects a clean resync. A viewer that falls hopelessly behind its bounded send queue is disconnected on purpose (the page reconnects and resyncs) instead of silently losing frames. Socket.IO was removed: its per-message double frame (announce + attachment) doubled fan-out work, and its engine.io layer had an unfixable header/attachment interleave race.
+- `mod.rs`: Router, WebSocket handlers, and the fan-out/usercount tasks - thin translators that delegate to the modules below
+- `viewers.rs`: the raw-WebSocket viewer registry (who watches which room, bounded per-viewer queues, disconnect-on-overflow)
 - `rooms.rs`: All room lifecycle behind one interface - first-caller-wins password claiming, message history (max 100), canonical room names (`RoomId`), activity tracking and TTL eviction. One entry, one lock (a sharded `DashMap`): authorization and mutation are a single critical section on their room, so concurrent broadcasters never serialize on a shared lock
 - `pages.rs`: Home page (install options: npx by default, plus per-OS binary downloads), viewer page, embedded static assets
 - `binaries.rs`: Platform detection and binary downloads at `/bin/shellshare`
@@ -56,13 +57,14 @@ Async Tokio + Axum web server with Socket.IO for real-time updates. Socket.IO is
 Routes:
 - `GET /` - Home page with install instructions (npx selected by default)
 - `GET /r/:room` - Viewer page
-- `GET /ws/r/:room` - WebSocket ingest (the only broadcast transport): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked. Each open connection counts as an attached broadcaster: viewers get a `broadcasting` Socket.IO event (current state on join, plus every transition) driving the online/offline indicator in the viewer page; a connection silent past 90s (clients ping every 30s) is treated as dead
+- `GET /ws/r/:room` - WebSocket ingest (the only broadcast transport): claimed/verified at the handshake, binary frames are terminal bytes, text frames are control messages, every stored frame is acked. Each open connection counts as an attached broadcaster: viewers get a `broadcasting` control event (current state on connect, plus every transition) driving the online/offline indicator in the viewer page; a connection silent past 90s (clients ping every 30s) is treated as dead
+- `GET /ws/v/r/:room` - WebSocket viewer endpoint (see above): connect snapshot, then live binary frames and JSON control events; server pings keep the user count free of ghosts
 - `POST /r/:room` - Retired: always 410 Gone with an upgrade message, so pre-WebSocket clients fail loudly instead of silently
 - `DELETE /r/:room` - Cleanup room
 
 ### Wire Protocol (`src/protocol.rs`)
 Terminal output is **raw bytes** end to end: binary WebSocket frames from
-the CLI, raw bytes in room history, binary Socket.IO attachments to
+the CLI, raw bytes in room history, binary WebSocket frames to
 viewers, written as bytes into xterm.js, which does its own streaming
 UTF-8 decode (the viewer script is inline in `templates/room.html`;
 xterm.js and its WebGL/Unicode11 addons are vendored under
@@ -79,7 +81,7 @@ lives here too. Must stay in lockstep with `templates/room.html` and
 
 E2E tests are the single source of truth - there are no Rust unit tests by design. The implementation is free to change as long as the e2e suite stays green.
 
-The suite in `e2e/` uses Python pytest + Playwright and manages its own servers: a shared one started automatically on a free port (pin it with `SHELLSHARE_E2E_PORT` to reuse a pre-started server) plus per-test dedicated servers with custom flags (e.g. short `--room-ttl` for eviction tests). Coverage spans the HTTP API, Socket.IO events, full CLI-to-browser integration, real-TTY CLI sessions (`test_cli_tty.py`: resize/SIGWINCH, Ctrl+C handling, cleanup on exit), room TTL eviction, and binary downloads.
+The suite in `e2e/` uses Python pytest + Playwright and manages its own servers: a shared one started automatically on a free port (pin it with `SHELLSHARE_E2E_PORT` to reuse a pre-started server) plus per-test dedicated servers with custom flags (e.g. short `--room-ttl` for eviction tests). Coverage spans the HTTP API, the viewer WebSocket protocol, full CLI-to-browser integration, real-TTY CLI sessions (`test_cli_tty.py`: resize/SIGWINCH, Ctrl+C handling, cleanup on exit), room TTL eviction, and binary downloads.
 
 # Additional instructions
 

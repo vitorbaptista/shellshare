@@ -3,7 +3,7 @@ Shared fixtures and constants for CLI E2E tests.
 
 This module provides:
 - CLI path constants for testing the shellshare CLI
-- Socket.IO listener class for verifying messages via WebSocket
+- Viewer WebSocket listener class for verifying broadcast data
 - Pytest fixtures for unique rooms, passwords, and socket listeners
 """
 
@@ -174,7 +174,7 @@ class ServerHandle:
     def url(self):
         # 127.0.0.1, not localhost: the server binds IPv4 only, and on
         # Windows localhost can resolve to ::1 first, making fresh
-        # Socket.IO connections slow or flaky
+        # WebSocket connections slow or flaky
         return f"http://127.0.0.1:{self.port}"
 
 
@@ -340,8 +340,8 @@ def broadcast_message(server_url, room, password, text=None, size=_UNSET, key=No
 
 
 def decode_message(data):
-    """Decode a received message: raw terminal bytes, sent as a Socket.IO
-    binary attachment."""
+    """Decode a received message: raw terminal bytes from a binary
+    WebSocket frame."""
     return bytes(data).decode("utf-8", errors="replace")
 
 

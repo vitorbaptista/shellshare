@@ -61,7 +61,7 @@ class TestScriptModeBasic:
     """Basic tests for script mode."""
 
     def test_script_mode_streams_output(self, unique_room, unique_password):
-        """PTY output should appear via Socket.IO."""
+        """PTY output should appear on the viewer WebSocket."""
         listener = SocketListener(unique_room)
         listener.connect()
 

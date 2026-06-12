@@ -13,7 +13,7 @@ the release binary.
 Per viewer count, three phases against a fresh room:
 
 - idle:     viewers connected, broadcaster silent. Cost of just holding
-            N Socket.IO connections.
+            N viewer connections.
 - paced:    frames at a fixed rate (default 30/s of 256 B - a busy TUI).
             Reports broadcaster-send -> viewer-receive latency pooled
             across every viewer and frame, plus frame loss and server CPU.
@@ -28,8 +28,7 @@ latencies - and it still does, a little: 50 viewers per process adds
 ~10 ms to the latency percentiles; 10 per process adds ~2 ms. Use
 fewer viewers per worker when latency is the number under study, more
 when connection scale is. Loss counts are immune to this. Each
-worker speaks minimal Socket.IO over a raw WebSocket - no
-python-socketio client threads - and answers engine.io pings.
+worker speaks the raw viewer WebSocket protocol directly.
 
 Frame loss is real signal, not harness noise: delivery to each viewer
 is ordered, so a viewer that saw the end marker but counted fewer
@@ -81,9 +80,9 @@ if LOADGEN and not os.path.exists(LOADGEN):
 # --------------------------------------------------------------------
 
 class Viewer:
-    """Minimal Socket.IO viewer over a raw WebSocket.
+    """One viewer on the raw WebSocket endpoint.
 
-    Joins the room, then records every binary frame it receives:
+    Connects to the room, then records every binary frame it receives:
     paced frames (`T:<seq>:<t_send>:...`) yield a latency sample,
     firehose frames (`F:<seq>:...`) a byte count. The end marker
     (`END:<paced_total>:<fire_total>`) stops the viewer: delivery is

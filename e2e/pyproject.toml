@@ -7,7 +7,8 @@ dependencies = [
     "cryptography>=48.0.0",
     "playwright>=1.40.0",
     "pytest>=8.0.0",
-    "python-socketio[client]>=5.0.0",
+    "requests>=2.34.2",
+    "websocket-client>=1.9.0",
     "wsaccel>=0.6.7",
 ]
 

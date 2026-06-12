@@ -47,9 +47,6 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Socket.IO (server)
-socketioxide = { version = "0.15", features = ["state"] }
-
 # URL encoding/decoding
 percent-encoding = "2.3"
 
@@ -78,6 +75,7 @@ aes-gcm = "0.10.3"
 machine-uid = "0.6.0"
 hkdf = "0.12.4"
 dashmap = "6.2.1"
+futures-util = { version = "0.3.32", default-features = false, features = ["std", "sink"] }
 
 [profile.release]
 lto = true

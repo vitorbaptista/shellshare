@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 /// Outgoing queue depth per viewer, in messages. Fan-out coalesces
 /// bursts into 64KB frames, so this is ~64MB of (shared) backlog - a
 /// viewer must stall outright to hit it.
-const VIEWER_QUEUE: usize = 1024;
+const VIEWER_QUEUE: usize = 2048;
 
 /// One message to one viewer: terminal bytes, or a pre-serialized JSON
 /// control event (`{"size":...}`, `{"usersCount":n}`,
