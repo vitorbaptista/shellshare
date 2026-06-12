@@ -34,6 +34,7 @@ import re
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 import websocket
 
 from conftest import (
@@ -213,75 +214,35 @@ class TestLegacyPostRetired:
     broadcasts anything to viewers.
     """
 
-    def test_post_old_style_body_returns_410(self):
-        """A well-formed old-style broadcast body should get 410 Gone."""
+    @pytest.mark.parametrize("body,extra_headers", [
+        pytest.param(
+            json.dumps({"message": "SGVsbG8sIFdvcmxkIQ==",
+                        "size": {"rows": 24, "cols": 80}}),
+            {"Authorization": "a-password"},
+            id="old-style-body",
+        ),
+        pytest.param("", {"Authorization": "a-password"}, id="empty-body"),
+        pytest.param(
+            "{ this is not valid json }",
+            {"Authorization": "a-password"},
+            id="malformed-json",
+        ),
+        pytest.param(
+            json.dumps({"message": "SGVsbG8=",
+                        "size": {"rows": 24, "cols": 80}}),
+            {},
+            id="no-authorization",
+        ),
+    ])
+    def test_post_always_returns_410(self, body, extra_headers):
+        """Any POST - well-formed, empty, malformed, unauthenticated -
+        gets the same 410 Gone with the upgrade message."""
         wait_for_server(SERVER_URL)
         room_id = f"test-{random_id()}"
-        password = f"secret-{random_id()}"
-
-        body = {
-            "message": "SGVsbG8sIFdvcmxkIQ==",
-            "size": {"rows": 24, "cols": 80}
-        }
-
-        status, headers, resp_body = make_request(
-            'POST', f'/r/{room_id}',
-            headers={"Authorization": password},
-            body=body
-        )
-
-        assert status == 410, f"Expected 410, got {status}"
-        assert resp_body == LEGACY_POST_GONE_BODY, f"Unexpected 410 body: {resp_body}"
-
-    def test_post_empty_body_returns_410(self):
-        """POST with an empty body should get 410 Gone."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-        password = f"secret-{random_id()}"
 
         status, headers, resp_body = make_raw_request(
             'POST', f'/r/{room_id}',
-            headers={
-                "Authorization": password,
-                "Content-Type": "application/json"
-            },
-            body=""
-        )
-
-        assert status == 410, f"Expected 410, got {status}"
-        assert resp_body == LEGACY_POST_GONE_BODY, f"Unexpected 410 body: {resp_body}"
-
-    def test_post_malformed_json_returns_410(self):
-        """POST with malformed JSON should get 410 Gone, not 400."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-        password = f"secret-{random_id()}"
-
-        status, headers, resp_body = make_raw_request(
-            'POST', f'/r/{room_id}',
-            headers={
-                "Authorization": password,
-                "Content-Type": "application/json"
-            },
-            body="{ this is not valid json }"
-        )
-
-        assert status == 410, f"Expected 410, got {status}"
-        assert resp_body == LEGACY_POST_GONE_BODY, f"Unexpected 410 body: {resp_body}"
-
-    def test_post_without_authorization_returns_410(self):
-        """POST without an Authorization header should get 410 Gone."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-
-        body = {
-            "message": "SGVsbG8=",
-            "size": {"rows": 24, "cols": 80}
-        }
-
-        status, headers, resp_body = make_request(
-            'POST', f'/r/{room_id}',
-            headers={},  # No Authorization header
+            headers={"Content-Type": "application/json", **extra_headers},
             body=body
         )
 
