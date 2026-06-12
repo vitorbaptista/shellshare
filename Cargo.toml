@@ -77,6 +77,7 @@ rustls = { version = "0.23.40", default-features = false, features = ["ring", "s
 aes-gcm = "0.10.3"
 machine-uid = "0.6.0"
 hkdf = "0.12.4"
+dashmap = "6.2.1"
 
 [profile.release]
 lto = true

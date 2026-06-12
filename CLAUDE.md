@@ -49,7 +49,7 @@ Key files:
 ### Server (`src/server/`)
 Async Tokio + Axum web server with Socket.IO for real-time updates. Socket.IO is WebSocket-only on both ends (server config + viewer page + e2e listeners): the engine.io HTTP long-polling encoder corrupts binary events delivered to a parked long-poll, so polling is rejected outright rather than left as a fallback.
 - `mod.rs`: Router and HTTP/Socket.IO handlers - thin translators that delegate to the modules below
-- `rooms.rs`: All room lifecycle behind one interface - first-caller-wins password claiming, message history (max 100), canonical room names (`RoomId`), activity tracking and TTL eviction. One map, one lock: authorization and mutation are a single critical section
+- `rooms.rs`: All room lifecycle behind one interface - first-caller-wins password claiming, message history (max 100), canonical room names (`RoomId`), activity tracking and TTL eviction. One entry, one lock (a sharded `DashMap`): authorization and mutation are a single critical section on their room, so concurrent broadcasters never serialize on a shared lock
 - `pages.rs`: Home page (install options: npx by default, plus per-OS binary downloads), viewer page, embedded static assets
 - `binaries.rs`: Platform detection and binary downloads at `/bin/shellshare`
 

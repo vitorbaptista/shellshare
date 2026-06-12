@@ -63,8 +63,11 @@ struct AppState {
     /// Socket.IO instance - set once at startup, lock-free to read on the
     /// broadcast hot path
     io: Arc<OnceLock<SocketIo>>,
-    /// Queue feeding the fan-out task - set once at startup, like `io`
-    fanout: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<FanoutItem>>>,
+    /// Queues feeding the fan-out tasks, one per shard - set once at
+    /// startup, like `io`. A room always hashes to the same shard, so
+    /// per-room ordering holds; spreading rooms across shards keeps one
+    /// busy room from delaying every other room's viewers
+    fanout: Arc<OnceLock<Vec<tokio::sync::mpsc::UnboundedSender<FanoutItem>>>>,
     /// Rooms whose user count changed and needs re-broadcasting
     usercount: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<String>>>,
     /// Track which rooms each socket is in (for disconnect handling)
@@ -178,13 +181,19 @@ pub async fn serve_on(
     // Store io in shared state (handlers will see this via Arc)
     let _ = app_state.io.set(io);
 
-    // The viewer fan-out task: ingest stores and acks, this emits.
-    // Both tasks get only the io cell, not AppState: AppState holds
+    // The viewer fan-out tasks: ingest stores and acks, these emit.
+    // The tasks get only the io cell, not AppState: AppState holds
     // their senders, and a task holding its own sender would keep its
-    // channel (and itself) alive forever
-    let (fanout_tx, fanout_rx) = tokio::sync::mpsc::unbounded_channel();
-    let _ = app_state.fanout.set(fanout_tx);
-    tokio::spawn(fanout_loop(fanout_rx, app_state.io.clone()));
+    // channel (and itself) alive forever. One task per shard, sized to
+    // the machine, so concurrent rooms emit in parallel
+    let shards = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
+    let mut fanout_txs = Vec::with_capacity(shards);
+    for _ in 0..shards {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        fanout_txs.push(tx);
+        tokio::spawn(fanout_loop(rx, app_state.io.clone()));
+    }
+    let _ = app_state.fanout.set(fanout_txs);
 
     // The user-count broadcast task: joins and disconnects queue the
     // room here instead of broadcasting inline
@@ -285,7 +294,7 @@ fn setup_socket_handlers(io: &SocketIo) {
                 // `join` until they see the usersCount confirmation, and
                 // replaying history for a retry that merely overtook a
                 // slow confirmation would duplicate terminal content
-                let snapshot = state.rooms.snapshot(&room_id).await;
+                let snapshot = state.rooms.snapshot(&room_id);
                 let room_exists = snapshot.is_some();
                 let broadcasting = snapshot.as_ref().is_some_and(|s| s.broadcasting);
                 if let Some(snapshot) = snapshot.filter(|_| newly_joined) {
@@ -390,23 +399,24 @@ async fn broadcast_handler(Path(room_path): Path<String>, _body: Bytes) -> impl 
 /// emitting to N viewer sockets costs O(N), and paying it here would
 /// stall this broadcaster's ack turnaround - measurably collapsing
 /// ingest throughput as the audience grows.
-async fn ingest(
+fn ingest(
     state: &AppState,
     room_id: &RoomId,
     secret: &str,
     size: Option<&serde_json::Value>,
     message: Option<&Bytes>,
 ) -> Result<(), rooms::Unauthorized> {
-    let _ = state.rooms.append(room_id, secret, size, message).await?;
+    let _ = state.rooms.append(room_id, secret, size, message)?;
 
-    if let Some(tx) = state.fanout.get() {
-        // The channel is unbounded; depth is bounded in practice by the
-        // aggregate ingest rate across broadcasters, and queued payloads
-        // are refcounted slices of already-stored history. All rooms
-        // share one consumer, so a very large audience in one room can
-        // delay another room's emits - acceptable until multi-room load
-        // says otherwise (per-room ordering is the only hard requirement)
-        let _ = tx.send(FanoutItem {
+    if let Some(txs) = state.fanout.get() {
+        // The channels are unbounded; depth is bounded in practice by
+        // the aggregate ingest rate across broadcasters, and queued
+        // payloads are refcounted slices of already-stored history. A
+        // room always lands on the same shard (hash below), which is
+        // what preserves its ordering; rooms sharing a shard can still
+        // delay each other, but the blast radius is 1/shards
+        let shard = room_shard(room_id.as_str(), txs.len());
+        let _ = txs[shard].send(FanoutItem {
             room: room_id.as_str().to_string(),
             size: size.cloned(),
             payload: message.cloned(),
@@ -414,6 +424,14 @@ async fn ingest(
     }
 
     Ok(())
+}
+
+/// Stable room -> fan-out shard assignment.
+fn room_shard(room: &str, shards: usize) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    room.hash(&mut hasher);
+    usize::try_from(hasher.finish() % shards.max(1) as u64).unwrap_or(0)
 }
 
 /// One unit of viewer fan-out work: a `size` control event and/or a
@@ -577,7 +595,7 @@ async fn ws_ingest_handler(
     let room_id = RoomId::parse(&room_path);
     let secret = auth_secret(&headers).to_string();
 
-    let claimed = match state.rooms.append(&room_id, &secret, None, None).await {
+    let claimed = match state.rooms.append(&room_id, &secret, None, None) {
         Ok(rooms::Appended::Claimed) => true,
         Ok(rooms::Appended::Verified) => false,
         Err(rooms::Unauthorized) => {
@@ -624,7 +642,7 @@ async fn ws_ingest_loop(
     // room as live while at least one ingest connection is attached.
     // A count of 0 means the room vanished between handshake and
     // upgrade - the loop below then ends on its first failed append.
-    let connections = state.rooms.broadcaster_connected(&room_id, &secret).await;
+    let connections = state.rooms.broadcaster_connected(&room_id, &secret);
     if connections > 0 {
         emit_broadcasting(&state, &room_id, true);
     }
@@ -644,7 +662,7 @@ async fn ws_ingest_loop(
         let (result, ack) = match msg {
             WsMessage::Binary(bytes) => {
                 let frame_len = bytes.len() as u64;
-                let result = ingest(&state, &room_id, &secret, None, Some(&bytes)).await;
+                let result = ingest(&state, &room_id, &secret, None, Some(&bytes));
                 if result.is_ok() {
                     received_bytes += frame_len;
                 }
@@ -658,7 +676,7 @@ async fn ws_ingest_loop(
                     // The clean-exit path: deleting removes the room, so
                     // this is the last chance to know the live segment's
                     // length (the loop's own detach below finds nothing)
-                    if let Ok(Some(duration)) = state.rooms.delete(&room_id, &secret).await {
+                    if let Ok(Some(duration)) = state.rooms.delete(&room_id, &secret) {
                         state
                             .analytics
                             .broadcast_ended(&secret, room_id.as_str(), duration);
@@ -668,15 +686,14 @@ async fn ws_ingest_loop(
                 let size = body
                     .get("size")
                     .filter(|s| protocol::size_has_dimensions(s));
-                match size {
-                    Some(size) => (ingest(&state, &room_id, &secret, Some(size), None).await, true),
-                    None => (Ok(()), false),
-                }
+                size.map_or((Ok(()), false), |size| {
+                    (ingest(&state, &room_id, &secret, Some(size), None), true)
+                })
             }
             // axum answers pings itself; a ping still refreshes the room
             // so an idle-but-connected broadcast isn't evicted
             WsMessage::Ping(_) | WsMessage::Pong(_) => {
-                let result = state.rooms.append(&room_id, &secret, None, None).await;
+                let result = state.rooms.append(&room_id, &secret, None, None);
                 (result.map(|_| ()), false)
             }
             WsMessage::Close(_) => break,
@@ -694,7 +711,7 @@ async fn ws_ingest_loop(
     }
     info!("WS ingest disconnected for room {:?}", room_id);
 
-    let (remaining, duration) = state.rooms.broadcaster_disconnected(&room_id, &secret).await;
+    let (remaining, duration) = state.rooms.broadcaster_disconnected(&room_id, &secret);
     if remaining == 0 {
         emit_broadcasting(&state, &room_id, false);
     }
@@ -744,7 +761,7 @@ async fn delete_room_handler(
         !secret.is_empty()
     );
 
-    match state.rooms.delete(&room_id, secret).await {
+    match state.rooms.delete(&room_id, secret) {
         // Deleting out from under a live broadcaster ends its segment
         // here; its loop then finds the room gone and reports nothing
         Ok(Some(duration)) => state
@@ -782,10 +799,7 @@ fn spawn_cleanup_task(state: AppState) {
         let mut interval = tokio::time::interval(state.cleanup_config.interval);
         loop {
             interval.tick().await;
-            let evicted = state
-                .rooms
-                .evict_stale(state.cleanup_config.inactive_ttl)
-                .await;
+            let evicted = state.rooms.evict_stale(state.cleanup_config.inactive_ttl);
             if evicted > 0 {
                 info!("Cleaned up {} abandoned rooms", evicted);
             }
