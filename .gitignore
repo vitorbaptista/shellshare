@@ -27,3 +27,4 @@ e2e/capacity-*.json
 
 # Misc
 ecosystem.json5
+e2e/loadgen/target/

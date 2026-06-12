@@ -60,6 +60,21 @@ from conftest import (
 VIEWERS_PER_WORKER = int(os.environ.get("FANOUT_VIEWERS_PER_WORKER", "50"))
 CLK_TCK = os.sysconf("SC_CLK_TCK")
 
+# The Rust viewer swarm (e2e/loadgen). The Python workers top out around
+# 60k frame-deliveries/sec in aggregate, which caps measurable server
+# capacity well below the server's limit; the Rust binary runs every
+# viewer in one process and speaks the same READY/QUIET/JSON protocol.
+# Build it with `cargo build --release` in e2e/loadgen; it is used
+# automatically when present (FANOUT_LOADGEN overrides the path, set it
+# empty to force the Python workers).
+_DEFAULT_LOADGEN = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "loadgen", "target", "release", "fanout-loadgen",
+)
+LOADGEN = os.environ.get("FANOUT_LOADGEN", _DEFAULT_LOADGEN)
+if LOADGEN and not os.path.exists(LOADGEN):
+    LOADGEN = None
+
 
 # --------------------------------------------------------------------
 # Worker: a batch of viewers in their own process
@@ -321,6 +336,13 @@ def percentiles(samples_ms):
 
 
 def spawn_workers(server_url, room, n_viewers, deadline_s):
+    if LOADGEN:
+        return [subprocess.Popen(
+            [LOADGEN, server_url, room, str(n_viewers), str(deadline_s)],
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr,
+            text=True,
+        )]
     workers = []
     remaining = n_viewers
     while remaining > 0:
