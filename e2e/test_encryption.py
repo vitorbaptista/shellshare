@@ -41,12 +41,14 @@ def parse_share_url(text):
     return match.group(1) if match else None
 
 
-def run_cli(message, room, password, timeout=10):
+def run_cli(message, room, password, timeout=10, encrypt=True):
     """Run the CLI in stdin mode until EOF.
 
     Returns (returncode, stderr, share_url).
     """
     args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room, "-W", password]
+    if not encrypt:
+        args.append("--disable-encryption")
     proc = subprocess.Popen(
         args,
         stdin=subprocess.PIPE,
@@ -58,15 +60,18 @@ def run_cli(message, room, password, timeout=10):
     return proc.returncode, stderr, parse_share_url(stderr)
 
 
-def start_broadcaster(room, password, first_message):
+def start_broadcaster(room, password, first_message, encrypt=True):
     """Start a long-lived broadcast and deliver one message.
 
     The broadcaster must stay alive while viewers join: the room (and
     its history) is deleted when the CLI exits. Returns (proc,
     share_url); callers must finish_broadcaster() it.
     """
+    args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room, "-W", password]
+    if not encrypt:
+        args.append("--disable-encryption")
     proc = subprocess.Popen(
-        CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room, "-W", password],
+        args,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -354,6 +359,69 @@ class TestEdgeCases:
                 context.set_offline(False)
 
                 # The replayed history must decrypt and render again
+                wait_for_terminal_text(page, marker)
+                assert page.is_hidden("#crypto-notice")
+                browser.close()
+        finally:
+            finish_broadcaster(proc)
+
+
+class TestDisableEncryption:
+    """--disable-encryption: plaintext broadcast for plain-HTTP viewers
+    (e.g. a classroom LAN where browsers have no WebCrypto)."""
+
+    def test_link_has_no_key_fragment(self, unique_room, unique_password):
+        _, stderr, share_url = run_cli(
+            "x", unique_room, unique_password, encrypt=False
+        )
+        assert share_url is not None
+        assert "#" not in share_url
+
+    def test_warns_that_broadcast_is_plaintext(
+        self, unique_room, unique_password
+    ):
+        _, stderr, _ = run_cli("x", unique_room, unique_password, encrypt=False)
+        assert "NOT" in stderr and "encrypt" in stderr.lower()
+
+    def test_server_sees_plaintext(
+        self, unique_room, unique_password, socket_listener
+    ):
+        """With encryption off the relayed bytes ARE the plaintext - the
+        listener reads them with no key, the trade-off of plain HTTP."""
+        marker = f"PLAINTEXT-{random_id()}"
+        run_cli(marker, unique_room, unique_password, encrypt=False)
+        received = socket_listener.wait_for_message(timeout=5, containing=marker)
+        assert received is not None and marker in received
+
+    def test_size_is_not_marked_encrypted(
+        self, unique_room, unique_password, socket_listener
+    ):
+        run_cli("x", unique_room, unique_password, encrypt=False)
+        assert socket_listener.wait_for_size(timeout=5)
+        assert "encrypted" not in socket_listener.get_last_size()
+
+    def test_encrypted_default_size_is_marked(
+        self, unique_room, unique_password, socket_listener
+    ):
+        run_cli("x", unique_room, unique_password)  # encrypted (default)
+        assert socket_listener.wait_for_size(timeout=5)
+        assert socket_listener.get_last_size().get("encrypted") is True
+
+    def test_browser_renders_plaintext_room(self, unique_password):
+        """A plaintext room has no key fragment; the viewer renders the
+        raw bytes (told it's not encrypted by the size flag) with no
+        missing-key notice."""
+        room = f"plain-{random_id()}"
+        marker = f"LABDEMO-{random_id(6)}"
+        proc, share_url = start_broadcaster(
+            room, unique_password, f"{marker}\n", encrypt=False
+        )
+        try:
+            assert "#" not in share_url
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(share_url)
                 wait_for_terminal_text(page, marker)
                 assert page.is_hidden("#crypto-notice")
                 browser.close()

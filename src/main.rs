@@ -80,6 +80,13 @@ struct Cli {
     // claimed and the shell spawns.
     #[arg(short, long, global = true, default_value = "tango", value_parser = clap::builder::PossibleValuesParser::new(themes::names()))]
     theme: Option<String>,
+
+    /// Broadcast in plaintext instead of end-to-end encrypted. Use this
+    /// when viewers reach the server over plain HTTP (e.g. a classroom
+    /// LAN), where browsers can't decrypt; the server and network then
+    /// see the terminal contents
+    #[arg(long, global = true)]
+    disable_encryption: bool,
 }
 
 #[derive(Subcommand)]
@@ -308,6 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 stdin: cli.stdin,
                 json: cli.json,
                 theme: cli.theme,
+                encrypt: !cli.disable_encryption,
             };
             serve(&host, port, tunnel, share);
         }
@@ -326,6 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json: cli.json,
                 exec: Some(command),
                 theme: cli.theme,
+                encrypt: !cli.disable_encryption,
             };
             exit_on_error(cli::run(args));
         }
@@ -340,6 +349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json: cli.json,
                 exec: None,
                 theme: cli.theme,
+                encrypt: !cli.disable_encryption,
             };
             exit_on_error(cli::run(args));
         }
@@ -356,6 +366,7 @@ struct ShareArgs {
     stdin: bool,
     json: bool,
     theme: Option<String>,
+    encrypt: bool,
 }
 
 /// `shellshare serve`: boot the embedded server, optionally tunnel it,
@@ -436,6 +447,7 @@ fn serve(host: &str, port: u16, tunnel: bool, share: ShareArgs) {
         json: share.json,
         exec: None,
         theme: share.theme,
+        encrypt: share.encrypt,
     };
     let result = cli::run(args);
     // Close the tunnel before a possible exit: process::exit

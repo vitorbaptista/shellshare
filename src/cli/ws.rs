@@ -89,11 +89,11 @@ pub struct Transport {
     /// server stores and forwards the size verbatim, so late joiners
     /// get the theme with no server-side knowledge of it)
     theme: Option<String>,
-    /// End-to-end encryption. Chunks are sealed as they enter the
-    /// replay buffer, so acks, the buffer cap, and reconnect replay all
-    /// operate on ciphertext - a replayed record is byte-identical,
-    /// never re-encrypted (no nonce reuse)
-    cipher: Encryptor,
+    /// End-to-end encryption, unless `--disable-encryption`. Chunks are
+    /// sealed as they enter the replay buffer, so acks, the buffer cap,
+    /// and reconnect replay all operate on ciphertext - a replayed
+    /// record is byte-identical, never re-encrypted (no nonce reuse)
+    cipher: Option<Encryptor>,
     backoff: Duration,
     /// Do not attempt to reconnect before this instant
     next_attempt: Option<Instant>,
@@ -111,7 +111,7 @@ impl Transport {
         password: &str,
         size: TermSize,
         theme: Option<String>,
-        cipher: Encryptor,
+        cipher: Option<Encryptor>,
     ) -> Result<Self, TransportError> {
         let ws_base = if let Some(rest) = server_url.strip_prefix("https://") {
             format!("wss://{rest}")
@@ -152,7 +152,10 @@ impl Transport {
             // Sealed here, before buffering: everything downstream
             // (acks, the cap, replay) counts ciphertext bytes, exactly
             // what the server sees and acknowledges
-            let data: Bytes = self.cipher.seal(data).into();
+            let data: Bytes = self.cipher.as_ref().map_or_else(
+                || Bytes::copy_from_slice(data),
+                |cipher| cipher.seal(data).into(),
+            );
             self.buffered_bytes += data.len();
             self.pending.push_back(data);
             // Drop the oldest buffered output (acked data is already
@@ -225,6 +228,12 @@ impl Transport {
             let mut size = json!(self.size);
             if let Some(theme) = &self.theme {
                 size["theme"] = json!(theme);
+            }
+            // Rides verbatim to viewers like the theme: tells a viewer
+            // whether to expect encrypted records, so a plaintext room
+            // renders and a keyless link to an encrypted room can say so
+            if self.cipher.is_some() {
+                size["encrypted"] = json!(true);
             }
             let frame = Message::text(json!({"size": size}).to_string());
             if self.write(frame).is_err() {

@@ -30,17 +30,19 @@ IS_WINDOWS = platform.system() == "Windows"
 def parse_json_events(stdout):
     """Parse the shellshare events out of stdout. Exec mode interleaves the
     command's raw PTY output between the event lines, and that output may
-    leave stray bytes (e.g. a carriage return) on the event's line, so look
-    for a JSON object anywhere in each line."""
+    leave stray bytes (e.g. a carriage return) on the event's line, so scan
+    each line for a JSON object that has an "event" key (without assuming
+    the object's key order)."""
     events = []
     for line in stdout.splitlines():
-        start = line.find('{"event"')
-        if start == -1:
-            continue
-        try:
-            events.append(json.loads(line[start:]))
-        except json.JSONDecodeError:
-            pass
+        for start in (i for i, ch in enumerate(line) if ch == '{'):
+            try:
+                obj = json.loads(line[start:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and "event" in obj:
+                events.append(obj)
+                break
     return events
 
 

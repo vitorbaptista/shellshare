@@ -64,13 +64,19 @@
       // the polling-then-upgrade dance avoids its races entirely
       var socket = io({transports: ['websocket']});
       var room = window.location.pathname;
-      // Every broadcast is end-to-end encrypted: the key rides in the
-      // URL fragment, which browsers never send to the server. Each
-      // message is a sequence of whole records -
+      // Broadcasts are end-to-end encrypted by default: the key rides
+      // in the URL fragment, which browsers never send to the server,
+      // and each message is a sequence of whole records -
       // [u32 BE: N][12-byte nonce][ciphertext+16-byte tag], AES-256-GCM
-      // - that only this page can open; the server relays opaque
-      // bytes. Must stay in lockstep with src/cli/crypto.rs.
+      // - that only this page can open; the server relays opaque bytes.
+      // A broadcaster on --disable-encryption sends plaintext instead
+      // (no fragment); the size message's `encrypted` flag tells the
+      // two apart. Must stay in lockstep with src/cli/crypto.rs.
       var keyHex = window.location.hash.replace(/^#/, '');
+      // Set once the size message reveals the room is encrypted but we
+      // have no key (the link's fragment was stripped); until then a
+      // keyless page can't tell an encrypted room from a plaintext one
+      var encryptedWithoutKey = false;
       var term = null;
       var currentSize = {cols: 80, rows: 30};
       // Output that arrives before the terminal exists (creation waits
@@ -103,28 +109,28 @@
         return out;
       }
 
-      // Resolves to the AES-GCM key, or stays null when the fragment
-      // is absent or unusable (the notice explains why; ciphertext is
-      // then dropped rather than rendered as garbage)
+      // Resolves to the AES-GCM key when the link carries a usable one.
+      // A missing fragment is NOT flagged here - it might be a plaintext
+      // (--disable-encryption) room - so the verdict waits for the size
+      // message's `encrypted` flag (see onSize). A present-but-broken
+      // fragment is flagged now: the notice explains why nothing renders.
       var cryptoKeyPromise = null;
-      if (!keyHex) {
-        showCryptoNotice('This broadcast is end-to-end encrypted; ' +
-          "this link is missing its decryption key (the part after " +
-          "'#'). Ask the broadcaster for the full share link.");
-      } else if (!(window.crypto && window.crypto.subtle)) {
-        // WebCrypto only exists in secure contexts
-        showCryptoNotice('This broadcast is end-to-end encrypted, ' +
-          'which needs a secure connection. Open this link over ' +
-          'https:// or from localhost.');
-      } else {
-        var keyBytes = hexToBytes(keyHex);
-        if (!keyBytes || keyBytes.length !== 32) {
-          showCryptoNotice('The decryption key in this link (after ' +
-            "'#') is invalid. Ask the broadcaster for the full " +
-            'share link.');
+      if (keyHex) {
+        if (!(window.crypto && window.crypto.subtle)) {
+          // WebCrypto only exists in secure contexts
+          showCryptoNotice('This broadcast is end-to-end encrypted, ' +
+            'which needs a secure connection. Open this link over ' +
+            'https:// or from localhost.');
         } else {
-          cryptoKeyPromise = window.crypto.subtle.importKey(
-            'raw', keyBytes, {name: 'AES-GCM'}, false, ['decrypt']);
+          var keyBytes = hexToBytes(keyHex);
+          if (!keyBytes || keyBytes.length !== 32) {
+            showCryptoNotice('The decryption key in this link (after ' +
+              "'#') is invalid. Ask the broadcaster for the full " +
+              'share link.');
+          } else {
+            cryptoKeyPromise = window.crypto.subtle.importKey(
+              'raw', keyBytes, {name: 'AES-GCM'}, false, ['decrypt']);
+          }
         }
       }
 
@@ -429,12 +435,25 @@
         broadcastStatusText.textContent = 'broadcaster ' + state;
       }
       socket.on('message', function (message) {
-        if (!message || !cryptoKeyPromise) {
-          // No usable key: the notice already explains why; dropping
-          // the ciphertext beats rendering it as garbage
+        if (!message) {
           return;
         }
-        enqueueEncrypted(new Uint8Array(message));
+        var bytes = new Uint8Array(message);
+        if (keyHex) {
+          // Decrypt mode. A broken key dropped cryptoKeyPromise to
+          // null and the notice already explains why; drop the bytes
+          if (cryptoKeyPromise) {
+            enqueueEncrypted(bytes);
+          }
+          return;
+        }
+        if (encryptedWithoutKey) {
+          // Encrypted room, no key in this link: never render ciphertext
+          return;
+        }
+        // Plaintext (--disable-encryption) room: raw terminal bytes,
+        // xterm.js does its own streaming UTF-8 decode
+        writeBytes(bytes);
       });
       socket.on('size', onSize);
 
@@ -451,6 +470,16 @@
       function onSize(size) {
         if (!size) {
           return;
+        }
+        // The broadcaster marks encrypted streams in the size message
+        // (it rides verbatim, like the theme), and size always precedes
+        // content. A keyless page seeing this knows its link lost the
+        // key, rather than mistaking ciphertext for a plaintext room.
+        if (size.encrypted && !keyHex && !encryptedWithoutKey) {
+          encryptedWithoutKey = true;
+          showCryptoNotice('This broadcast is end-to-end encrypted; ' +
+            "this link is missing its decryption key (the part after " +
+            "'#'). Ask the broadcaster for the full share link.");
         }
         var cols = clampDimension(size.cols);
         var rows = clampDimension(size.rows);

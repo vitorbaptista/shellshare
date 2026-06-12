@@ -43,6 +43,10 @@ pub struct ClientArgs {
     pub exec: Option<Vec<String>>,
     /// Viewer color theme, already validated against `themes::names()`
     pub theme: Option<String>,
+    /// End-to-end encrypt the broadcast (the default). When false the
+    /// terminal is sent in plaintext - for viewers on plain HTTP, where
+    /// browsers can't decrypt
+    pub encrypt: bool,
 }
 
 /// Generate a random 18-character alphanumeric room ID
@@ -132,16 +136,31 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     // Build room path (r/{room})
     let room_path = format!("r/{room}");
 
-    // Every broadcast is end-to-end encrypted. The key goes only into
-    // the printed link's #fragment - browsers never send fragments, so
-    // the server cannot see it. Derived from this machine and the room
-    // name, so a named room keeps one reusable link across restarts
-    let (cipher, key) = crypto::Encryptor::for_room(&room);
-    let share_url = format!("{share_base}/{room_path}#{key}");
-    if !is_secure_context_url(&share_base) {
+    // Encrypted by default. The key goes only into the printed link's
+    // #fragment - browsers never send fragments, so the server cannot
+    // see it. Derived from this machine and the room name, so a named
+    // room keeps one reusable link across restarts. --disable-encryption
+    // drops to plaintext for viewers on plain HTTP (no WebCrypto there)
+    let (cipher, share_url) = if args.encrypt {
+        let (cipher, key) = crypto::Encryptor::for_room(&room);
+        (Some(cipher), format!("{share_base}/{room_path}#{key}"))
+    } else {
+        (None, format!("{share_base}/{room_path}"))
+    };
+    if args.encrypt {
+        if !is_secure_context_url(&share_base) {
+            eprintln!(
+                "WARNING: viewers can only decrypt on https or localhost; \
+                 the link below is plain http, so browsers will refuse. \
+                 For sharing over a plain-HTTP local network, run with \
+                 --disable-encryption."
+            );
+        }
+    } else {
         eprintln!(
-            "WARNING: viewers can only decrypt on https or localhost; \
-             the link below is plain http, so browsers will refuse"
+            "WARNING: --disable-encryption is set; this broadcast is NOT \
+             encrypted, so the server and anyone on the network can read \
+             the terminal."
         );
     }
 
@@ -167,6 +186,7 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
             "url": share_url,
             "room": room,
             "server": server,
+            "encrypted": args.encrypt,
         }));
     }
 
