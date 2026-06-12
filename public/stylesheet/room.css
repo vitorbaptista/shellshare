@@ -108,6 +108,22 @@ header {
   text-align: left;
 }
 
+/* Phones: pad the page chrome so it doesn't touch the screen edges.
+   #terminal stays full-bleed on purpose - every pixel of width is a
+   terminal column, and it scrolls horizontally when the broadcaster's
+   grid is wider than the viewport. */
+@media (max-width: 47em) {
+  header {
+    flex-wrap: wrap;
+    padding: 0 0.75em;
+  }
+
+  footer {
+    box-sizing: border-box;
+    padding: 0 1em;
+  }
+}
+
 .title {
   font-size: 2em;
   margin: 0;
