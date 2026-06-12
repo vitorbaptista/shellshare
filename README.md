@@ -131,12 +131,12 @@ shellshare server
 the salt is a secret, and command-line arguments are visible to other
 local users.)
 
-No personal data is sent: no IP addresses, no room names, no passwords.
-Broadcasters are identified only by `HMAC-SHA256(salt, password)` and
-rooms by `HMAC-SHA256(salt, room_name)`, which lets the operator count
-returning users without being able to identify anyone. Keep the salt
-stable across restarts and servers so returning users stay recognizable;
-rotating it resets all identities. Events are fire-and-forget and never
+No IP addresses or passwords are sent. Broadcasters are identified only
+by `HMAC-SHA256(salt, password)`, which lets the operator count
+returning users without being able to identify anyone. Room names are
+sent as-is (they are share-link slugs, visible to anyone with the
+link). Keep the salt stable across restarts and servers so returning
+users stay recognizable; rotating it resets all identities. Events are fire-and-forget and never
 block or slow down broadcasting.
 
 ## Releasing

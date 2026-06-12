@@ -117,36 +117,41 @@ def test_full_lifecycle_emits_the_three_events(dedicated_server, mock_posthog):
         ws.close()
 
     assert poll_until(
-        lambda: mock_posthog.events_named("room_created")
+        lambda: mock_posthog.events_named("broadcast_started")
         and mock_posthog.events_named("broadcast_ended"),
         timeout=10,
-    ), "room_created/broadcast_ended never reached the mock"
+    ), "broadcast_started/broadcast_ended never reached the mock"
 
-    created = mock_posthog.events_named("room_created")[0]
+    started = mock_posthog.events_named("broadcast_started")[0]
     ended = mock_posthog.events_named("broadcast_ended")[0]
     viewed = mock_posthog.events_named("viewer_joined")[0]
 
     # The broadcaster identity is stable across events and prefixed,
-    # the room identity lives in a different id space
-    assert created["distinct_id"].startswith("bc:")
-    assert ended["distinct_id"] == created["distinct_id"]
-    assert viewed["distinct_id"].startswith("room:")
+    # the room identity is the plaintext room name in its own id space
+    assert started["distinct_id"].startswith("bc:")
+    assert ended["distinct_id"] == started["distinct_id"]
+    assert viewed["distinct_id"] == f"room:{room}"
 
-    assert created["api_key"] == POSTHOG_KEY
+    # Broadcast events carry the room id, so they join with viewer
+    # events (whose distinct_id IS the room)
+    assert started["properties"]["room"] == viewed["distinct_id"]
+    assert ended["properties"]["room"] == viewed["distinct_id"]
+    # This segment claimed the room - a fresh share, not a reconnect
+    assert started["properties"]["new_room"] is True
+
+    assert started["api_key"] == POSTHOG_KEY
     assert isinstance(ended["properties"]["duration_seconds"], (int, float))
     assert viewed["properties"]["user_count"] >= 1
     assert viewed["properties"]["broadcasting"] is True
 
-    for event in (created, ended, viewed):
+    for event in (started, ended, viewed):
         assert event["properties"]["$process_person_profile"] is False
         assert event["properties"]["$geoip_disable"] is True
         # No ENV set: no environment label on any event
         assert "environment" not in event["properties"]
-        # No PII: neither the room name nor the password may appear
-        # anywhere in any payload
-        payload = json.dumps(event)
-        assert room not in payload
-        assert password not in payload
+        # The room name is sent openly, but the password is a secret
+        # and may never appear anywhere in any payload
+        assert password not in json.dumps(event)
 
 
 def test_viewer_rejoin_and_dead_rooms_are_not_counted(dedicated_server, mock_posthog):
@@ -215,6 +220,26 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
         "broadcasting"
     ] is False
 
+    # Reconnecting to the surviving room starts a second segment in the
+    # same room: another broadcast_started, but not a new room
+    ws = ws_connect_room(server.url, room, "pw")
+    try:
+        ws.send_binary(b"back online")
+        ws.recv()  # ack
+        assert poll_until(
+            lambda: len(mock_posthog.events_named("broadcast_started")) == 2,
+            timeout=10,
+        ), "reconnect never emitted a second broadcast_started"
+    finally:
+        ws.close()
+
+    first, second = mock_posthog.events_named("broadcast_started")
+    assert first["properties"]["new_room"] is True
+    assert second["properties"]["new_room"] is False
+    assert first["properties"]["room"] == f"room:{room}"
+    assert second["properties"]["room"] == first["properties"]["room"]
+    assert second["distinct_id"] == first["distinct_id"]
+
 
 def test_clean_exit_emits_exactly_one_broadcast_ended(dedicated_server, mock_posthog):
     server = analytics_server(dedicated_server, mock_posthog)
@@ -254,10 +279,10 @@ def test_environment_label_is_attached_to_every_event(dedicated_server, mock_pos
         ws.close()
 
     assert poll_until(
-        lambda: mock_posthog.events_named("room_created")
+        lambda: mock_posthog.events_named("broadcast_started")
         and mock_posthog.events_named("broadcast_ended"),
         timeout=10,
-    ), "room_created/broadcast_ended never reached the mock"
+    ), "broadcast_started/broadcast_ended never reached the mock"
 
     with mock_posthog._lock:
         events = list(mock_posthog.events)
