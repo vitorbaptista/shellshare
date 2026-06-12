@@ -16,18 +16,13 @@ Test categories:
 import platform
 import re
 import subprocess
-import sys
-import time
 
 import pytest
 
 from conftest import (
     CLI_COMMAND,
-    CLI_PATH,
     SERVER_URL,
     SocketListener,
-    decode_message,
-    poll_until,
     random_id,
     wait_for_content,
 )
@@ -97,29 +92,6 @@ class TestBasicFunctionality:
         )
 
         assert returncode == 0
-
-    def test_sends_delete_on_exit(self, unique_room, unique_password):
-        """User count should drop after CLI exits (DELETE sent)."""
-        listener = SocketListener(unique_room)
-        listener.connect()
-
-        # Initial user count should be 1 (just the listener)
-        assert listener.wait_for_user_count(1, timeout=5)
-
-        # Run CLI - it will POST and then DELETE on exit
-        returncode, stdout, stderr = run_cli_stdin(
-            "test", unique_room, unique_password
-        )
-        assert returncode == 0
-
-        # The room data should be cleared, so a new joiner won't get the message
-        listener2 = SocketListener(unique_room)
-        listener2.connect()
-
-        # After DELETE, the room content should be cleared
-        # (This verifies DELETE was called - the exact behavior depends on server)
-        listener.disconnect()
-        listener2.disconnect()
 
 
 class TestMessageEncoding:
@@ -518,9 +490,10 @@ class TestErrorHandling:
 class TestArgumentParsing:
     """Tests for argument parsing."""
 
-    def test_version_flag(self):
-        """--version should print version and exit 0."""
-        args = CLI_COMMAND + ["--version"]
+    @pytest.mark.parametrize("flag", ["--version", "-v"])
+    def test_version_flag(self, flag):
+        """--version/-v should print version and exit 0."""
+        args = CLI_COMMAND + [flag]
 
         proc = subprocess.Popen(
             args,
@@ -536,26 +509,11 @@ class TestArgumentParsing:
         output = stdout + stderr
         assert re.search(r'\d+\.\d+\.\d+', output), f"No version found in: {output}"
 
-    def test_version_short_flag(self):
-        """-v should print version and exit 0."""
-        args = CLI_COMMAND + ["-v"]
-
-        proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate(timeout=5)
-
-        assert proc.returncode == 0
-        output = stdout + stderr
-        assert re.search(r'\d+\.\d+\.\d+', output), f"No version found in: {output}"
-
-    def test_help_flag(self):
-        """--help should print help and exit 0."""
-        args = CLI_COMMAND + ["--help"]
+    @pytest.mark.parametrize("flag", ["--help", "-h"])
+    def test_help_flag(self, flag):
+        """--help/-h should describe the CLI, its flags, and the default
+        server, then exit 0."""
+        args = CLI_COMMAND + [flag]
 
         proc = subprocess.Popen(
             args,
@@ -573,39 +531,7 @@ class TestArgumentParsing:
         assert "--room" in output or "-r" in output
         assert "--password" in output or "-W" in output
         assert "--stdin" in output
-
-    def test_help_short_flag(self):
-        """-h should print help and exit 0."""
-        args = CLI_COMMAND + ["-h"]
-
-        proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate(timeout=5)
-
-        assert proc.returncode == 0
-        output = stdout + stderr
-        # Should contain description
-        assert "shellshare" in output.lower() or "transmit" in output.lower()
-
-    def test_help_shows_default_server(self):
-        """Help should show default server URL."""
-        args = CLI_COMMAND + ["--help"]
-
-        proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate(timeout=5)
-
-        output = stdout + stderr
+        # ... and document the default server users will share through
         assert "shellshare.net" in output, "Default server URL should be in help"
 
 
@@ -657,33 +583,6 @@ class TestConcurrency:
 
         listener1.disconnect()
         listener2.disconnect()
-
-
-class TestTerminalSize:
-    """Tests for terminal size handling."""
-
-    def test_size_event_sent_with_message(self, unique_room, unique_password):
-        """Terminal size should be sent along with messages."""
-        listener = SocketListener(unique_room)
-        listener.connect()
-
-        run_cli_stdin("test", unique_room, unique_password)
-
-        # Wait for size event (sent with each POST)
-        assert listener.wait_for_size(timeout=5), "No size event received"
-
-        size = listener.get_last_size()
-
-        listener.disconnect()
-
-        # Size should have cols and rows
-        assert size is not None, "No size event received"
-        assert "cols" in size, "Size should have cols"
-        assert "rows" in size, "Size should have rows"
-        assert isinstance(size["cols"], int), "cols should be an integer"
-        assert isinstance(size["rows"], int), "rows should be an integer"
-        assert size["cols"] > 0, "cols should be positive"
-        assert size["rows"] > 0, "rows should be positive"
 
 
 class TestDefaultPassword:

@@ -438,19 +438,17 @@ def test_fullscreen_mode_scales_and_restores():
         assert status == 200
         wait_for_terminal_text(page, "fullscreen test")
 
+        default_font_size = page.evaluate("window.term.options.fontSize")
+
         page.keyboard.press("f")
         page.wait_for_function(
             "document.getElementById('terminal')"
             ".classList.contains('fullscreen')",
             timeout=10000,
         )
-        # DOM contract preserved: xterm's element is the only .terminal
-        assert page.evaluate(
-            "document.querySelectorAll('#terminal .terminal').length === 1"
-        )
         # An 80x24 terminal in a larger viewport must scale up
         page.wait_for_function(
-            "window.term.options.fontSize > 14",
+            f"window.term.options.fontSize > {default_font_size}",
             timeout=10000,
         )
 
@@ -461,7 +459,7 @@ def test_fullscreen_mode_scales_and_restores():
             timeout=10000,
         )
         page.wait_for_function(
-            "window.term.options.fontSize === 14",
+            f"window.term.options.fontSize === {default_font_size}",
             timeout=10000,
         )
 

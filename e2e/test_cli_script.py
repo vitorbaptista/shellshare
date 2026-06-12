@@ -9,7 +9,6 @@ actual shell spawning behavior rather than mocking.
 
 Test categories:
 - Script mode streaming
-- Terminal size handling
 - Session lifecycle
 
 Cross-platform support:
@@ -17,18 +16,13 @@ Cross-platform support:
 - Windows: Uses ConPTY (Windows 10 1809+)
 """
 
-import os
-import platform
 import subprocess
 import time
-
-import pytest
 
 from conftest import (
     CLI_COMMAND,
     SERVER_URL,
     SocketListener,
-    poll_until,
     random_id,
     wait_for_content,
 )
@@ -153,67 +147,6 @@ class TestScriptModeBasic:
         assert "Sharing terminal in" in output, "CLI should print sharing message"
         # End message is expected on clean exit, but may not appear if we had to terminate
         # This is acceptable behavior for a PTY-based implementation
-
-    def test_script_mode_delete_on_exit(self, unique_room, unique_password):
-        """DELETE should be sent when script mode exits."""
-        listener = SocketListener(unique_room)
-        listener.connect()
-
-        # Run CLI in script mode
-        run_cli_script_mode(
-            unique_room, unique_password, timeout=15
-        )
-
-        # Connect a new listener - if DELETE was sent, room should be empty
-        listener2 = SocketListener(unique_room)
-        listener2.connect()
-
-        # The exact behavior depends on server implementation
-        # (some servers clear room on DELETE, others just decrement count)
-
-        listener.disconnect()
-        listener2.disconnect()
-
-
-class TestScriptModeTerminalSize:
-    """Tests for terminal size handling in script mode."""
-
-    def test_large_terminal_warning(self, unique_room, unique_password):
-        """Large terminal should produce warning."""
-        # Create environment with large terminal
-        env = os.environ.copy()
-        env["COLUMNS"] = "200"
-        env["LINES"] = "50"
-
-        returncode, stdout, stderr = run_cli_script_mode(
-            unique_room, unique_password, env=env, timeout=15
-        )
-
-        output = stdout + stderr
-        # Check if warning about large terminal is shown
-        # (only shown if tput returns values > thresholds)
-        # This may or may not trigger depending on environment
-        # Just verify the CLI runs successfully
-        assert returncode == 0 or "Sharing terminal in" in output
-
-    def test_size_event_sent(self, unique_room, unique_password):
-        """Script mode should send terminal size to server."""
-        listener = SocketListener(unique_room)
-        listener.connect()
-
-        run_cli_script_mode(
-            unique_room, unique_password, timeout=15
-        )
-
-        # Wait for size event
-        listener.wait_for_size(timeout=5)
-
-        size = listener.get_last_size()
-        listener.disconnect()
-
-        # Size should be sent (may be None if no messages sent yet)
-        # Just verify the CLI ran and sent some output
-        assert True  # Test passes if CLI doesn't crash
 
 
 class TestScriptModeOutput:
