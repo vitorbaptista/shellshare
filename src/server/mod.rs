@@ -577,16 +577,16 @@ async fn ws_ingest_handler(
     let room_id = RoomId::parse(&room_path);
     let secret = auth_secret(&headers).to_string();
 
-    match state.rooms.append(&room_id, &secret, None, None).await {
-        Ok(rooms::Appended::Claimed) => state.analytics.room_created(&secret),
-        Ok(rooms::Appended::Verified) => {}
+    let claimed = match state.rooms.append(&room_id, &secret, None, None).await {
+        Ok(rooms::Appended::Claimed) => true,
+        Ok(rooms::Appended::Verified) => false,
         Err(rooms::Unauthorized) => {
             return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");
         }
-    }
+    };
 
     info!("WS ingest connected for room {:?}", room_id);
-    ws.on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret))
+    ws.on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret, claimed))
 }
 
 /// How long the ingest loop waits for ANY frame before declaring the
@@ -613,13 +613,27 @@ const INGEST_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// Ends on close, error, or when the room's password no longer matches
 /// (possible if the room was evicted for inactivity and re-claimed by
 /// someone else); the client reconnects and is then rejected at upgrade.
-async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId, secret: String) {
+async fn ws_ingest_loop(
+    mut socket: WebSocket,
+    state: AppState,
+    room_id: RoomId,
+    secret: String,
+    claimed: bool,
+) {
     // The connection itself is the aliveness signal: viewers show the
     // room as live while at least one ingest connection is attached.
     // A count of 0 means the room vanished between handshake and
     // upgrade - the loop below then ends on its first failed append.
-    if state.rooms.broadcaster_connected(&room_id, &secret).await > 0 {
+    let connections = state.rooms.broadcaster_connected(&room_id, &secret).await;
+    if connections > 0 {
         emit_broadcasting(&state, &room_id, true);
+    }
+    // Count 1 means this attach took the room live (0 -> 1): a new
+    // segment. An overlapping reconnect (1 -> 2) continues the segment
+    if connections == 1 {
+        state
+            .analytics
+            .broadcast_started(&secret, room_id.as_str(), claimed);
     }
 
     let mut received_bytes: u64 = 0;
@@ -645,7 +659,9 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
                     // this is the last chance to know the live segment's
                     // length (the loop's own detach below finds nothing)
                     if let Ok(Some(duration)) = state.rooms.delete(&room_id, &secret).await {
-                        state.analytics.broadcast_ended(&secret, duration);
+                        state
+                            .analytics
+                            .broadcast_ended(&secret, room_id.as_str(), duration);
                     }
                     break;
                 }
@@ -685,7 +701,9 @@ async fn ws_ingest_loop(mut socket: WebSocket, state: AppState, room_id: RoomId,
     // `duration` is Some only when this detach ended a still-live
     // room's segment; the delete paths already reported theirs
     if let Some(duration) = duration {
-        state.analytics.broadcast_ended(&secret, duration);
+        state
+            .analytics
+            .broadcast_ended(&secret, room_id.as_str(), duration);
     }
 }
 
@@ -729,7 +747,9 @@ async fn delete_room_handler(
     match state.rooms.delete(&room_id, secret).await {
         // Deleting out from under a live broadcaster ends its segment
         // here; its loop then finds the room gone and reports nothing
-        Ok(Some(duration)) => state.analytics.broadcast_ended(secret, duration),
+        Ok(Some(duration)) => state
+            .analytics
+            .broadcast_ended(secret, room_id.as_str(), duration),
         Ok(None) => {}
         Err(rooms::Unauthorized) => {
             return plain_response(StatusCode::UNAUTHORIZED, "Unauthorized");

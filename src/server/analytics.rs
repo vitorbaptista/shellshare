@@ -10,21 +10,25 @@
 //!   blocking ingest is not.
 //! - **No PII**: no IP addresses (`PostHog` only ever sees this server's
 //!   own requests, sent with `$geoip_disable`), no room names, no
-//!   passwords. The only identifier is `HMAC-SHA256(salt, password)`:
-//!   the default client password is MAC-derived, so the HMAC is stable
-//!   per machine (recurring-user detection) while the secret salt keeps
-//!   the small MAC space safe from enumeration and keeps custom
-//!   passwords uncrackable from the analytics data.
+//!   passwords. The identifiers are `HMAC-SHA256(salt, password)` for
+//!   broadcasters and `HMAC-SHA256(salt, room_name)` for rooms: the
+//!   default client password is MAC-derived, so the broadcaster HMAC is
+//!   stable per machine (recurring-user detection) while the secret salt
+//!   keeps the small MAC space safe from enumeration and keeps custom
+//!   passwords and room names uncrackable from the analytics data.
+//!   Broadcast events carry the room id as a property, deliberately
+//!   linking a broadcaster to its rooms in the analytics data - that is
+//!   what lets the operator join broadcast metrics to viewer metrics.
 //! - **Stateless server**: the salt is operator-supplied, not generated,
 //!   so identities survive restarts and server moves (reuse the salt).
 //!
-//! The counts are best-effort, not bookkeeping: a few edge cases skew
-//! them slightly (a handshake that claims a room but never upgrades
-//! emits `room_created` with no matching `broadcast_ended`; a room
-//! resurrected by a ping after a delete race or a mid-broadcast TTL
-//! eviction emits neither), and a broadcast interrupted by reconnects
-//! reports one `broadcast_ended` per live segment. Good enough for
-//! "how much is shellshare used".
+//! The counts are best-effort, not bookkeeping: a broadcast interrupted
+//! by reconnects reports one `broadcast_started`/`broadcast_ended` pair
+//! per live segment (`new_room` is true only on the segment that claimed
+//! the room), and a few edge cases skew the totals slightly (a room
+//! evicted mid-broadcast emits a `broadcast_started` with no matching
+//! `broadcast_ended`; a room resurrected by a ping after a delete race
+//! emits neither). Good enough for "how much is shellshare used".
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -122,13 +126,18 @@ impl Analytics {
         }
     }
 
-    /// A room was claimed by a broadcaster.
-    pub fn room_created(&self, password: &str) {
+    /// A live segment started: the room's broadcaster connection count
+    /// went 0 -> 1. `new_room` marks the segment that claimed the room
+    /// (a fresh share) as opposed to a reconnect or a reused named room.
+    pub fn broadcast_started(&self, password: &str, room_name: &str, new_room: bool) {
         if let Some(inner) = &self.inner {
             inner.send(Event {
-                name: "room_created",
+                name: "broadcast_started",
                 distinct_id: inner.broadcaster_id(password),
-                properties: serde_json::json!({}),
+                properties: serde_json::json!({
+                    "room": inner.room_id(room_name),
+                    "new_room": new_room,
+                }),
             });
         }
     }
@@ -137,12 +146,13 @@ impl Analytics {
     /// (or the room was deleted under it). `duration` spans the segment,
     /// so one broadcast interrupted by reconnects yields several events
     /// whose durations sum to the time actually spent live.
-    pub fn broadcast_ended(&self, password: &str, duration: Duration) {
+    pub fn broadcast_ended(&self, password: &str, room_name: &str, duration: Duration) {
         if let Some(inner) = &self.inner {
             inner.send(Event {
                 name: "broadcast_ended",
                 distinct_id: inner.broadcaster_id(password),
                 properties: serde_json::json!({
+                    "room": inner.room_id(room_name),
                     // Fractional: short segments would otherwise all
                     // truncate to 0 and undercount reconnect-heavy runs
                     "duration_seconds": duration.as_secs_f64(),
@@ -184,7 +194,9 @@ impl Inner {
         format!("bc:{}", hmac_hex(&self.salt, password))
     }
 
-    /// Stable pseudonymous room identity for viewer events.
+    /// Stable pseudonymous room identity: the distinct id of viewer
+    /// events and the `room` property of broadcast events, so the two
+    /// sides join on it.
     fn room_id(&self, room_name: &str) -> String {
         format!("room:{}", hmac_hex(&self.salt, room_name))
     }
