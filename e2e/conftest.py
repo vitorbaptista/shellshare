@@ -102,8 +102,11 @@ def _server_responds(url, timeout=1):
         return False
 
 
-def _spawn_server(port, *extra_args):
+def _spawn_server(port, *extra_args, env=None):
     """Spawn a shellshare server process on the given port.
+
+    `env`, when given, fully replaces the child's environment (build it
+    from os.environ to inherit).
 
     Output goes to a log file (kept on the proc as `log_path`) so a
     startup failure - e.g. the port got taken between picking it and
@@ -126,6 +129,7 @@ def _spawn_server(port, *extra_args):
             + [str(a) for a in extra_args],
             stdout=log,
             stderr=subprocess.STDOUT,
+            env=env,
         )
     proc.log_path = Path(log_path)
     return proc
@@ -184,9 +188,9 @@ def dedicated_server():
     """
     handles = []
 
-    def start(*extra_args):
+    def start(*extra_args, env=None):
         port = _free_port()
-        proc = _spawn_server(port, *extra_args)
+        proc = _spawn_server(port, *extra_args, env=env)
         handle = ServerHandle(port=port, proc=proc)
         handles.append(handle)
         wait_for_server(handle.url, proc=proc)

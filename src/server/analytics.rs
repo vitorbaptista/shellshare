@@ -50,6 +50,11 @@ pub struct Config {
     pub api_key: String,
     pub host: String,
     pub salt: String,
+    /// Deployment label (e.g. "production", from the `ENV` env var)
+    /// stamped on every event as the `environment` property, so one
+    /// `PostHog` project can tell deployments apart. `None` omits the
+    /// property entirely.
+    pub environment: Option<String>,
 }
 
 /// One analytics event, queued for delivery.
@@ -101,7 +106,13 @@ impl Analytics {
 
         info!("Analytics enabled, sending to {}", config.host);
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
-        tokio::spawn(sender_task(client, config.api_key, config.host, rx));
+        tokio::spawn(sender_task(
+            client,
+            config.api_key,
+            config.host,
+            config.environment,
+            rx,
+        ));
 
         Self {
             inner: Some(Inner {
@@ -195,6 +206,7 @@ async fn sender_task(
     client: reqwest::Client,
     api_key: String,
     host: String,
+    environment: Option<String>,
     mut rx: mpsc::Receiver<Event>,
 ) {
     let url = format!("{}/i/v0/e/", host.trim_end_matches('/'));
@@ -205,6 +217,9 @@ async fn sender_task(
         // would otherwise tag events with this server's location
         properties["$process_person_profile"] = serde_json::Value::Bool(false);
         properties["$geoip_disable"] = serde_json::Value::Bool(true);
+        if let Some(env) = &environment {
+            properties["environment"] = serde_json::Value::String(env.clone());
+        }
         let body = serde_json::json!({
             "api_key": api_key,
             "event": event.name,
