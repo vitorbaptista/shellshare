@@ -230,7 +230,7 @@ pub fn run_script_mode(
                             Err(_) => break,
                         }
                     }
-                    transport.send(batch, size)
+                    transport.send(&batch, size)
                 }
                 // Idle: let the transport retry buffered data/reconnects
                 Err(mpsc::RecvTimeoutError::Timeout) => transport.tick(size),

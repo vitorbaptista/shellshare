@@ -5,6 +5,11 @@
 //! receive binary Socket.IO attachments which the browser decodes with a
 //! streaming `TextDecoder` (`templates/room.html`). The Python e2e
 //! helpers (`e2e/conftest.py`) must stay in lockstep.
+//!
+//! End-to-end encryption changes none of this: every broadcast's bytes
+//! are sealed records (`src/cli/crypto.rs`) the server still stores,
+//! acks, and relays opaquely; only the viewer page decrypts them, with
+//! a key from the share link's URL fragment.
 
 use bytes::Bytes;
 use std::collections::VecDeque;

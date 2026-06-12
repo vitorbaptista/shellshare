@@ -19,6 +19,8 @@ import pytest
 import websocket
 from playwright.sync_api import sync_playwright
 
+import os
+
 from conftest import (
     CLI_COMMAND,
     SERVER_URL,
@@ -26,10 +28,24 @@ from conftest import (
     _free_port,
     _spawn_server,
     broadcast_message,
+    parse_share_key,
     random_id,
     wait_for_content,
     wait_for_server,
 )
+
+
+def read_share_key(proc, timeout=10):
+    """Read the CLI's printed share link from (bytes) stderr; return key hex."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        line = proc.stderr.readline()
+        if not line:
+            break
+        key = parse_share_key(line.decode(errors="replace"))
+        if key is not None:
+            return key
+    return None
 
 
 def ws_url(server_url, room):
@@ -146,12 +162,15 @@ class TestReliability:
                 CLI_COMMAND + ["--stdin", "-s", url, "-r", room, "-W", password],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
+            key = read_share_key(cli)
+            assert key is not None, "no decryption key in CLI share link"
             cli.stdin.write(b"before restart;")
             cli.stdin.flush()
 
             listener = SocketListener(room, server_url=url)
+            listener.set_key(key)
             listener.connect()
             assert wait_for_content(listener, lambda acc: "before restart;" in acc, timeout=10)
             listener.disconnect()
@@ -170,6 +189,7 @@ class TestReliability:
             wait_for_server(url)
             deadline = time.time() + 15
             listener = SocketListener(room, server_url=url)
+            listener.set_key(key)
             while time.time() < deadline:
                 cli.stdin.write(b"after restart;")
                 cli.stdin.flush()
@@ -210,19 +230,22 @@ class TestReliability:
         room, password = f"test-{random_id()}", f"secret-{random_id()}"
         server = _spawn_server(port)
         url = f"http://127.0.0.1:{port}"
+        key = os.urandom(32).hex()
         try:
             wait_for_server(url)
 
             with sync_playwright() as p:
                 browser = p.chromium.launch()
                 page = browser.new_page()
-                page.goto(f"{url}/r/{room}")
+                page.goto(f"{url}/r/{room}#{key}")
                 page.wait_for_function(
                     "document.getElementById('online-counter').textContent !== '0'",
                     timeout=10000,
                 )
 
-                assert broadcast_message(url, room, password, "first-message") == 200
+                assert broadcast_message(
+                    url, room, password, "first-message", key=key
+                ) == 200
                 page.wait_for_function(
                     "window.shellshareText && window.shellshareText().includes('first-message')",
                     timeout=10000,
@@ -238,7 +261,7 @@ class TestReliability:
                 deadline = time.time() + 20
                 seen = False
                 while time.time() < deadline and not seen:
-                    broadcast_message(url, room, password, "second-message;")
+                    broadcast_message(url, room, password, "second-message;", key=key)
                     seen = page.evaluate(
                         "window.shellshareText && "
                         "window.shellshareText().includes('second-message')"

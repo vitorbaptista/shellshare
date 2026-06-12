@@ -10,8 +10,10 @@ This module provides:
 import json
 import os
 import random
+import re
 import socket
 import string
+import struct
 import subprocess
 import sys
 import tempfile
@@ -26,6 +28,7 @@ from pathlib import Path
 import pytest
 import socketio
 import websocket
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # Constants
 # Use the Rust binary from target/release (or target/debug for development)
@@ -298,7 +301,7 @@ def ws_connect_room(server_url, room, password, timeout=5):
     )
 
 
-def broadcast_message(server_url, room, password, text=None, size=_UNSET):
+def broadcast_message(server_url, room, password, text=None, size=_UNSET, key=None):
     """Broadcast over the WebSocket ingest the way the CLI does.
 
     Returns an HTTP-like status so call sites read naturally: 200 when
@@ -308,6 +311,10 @@ def broadcast_message(server_url, room, password, text=None, size=_UNSET):
     size: defaults to 80x24; pass None to send no size at all, or any
     JSON value to exercise the server's leniency (invalid sizes are
     forwarded but produce no ack and no event).
+
+    key: when set (hex), `text` is sealed into an encrypted record before
+    sending, so a real viewer with that key in the URL fragment can
+    decrypt it. The server only ever sees ciphertext either way.
     """
     if size is _UNSET:
         size = {"cols": 80, "rows": 24}
@@ -321,7 +328,8 @@ def broadcast_message(server_url, room, password, text=None, size=_UNSET):
             if isinstance(size, dict) and "cols" in size and "rows" in size:
                 ws.recv()  # ack: the size is stored before we return
         if text:
-            ws.send_binary(text.encode())
+            payload = seal_record(key, text.encode()) if key else text.encode()
+            ws.send_binary(payload)
             ws.recv()  # ack: the message is stored before we return
         return 200
     finally:
@@ -332,6 +340,65 @@ def decode_message(data):
     """Decode a received message: raw terminal bytes, sent as a Socket.IO
     binary attachment."""
     return bytes(data).decode("utf-8", errors="replace")
+
+
+# Every broadcast is end-to-end encrypted, so the harness seals and opens
+# records exactly like the CLI (src/cli/crypto.rs) and the viewer page:
+# [u32 BE length][12-byte nonce][ciphertext + 16-byte tag], AES-256-GCM.
+# A test that drives the real CLI gets ciphertext on the wire and must
+# decrypt with the key from the share link; a test injecting bytes over a
+# raw WebSocket controls whether to seal them.
+
+def seal_record(key, plaintext):
+    """Seal one chunk into a record, mirroring `Encryptor::seal`.
+
+    `key` is the 32 raw key bytes (or its 64-char hex form).
+    """
+    if isinstance(key, str):
+        key = bytes.fromhex(key)
+    nonce = os.urandom(12)
+    body = nonce + AESGCM(key).encrypt(nonce, plaintext, None)
+    return struct.pack(">I", len(body)) + body
+
+
+def open_records(key, data):
+    """Decrypt a run of records back into terminal bytes.
+
+    Undecryptable records are skipped (mixed-key history), matching the
+    viewer; a structurally broken length frame stops the walk.
+    """
+    if isinstance(key, str):
+        key = bytes.fromhex(key)
+    aes = AESGCM(key)
+    out = bytearray()
+    offset = 0
+    total = len(data)
+    while offset < total:
+        if total - offset < 4:
+            break
+        (record_len,) = struct.unpack_from(">I", data, offset)
+        offset += 4
+        # Minimum: 12-byte nonce + 16-byte tag
+        if record_len < 28 or total - offset < record_len:
+            break
+        nonce = data[offset:offset + 12]
+        ciphertext = data[offset + 12:offset + record_len]
+        offset += record_len
+        try:
+            out += aes.decrypt(nonce, ciphertext, None)
+        except Exception:
+            continue
+    return bytes(out)
+
+
+def parse_share_key(text):
+    """Extract the hex decryption key from a printed share link, or None.
+
+    The CLI prints `... /r/<room>#<64-hex-key>`; the key lives only in the
+    fragment, never on the wire.
+    """
+    match = re.search(r"/r/[^#\s]+#([0-9a-fA-F]{64})", text)
+    return match.group(1) if match else None
 
 
 def terminal_text(page):
@@ -358,11 +425,18 @@ class SocketListener:
     """
     Connects to a room and captures message/size/usersCount events.
 
+    Every broadcast is encrypted, so a listener reading CLI-driven
+    content must be given the room's key (from the share link) via
+    `set_key`; then the message accessors decrypt transparently. Without
+    a key the accessors return the raw bytes as before, which is what
+    raw-WebSocket tests (injecting plaintext directly) want.
+
     Usage:
         listener = SocketListener(room_id)
         listener.connect()
-        # ... run CLI ...
-        msg = listener.wait_for_message(timeout=5)
+        # ... run CLI, capture its share-link key ...
+        listener.set_key(parse_share_key(stderr))
+        msg = listener.wait_for_message(timeout=5, containing="hello")
         listener.disconnect()
     """
     room_id: str
@@ -376,6 +450,14 @@ class SocketListener:
     _broadcasting: list = field(default_factory=list, init=False, repr=False)
     _condition: threading.Condition = field(default_factory=threading.Condition, init=False, repr=False)
     _connected: bool = field(default=False, init=False, repr=False)
+    _key: bytes = field(default=None, init=False, repr=False)
+
+    def set_key(self, key_hex):
+        """Decrypt subsequent content reads with this hex key (or None to
+        read raw bytes). Decryption is lazy, so it's fine to set the key
+        after the CLI has started and the messages have arrived."""
+        with self._condition:
+            self._key = bytes.fromhex(key_hex) if key_hex else None
 
     def connect(self, wait_for_join=True):
         """Connect to the server and join the room."""
@@ -450,28 +532,18 @@ class SocketListener:
 
     def wait_for_message(self, timeout=5, containing=None):
         """
-        Wait for a message to arrive.
-
-        Args:
-            timeout: Maximum seconds to wait
-            containing: If provided, wait for a message containing this substring
+        Wait until the received content (decrypted when a key is set)
+        is non-empty, or contains `containing` if given.
 
         Returns:
-            The decoded message text, or None if timeout
+            The accumulated decoded text, or None if timeout
         """
-        def find_matching():
-            for raw_msg in self._messages:
-                decoded = decode_message(raw_msg)
-                if containing is None or containing in decoded:
-                    return decoded
-            return None
-
         with self._condition:
             start = time.time()
             while True:
-                result = find_matching()
-                if result is not None:
-                    return result
+                acc = self.get_accumulated_messages_unlocked()
+                if acc and (containing is None or containing in acc):
+                    return acc
                 remaining = timeout - (time.time() - start)
                 if remaining <= 0:
                     return None
@@ -483,14 +555,26 @@ class SocketListener:
             return self.get_accumulated_messages_unlocked()
 
     def get_accumulated_messages_unlocked(self) -> str:
-        """Get all messages concatenated together (decoded). Caller must hold lock.
+        """All messages concatenated and decoded. Caller must hold lock.
 
-        Concatenates at the byte level before decoding, so a UTF-8
-        sequence split across two messages still decodes correctly.
+        Concatenates at the byte level first, so a UTF-8 sequence split
+        across two messages still decodes; when a key is set the whole
+        run of records is decrypted before decoding.
         """
-        return b"".join(bytes(m) for m in self._messages).decode(
-            "utf-8", errors="replace"
-        )
+        raw = b"".join(bytes(m) for m in self._messages)
+        if self._key is not None:
+            raw = open_records(self._key, raw)
+        return raw.decode("utf-8", errors="replace")
+
+    def get_raw_bytes(self) -> bytes:
+        """All received message payloads concatenated, undecoded.
+
+        The decoding accessors above assume plaintext UTF-8; encrypted
+        rooms (--encrypt) relay opaque ciphertext records, and
+        assertions on them must stay at the byte level.
+        """
+        with self._condition:
+            return b"".join(bytes(m) for m in self._messages)
 
     def wait_for_user_count(self, expected_count, timeout=5) -> bool:
         """Wait for a specific user count."""

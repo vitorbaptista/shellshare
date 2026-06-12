@@ -40,6 +40,7 @@ from conftest import (
     SERVER_URL,
     SocketListener,
     broadcast_message,
+    parse_share_key,
     poll_until,
     wait_for_content,
 )
@@ -48,6 +49,20 @@ from conftest import (
 def size_dims(size):
     """The (cols, rows) of a size message, ignoring extras like theme."""
     return (size.get("cols"), size.get("rows")) if size else None
+
+
+def give_listener_the_key(cli, listener):
+    """Parse the share key off the CLI's own screen and hand it to the
+    listener so it can decrypt broadcast content.
+
+    Broadcasts are always end-to-end encrypted; the key lives only in the
+    share-link fragment the CLI prints to its own terminal. Without it a
+    listener reading message CONTENT sees ciphertext.
+    """
+    key = parse_share_key(cli.screen)
+    assert key, f"No share key on CLI screen. Screen: {cli.screen!r}"
+    listener.set_key(key)
+    return key
 
 
 class TtyCli:
@@ -179,6 +194,7 @@ class TestTtyBroadcast:
         assert cli.wait_for_screen("Sharing terminal in"), (
             f"CLI did not start sharing. Screen: {cli.screen!r}"
         )
+        give_listener_the_key(cli, socket_listener)
 
         cli.send("echo tty-roundtrip-marker\n")
 
@@ -241,6 +257,7 @@ class TestTtyResize:
     ):
         cli = tty_cli(unique_room, unique_password, cols=80, rows=24)
         assert cli.wait_for_screen("Sharing terminal in")
+        give_listener_the_key(cli, socket_listener)
 
         # First broadcast carries the initial size
         cli.send("echo before-resize\n")
@@ -277,6 +294,7 @@ class TestTtySignals:
     ):
         cli = tty_cli(unique_room, unique_password)
         assert cli.wait_for_screen("Sharing terminal in")
+        give_listener_the_key(cli, socket_listener)
         cli.send("echo pre-interrupt\n")
         assert wait_for_content(
             socket_listener, lambda s: "pre-interrupt" in s, timeout=10

@@ -3,6 +3,7 @@
 //! This module provides the client functionality for streaming terminal
 //! output to a shellshare server.
 
+mod crypto;
 mod script;
 mod ws;
 
@@ -42,6 +43,10 @@ pub struct ClientArgs {
     pub exec: Option<Vec<String>>,
     /// Viewer color theme, already validated against `themes::names()`
     pub theme: Option<String>,
+    /// End-to-end encrypt the broadcast (the default). When false the
+    /// terminal is sent in plaintext - for viewers on plain HTTP, where
+    /// browsers can't decrypt
+    pub encrypt: bool,
 }
 
 /// Generate a random 18-character alphanumeric room ID
@@ -72,6 +77,32 @@ fn get_default_password() -> String {
         let mut rng = rand::thread_rng();
         rng.gen::<u64>().to_string()
     }
+}
+
+/// Whether browsers will treat the share link as a secure context.
+/// `WebCrypto` (which the viewer needs to decrypt) only exists on https
+/// pages, localhost, and loopback addresses.
+///
+/// Sibling loopback logic lives in `main.rs`'s `serve()`, but operates
+/// on the raw `--host` arg (no scheme, plus wildcard detection), so the
+/// two intentionally don't share a parser - keep their notions of
+/// "loopback" consistent if either changes.
+fn is_secure_context_url(base: &str) -> bool {
+    let Some(rest) = base.strip_prefix("http://") else {
+        return true; // https
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    // Strip the port; IPv6 hosts are bracketed in URLs
+    let host = authority.strip_prefix('[').map_or_else(
+        || authority.rsplit_once(':').map_or(authority, |(h, _)| h),
+        |h| h.split(']').next().unwrap_or(h),
+    );
+    let host = host.to_ascii_lowercase();
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Normalize server URL (ensure it has a scheme, strip trailing slashes)
@@ -105,12 +136,41 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     // Build room path (r/{room})
     let room_path = format!("r/{room}");
 
+    // Encrypted by default. The key goes only into the printed link's
+    // #fragment - browsers never send fragments, so the server cannot
+    // see it. Derived from this machine and the room name, so a named
+    // room keeps one reusable link across restarts. --disable-encryption
+    // drops to plaintext for viewers on plain HTTP (no WebCrypto there)
+    let (cipher, share_url) = if args.encrypt {
+        let (cipher, key) = crypto::Encryptor::for_room(&room);
+        (Some(cipher), format!("{share_base}/{room_path}#{key}"))
+    } else {
+        (None, format!("{share_base}/{room_path}"))
+    };
+    if args.encrypt {
+        if !is_secure_context_url(&share_base) {
+            eprintln!(
+                "WARNING: viewers can only decrypt on https or localhost; \
+                 the link below is plain http, so browsers will refuse. \
+                 For sharing over a plain-HTTP local network, run with \
+                 --disable-encryption."
+            );
+        }
+    } else {
+        eprintln!(
+            "WARNING: --disable-encryption is set; this broadcast is NOT \
+             encrypted, so the server and anyone on the network can read \
+             the terminal."
+        );
+    }
+
     // Connecting claims the room (or fails on a password mismatch), so
     // a broadcast that can never work is reported before the terminal
     // is handed over to the shell. Failures must propagate (not exit):
     // the caller may hold a tunnel whose cleanup an exit would skip
     let size = get_terminal_size();
-    let transport = ws::Transport::connect(&server, &room_path, &password, size, args.theme)?;
+    let transport =
+        ws::Transport::connect(&server, &room_path, &password, size, args.theme, cipher)?;
 
     // Ctrl+C only flips the flag; the sending thread owns the transport
     // and performs cleanup (flush, room deletion) when it stops
@@ -120,13 +180,13 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
         running_clone.store(false, Ordering::SeqCst);
     })?;
 
-    let share_url = format!("{share_base}/{room_path}");
     if args.json {
         emit_json(&serde_json::json!({
             "event": "sharing",
             "url": share_url,
             "room": room,
             "server": server,
+            "encrypted": args.encrypt,
         }));
     }
 
@@ -199,10 +259,9 @@ fn stream_stdin(
             break;
         }
 
-        let data = buffer[..bytes_read].to_vec();
         let size = get_terminal_size();
 
-        if let Err(e) = transport.send(data, size) {
+        if let Err(e) = transport.send(&buffer[..bytes_read], size) {
             eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
             // The room belongs to someone else now; it is not ours to

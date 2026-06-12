@@ -6,6 +6,7 @@ with it through the public interfaces (CLI + browser). They test both
 the server and the Python CLI client.
 """
 
+import os
 import random
 import string
 import subprocess
@@ -17,6 +18,8 @@ from playwright.sync_api import sync_playwright
 from conftest import (
     CLI_COMMAND,
     SERVER_URL,
+    broadcast_message,
+    parse_share_key,
     terminal_text,
     wait_for_terminal_text,
 )
@@ -39,20 +42,6 @@ def wait_for_server(url, timeout_seconds=30):
     raise TimeoutError(f"Server not ready after {timeout_seconds}s")
 
 
-def broadcast_with_cli(room_id, message, password, server_url):
-    """Broadcast a message using the shellshare CLI with --stdin flag."""
-    proc = subprocess.Popen(
-        CLI_COMMAND + ["--stdin", "-s", server_url, "-r", room_id, "-W", password],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",  # Windows pipes default to cp1252, breaking unicode
-    )
-    stdout, stderr = proc.communicate(input=message, timeout=10)
-    return proc.returncode, stdout, stderr
-
-
 def test_happy_path_broadcast_appears_in_browser():
     """
     Happy path test:
@@ -62,34 +51,34 @@ def test_happy_path_broadcast_appears_in_browser():
     """
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
+    key = os.urandom(32).hex()
     test_message = "Hello from CLI E2E test"
-    
+
     print(f"Waiting for server at {SERVER_URL}...")
     wait_for_server(SERVER_URL)
     print("Server is ready!")
-    
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        
+
         # Navigate to room
-        room_url = f"{SERVER_URL}/r/{room_id}"
+        room_url = f"{SERVER_URL}/r/{room_id}#{key}"
         print(f"Opening room: {room_url}")
         page.goto(room_url)
-        
+
         # Wait for terminal element
         page.wait_for_selector("#terminal", timeout=10000)
         print("Terminal element found")
-        
+
         # Wait for Socket.IO to connect (user count becomes 1)
         page.wait_for_function("document.getElementById('online-counter').textContent !== '0'", timeout=10000)
         print("Socket.IO connected (user count updated)")
-        
-        # Broadcast using CLI
-        print(f"Broadcasting via CLI: {test_message}")
-        returncode, stdout, stderr = broadcast_with_cli(room_id, test_message, password, SERVER_URL)
-        print(f"CLI stderr: {stderr.strip()}")
-        assert returncode == 0, f"CLI failed with code {returncode}: {stderr}"
+
+        # Broadcast (sealed with the room's key)
+        print(f"Broadcasting: {test_message}")
+        status = broadcast_message(SERVER_URL, room_id, password, test_message, key=key)
+        assert status == 200, f"Broadcast failed with status {status}"
 
         # Wait for the message to appear in the terminal buffer
         wait_for_terminal_text(page, test_message)
@@ -181,30 +170,31 @@ def test_terminal_size_updates_in_browser():
     """
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
-    
+    key = os.urandom(32).hex()
+
     print(f"Waiting for server at {SERVER_URL}...")
     wait_for_server(SERVER_URL)
     print("Server is ready!")
-    
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        
+
         # Navigate to room
-        room_url = f"{SERVER_URL}/r/{room_id}"
+        room_url = f"{SERVER_URL}/r/{room_id}#{key}"
         print(f"Opening room: {room_url}")
         page.goto(room_url)
-        
+
         # Wait for terminal element
         page.wait_for_selector("#terminal", timeout=10000)
         print("Terminal element found")
-        
-        # Broadcast with a specific size
-        custom_size = {"rows": 40, "cols": 120}
-        returncode, stdout, stderr = broadcast_with_cli(
-            room_id, "Test message", password, SERVER_URL
+
+        # Broadcast with a specific size (sealed with the room's key)
+        status = broadcast_message(
+            SERVER_URL, room_id, password, "Test message",
+            size={"rows": 40, "cols": 120}, key=key,
         )
-        assert returncode == 0, f"CLI failed: {stderr}"
+        assert status == 200, f"Broadcast failed with status {status}"
 
         # Wait for message to appear in terminal (confirms size update was processed)
         wait_for_terminal_text(page, "Test message")
@@ -229,6 +219,7 @@ def test_multiple_broadcasts_no_duplication():
     """
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
+    key = os.urandom(32).hex()
 
     # Use unique markers that are easy to count
     marker_a = f"MARKER_ALPHA_{random_id(6)}"
@@ -243,7 +234,7 @@ def test_multiple_broadcasts_no_duplication():
         page = browser.new_page()
 
         # Navigate to room
-        room_url = f"{SERVER_URL}/r/{room_id}"
+        room_url = f"{SERVER_URL}/r/{room_id}#{key}"
         print(f"Opening room: {room_url}")
         page.goto(room_url)
 
@@ -255,18 +246,18 @@ def test_multiple_broadcasts_no_duplication():
         )
         print("Terminal ready and Socket.IO connected")
 
-        # First broadcast
+        # First broadcast (sealed with the room's key)
         print(f"Broadcasting first message: {marker_a}")
-        returncode, _, stderr = broadcast_with_cli(room_id, marker_a, password, SERVER_URL)
-        assert returncode == 0, f"First broadcast failed: {stderr}"
+        status = broadcast_message(SERVER_URL, room_id, password, marker_a, key=key)
+        assert status == 200, f"First broadcast failed: {status}"
 
         # Wait for first message to arrive
         wait_for_terminal_text(page, marker_a)
 
-        # Second broadcast
+        # Second broadcast (same room key)
         print(f"Broadcasting second message: {marker_b}")
-        returncode, _, stderr = broadcast_with_cli(room_id, marker_b, password, SERVER_URL)
-        assert returncode == 0, f"Second broadcast failed: {stderr}"
+        status = broadcast_message(SERVER_URL, room_id, password, marker_b, key=key)
+        assert status == 200, f"Second broadcast failed: {status}"
 
         # Wait for second message to arrive
         wait_for_terminal_text(page, marker_b)
@@ -308,10 +299,21 @@ def test_late_joiner_sees_history_in_browser():
         CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room_id, "-W", password],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
     )
     try:
+        # The CLI prints the share link (with the decryption key in the
+        # fragment) to stderr; the viewer needs that key to decrypt.
+        key = None
+        start = time.time()
+        while key is None and time.time() - start < 10:
+            line = proc.stderr.readline()
+            if not line:
+                break
+            key = parse_share_key(line)
+        assert key, "CLI did not print a share link with a key"
+
         # Broadcast BEFORE any browser is watching
         proc.stdin.write(f"{marker_early}\n{marker_late}\n")
         proc.stdin.flush()
@@ -320,7 +322,7 @@ def test_late_joiner_sees_history_in_browser():
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
-            page.goto(f"{SERVER_URL}/r/{room_id}")
+            page.goto(f"{SERVER_URL}/r/{room_id}#{key}")
             page.wait_for_selector("#terminal", timeout=10000)
 
             wait_for_terminal_text(page, marker_early)
@@ -339,6 +341,7 @@ def test_unicode_renders_in_browser():
     """
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
+    key = os.urandom(32).hex()
     test_message = "Olá 世界 — ünïcödé"
 
     wait_for_server(SERVER_URL)
@@ -346,17 +349,17 @@ def test_unicode_renders_in_browser():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        page.goto(f"{SERVER_URL}/r/{room_id}")
+        page.goto(f"{SERVER_URL}/r/{room_id}#{key}")
         page.wait_for_selector("#terminal", timeout=10000)
         page.wait_for_function(
             "document.getElementById('online-counter').textContent !== '0'",
             timeout=10000
         )
 
-        returncode, _, stderr = broadcast_with_cli(
-            room_id, test_message, password, SERVER_URL
+        status = broadcast_message(
+            SERVER_URL, room_id, password, test_message, key=key
         )
-        assert returncode == 0, f"CLI failed: {stderr}"
+        assert status == 200, f"Broadcast failed with status {status}"
 
         wait_for_terminal_text(page, test_message)
 
@@ -368,24 +371,23 @@ def test_resize_updates_browser_terminal():
     A size broadcast must resize the browser terminal to the new
     dimensions (mirrored straight into xterm's cols/rows).
     """
-    from conftest import broadcast_message
-
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
+    key = os.urandom(32).hex()
 
     wait_for_server(SERVER_URL)
 
     def post_with_size(text, cols, rows):
         status = broadcast_message(
             SERVER_URL, room_id, password, text,
-            size={"cols": cols, "rows": rows},
+            size={"cols": cols, "rows": rows}, key=key,
         )
         assert status == 200
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        page.goto(f"{SERVER_URL}/r/{room_id}")
+        page.goto(f"{SERVER_URL}/r/{room_id}#{key}")
         page.wait_for_selector("#terminal", timeout=10000)
         page.wait_for_function(
             "document.getElementById('online-counter').textContent !== '0'",
@@ -414,17 +416,16 @@ def test_fullscreen_mode_scales_and_restores():
     again restores the default layout. The class is the primary signal
     so the test holds even if headless denies native fullscreen.
     """
-    from conftest import broadcast_message
-
     room_id = f"test-{random_id()}"
     password = f"secret-{random_id()}"
+    key = os.urandom(32).hex()
 
     wait_for_server(SERVER_URL)
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        page.goto(f"{SERVER_URL}/r/{room_id}")
+        page.goto(f"{SERVER_URL}/r/{room_id}#{key}")
         page.wait_for_selector("#terminal", timeout=10000)
         page.wait_for_function(
             "document.getElementById('online-counter').textContent !== '0'",
@@ -433,7 +434,7 @@ def test_fullscreen_mode_scales_and_restores():
 
         status = broadcast_message(
             SERVER_URL, room_id, password, "fullscreen test",
-            size={"cols": 80, "rows": 24},
+            size={"cols": 80, "rows": 24}, key=key,
         )
         assert status == 200
         wait_for_terminal_text(page, "fullscreen test")

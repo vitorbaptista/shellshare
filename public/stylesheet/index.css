@@ -65,6 +65,9 @@ pre {
   -o-border-radius: 10px;
   border-radius: 10px;
   padding: 1em;
+  /* Long lines (e.g. a share link with its key) are clipped to the box
+     instead of spilling past it; only the part that fits is shown. */
+  overflow: hidden;
 }
 
 .download code {

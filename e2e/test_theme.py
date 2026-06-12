@@ -7,6 +7,7 @@ themes.json. These tests cover the wire format, CLI validation, and the
 colors actually rendered in a browser.
 """
 
+import re
 import subprocess
 import time
 
@@ -19,6 +20,8 @@ from conftest import (
     random_id,
     wait_for_terminal_text,
 )
+
+SHARE_LINK_RE = re.compile(r"Sharing terminal in (\S+)")
 
 # Background colors from themes.json, as computed CSS values
 DRACULA_BG = "rgb(40, 42, 54)"
@@ -133,25 +136,40 @@ class TestThemeRendering:
         room_id = f"theme-{random_id()}"
         password = f"secret-{random_id()}"
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page()
-            page.goto(f"{server.url}/r/{room_id}")
-            page.wait_for_selector("#terminal", timeout=10000)
-            page.wait_for_function(
-                "document.getElementById('online-counter').textContent !== '0'",
-                timeout=10000,
-            )
+        proc = subprocess.Popen(
+            CLI_COMMAND + [
+                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+                "--theme", "dracula",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            share_url = None
+            for line in proc.stderr:
+                match = SHARE_LINK_RE.search(line)
+                if match:
+                    share_url = match.group(1)
+                    break
+            assert share_url, "No share link in CLI output"
 
-            returncode, stdout, stderr = run_cli_stdin(
-                "themed output", room_id, password, server=server.url,
-                extra_args=["--theme", "dracula"],
-            )
-            assert returncode == 0, f"CLI failed: {stderr}"
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(share_url)
+                page.wait_for_selector("#terminal", timeout=10000)
 
-            wait_for_terminal_text(page, "themed output")
-            assert terminal_background(page) == DRACULA_BG
-            browser.close()
+                proc.stdin.write("themed output\n")
+                proc.stdin.flush()
+
+                wait_for_terminal_text(page, "themed output")
+                assert terminal_background(page) == DRACULA_BG
+                browser.close()
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=10)
 
     def test_late_joiner_sees_theme(self, dedicated_server):
         """The theme is replayed with the stored size, so a viewer who
@@ -169,10 +187,18 @@ class TestThemeRendering:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
         )
         try:
+            share_url = None
+            for line in proc.stderr:
+                match = SHARE_LINK_RE.search(line)
+                if match:
+                    share_url = match.group(1)
+                    break
+            assert share_url, "No share link in CLI output"
+
             proc.stdin.write("early content\n")
             proc.stdin.flush()
             time.sleep(2)  # let the CLI deliver before the viewer joins
@@ -180,7 +206,7 @@ class TestThemeRendering:
             with sync_playwright() as p:
                 browser = p.chromium.launch()
                 page = browser.new_page()
-                page.goto(f"{server.url}/r/{room_id}")
+                page.goto(share_url)
                 page.wait_for_selector("#terminal", timeout=10000)
 
                 wait_for_terminal_text(page, "early content")
@@ -195,21 +221,36 @@ class TestThemeRendering:
         room_id = f"theme-default-{random_id()}"
         password = f"secret-{random_id()}"
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page()
-            page.goto(f"{server.url}/r/{room_id}")
-            page.wait_for_selector("#terminal", timeout=10000)
-            page.wait_for_function(
-                "document.getElementById('online-counter').textContent !== '0'",
-                timeout=10000,
-            )
+        proc = subprocess.Popen(
+            CLI_COMMAND + [
+                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            share_url = None
+            for line in proc.stderr:
+                match = SHARE_LINK_RE.search(line)
+                if match:
+                    share_url = match.group(1)
+                    break
+            assert share_url, "No share link in CLI output"
 
-            returncode, stdout, stderr = run_cli_stdin(
-                "plain output", room_id, password, server=server.url
-            )
-            assert returncode == 0, f"CLI failed: {stderr}"
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(share_url)
+                page.wait_for_selector("#terminal", timeout=10000)
 
-            wait_for_terminal_text(page, "plain output")
-            assert terminal_background(page) == TANGO_BG
-            browser.close()
+                proc.stdin.write("plain output\n")
+                proc.stdin.flush()
+
+                wait_for_terminal_text(page, "plain output")
+                assert terminal_background(page) == TANGO_BG
+                browser.close()
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=10)

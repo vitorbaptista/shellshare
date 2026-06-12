@@ -23,10 +23,26 @@ from conftest import (
     SocketListener,
     _free_port,
     broadcast_message,
+    parse_share_key,
     poll_until,
     random_id,
     wait_for_server,
 )
+
+
+def read_share_key(proc, timeout=10):
+    """Read the CLI's printed share link from stderr and return its key."""
+    import time as _time
+
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        line = proc.stderr.readline()
+        if not line:
+            break
+        key = parse_share_key(line)
+        if key is not None:
+            return key
+    return None
 
 
 def serve_args(port, room, password, host=None):
@@ -136,6 +152,9 @@ class TestBroadcasting:
         listener = SocketListener(room, server_url=f"http://127.0.0.1:{port}")
         try:
             wait_for_server(f"http://127.0.0.1:{port}")
+            key = read_share_key(proc)
+            assert key is not None, "no decryption key in CLI share link"
+            listener.set_key(key)
             listener.connect()
             proc.stdin.write("hello from serve mode")
             proc.stdin.flush()
