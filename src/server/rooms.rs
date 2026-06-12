@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 /// Maximum number of messages to store per room for late joiners.
 /// This prevents unbounded memory growth while keeping enough history
 /// for a good late-joiner experience.
-const MAX_HISTORY_MESSAGES: usize = 100;
+const MAX_HISTORY_MESSAGES: usize = 200;
 
 /// A canonical room identifier.
 ///
