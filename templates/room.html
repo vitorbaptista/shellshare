@@ -30,8 +30,8 @@
       </h1>
     </header>
     <main class="main">
-      <div id="crypto-notice" class="crypto-notice" role="alert" hidden></div>
       <div id="terminal">
+        <div id="crypto-notice" class="crypto-notice" role="alert" hidden></div>
         <button id="fullscreen-toggle" type="button" title="Fullscreen (f)" aria-label="Toggle fullscreen">
           <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>
@@ -96,6 +96,12 @@
       function showCryptoNotice(text) {
         cryptoNotice.textContent = text;
         cryptoNotice.hidden = false;
+        terminalContainer.classList.add('crypto-blocked');
+      }
+
+      function hideCryptoNotice() {
+        cryptoNotice.hidden = true;
+        terminalContainer.classList.remove('crypto-blocked');
       }
 
       function hexToBytes(hexString) {
@@ -118,15 +124,13 @@
       if (keyHex) {
         if (!(window.crypto && window.crypto.subtle)) {
           // WebCrypto only exists in secure contexts
-          showCryptoNotice('This broadcast is end-to-end encrypted, ' +
-            'which needs a secure connection. Open this link over ' +
-            'https:// or from localhost.');
+          showCryptoNotice('Encrypted broadcast. Open this link over ' +
+            'https or from localhost to view it.');
         } else {
           var keyBytes = hexToBytes(keyHex);
           if (!keyBytes || keyBytes.length !== 32) {
-            showCryptoNotice('The decryption key in this link (after ' +
-              "'#') is invalid. Ask the broadcaster for the full " +
-              'share link.');
+            showCryptoNotice('Invalid decryption key. Ask the ' +
+              'broadcaster for the full share link.');
           } else {
             cryptoKeyPromise = window.crypto.subtle.importKey(
               'raw', keyBytes, {name: 'AES-GCM'}, false, ['decrypt']);
@@ -183,9 +187,8 @@
       }
 
       function showWrongKeyNotice() {
-        showCryptoNotice("Couldn't decrypt this broadcast - the key " +
-          'in this link does not match it. Ask the broadcaster for ' +
-          'the current share link.');
+        showCryptoNotice('Wrong decryption key. Ask the broadcaster ' +
+          'for the current share link.');
       }
 
       // Decryption is asynchronous, so writes go through one promise
@@ -211,7 +214,7 @@
             // the old key - that's expected, not an error). Flag the
             // stream only when nothing in this message decrypted.
             if (result.chunks.length > 0) {
-              cryptoNotice.hidden = true;
+              hideCryptoNotice();
             } else if (bytes.length > 0) {
               showWrongKeyNotice();
             }
@@ -477,9 +480,8 @@
         // key, rather than mistaking ciphertext for a plaintext room.
         if (size.encrypted && !keyHex && !encryptedWithoutKey) {
           encryptedWithoutKey = true;
-          showCryptoNotice('This broadcast is end-to-end encrypted; ' +
-            "this link is missing its decryption key (the part after " +
-            "'#'). Ask the broadcaster for the full share link.");
+          showCryptoNotice('Missing decryption key. Ask the ' +
+            'broadcaster for the full share link.');
         }
         var cols = clampDimension(size.cols);
         var rows = clampDimension(size.rows);

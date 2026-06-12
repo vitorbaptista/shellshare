@@ -255,8 +255,7 @@ class TestViewerDecryption:
                 page.goto(keyless_url)
                 page.wait_for_selector("#crypto-notice:visible", timeout=10000)
                 notice = page.text_content("#crypto-notice")
-                assert "encrypted" in notice
-                assert "missing" in notice
+                assert "Missing decryption key" in notice
                 # The terminal must stay empty: neither the plaintext
                 # (it can't decrypt) nor rendered ciphertext garbage
                 assert terminal_text(page).strip() == ""
@@ -294,7 +293,8 @@ class TestViewerDecryption:
                 page = browser.new_page()
                 page.goto(bad_url)
                 page.wait_for_selector("#crypto-notice:visible", timeout=10000)
-                assert "invalid" in page.text_content("#crypto-notice")
+                assert "Invalid decryption key" in page.text_content(
+                    "#crypto-notice")
                 browser.close()
         finally:
             finish_broadcaster(proc)

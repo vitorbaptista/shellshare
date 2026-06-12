@@ -47,15 +47,30 @@ div.online {
 }
 
 /* Why an encrypted broadcast isn't rendering (missing/wrong key,
-   insecure context). Shown above the terminal, which stays empty. */
+   insecure context): a card centred over the terminal, which is
+   dimmed behind it to read as disabled. */
 .crypto-notice {
-  background-color: #3b2f00;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  max-width: min(90%, 32ch);
+  text-align: center;
+  background-color: #1c1c1c;
   border: 1px solid #b8860b;
-  border-radius: 4px;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
   color: #ffd866;
   font-family: 'Inconsolata', monospace;
-  margin-bottom: 0.75em;
-  padding: 0.75em 1em;
+  line-height: 1.4;
+  padding: 1em 1.25em;
+}
+
+#terminal.crypto-blocked .xterm {
+  filter: blur(2px);
+  opacity: 0.3;
+  pointer-events: none;
 }
 
 .broadcast-status::before {
