@@ -8,6 +8,7 @@ immediately after the triggering action.
 """
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -75,12 +76,18 @@ def mock_posthog():
     mock.shutdown()
 
 
-def analytics_server(dedicated_server, mock_posthog, *extra_args):
+def analytics_server(dedicated_server, mock_posthog, *extra_args, environment=None):
+    # ENV is scrubbed unless the test sets one, so a label in the
+    # developer's shell can't leak into the no-environment assertions
+    env = {k: v for k, v in os.environ.items() if k != "ENV"}
+    if environment is not None:
+        env["ENV"] = environment
     return dedicated_server(
         "--posthog-key", POSTHOG_KEY,
         "--posthog-host", mock_posthog.url,
         "--posthog-salt", POSTHOG_SALT,
         *extra_args,
+        env=env,
     )
 
 
@@ -133,6 +140,8 @@ def test_full_lifecycle_emits_the_three_events(dedicated_server, mock_posthog):
     for event in (created, ended, viewed):
         assert event["properties"]["$process_person_profile"] is False
         assert event["properties"]["$geoip_disable"] is True
+        # No ENV set: no environment label on any event
+        assert "environment" not in event["properties"]
         # No PII: neither the room name nor the password may appear
         # anywhere in any payload
         payload = json.dumps(event)
@@ -226,6 +235,37 @@ def test_clean_exit_emits_exactly_one_broadcast_ended(dedicated_server, mock_pos
     assert len(mock_posthog.events_named("broadcast_ended")) == 1
 
 
+def test_environment_label_is_attached_to_every_event(dedicated_server, mock_posthog):
+    server = analytics_server(dedicated_server, mock_posthog, environment="staging")
+    room = random_id()
+
+    ws = ws_connect_room(server.url, room, "pw")
+    try:
+        listener = SocketListener(room, server_url=server.url)
+        listener.connect()
+        try:
+            assert poll_until(
+                lambda: mock_posthog.events_named("viewer_joined"), timeout=10
+            ), "viewer_joined never reached the mock"
+        finally:
+            listener.disconnect()
+        ws.send(json.dumps({"delete": True}))
+    finally:
+        ws.close()
+
+    assert poll_until(
+        lambda: mock_posthog.events_named("room_created")
+        and mock_posthog.events_named("broadcast_ended"),
+        timeout=10,
+    ), "room_created/broadcast_ended never reached the mock"
+
+    with mock_posthog._lock:
+        events = list(mock_posthog.events)
+    assert events
+    for event in events:
+        assert event["properties"]["environment"] == "staging"
+
+
 def test_no_salt_disables_analytics(dedicated_server, mock_posthog):
     server = dedicated_server(
         "--posthog-key", POSTHOG_KEY,
@@ -244,7 +284,6 @@ def test_no_salt_disables_analytics(dedicated_server, mock_posthog):
 def test_serve_mode_sends_no_analytics(mock_posthog):
     # `shellshare serve` embeds the server with analytics hardcoded off;
     # the env vars that configure `shellshare server` must not leak in
-    import os
     import subprocess
 
     from conftest import CLI_COMMAND, _free_port, wait_for_server

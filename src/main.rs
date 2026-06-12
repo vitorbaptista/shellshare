@@ -215,6 +215,9 @@ fn start_local_server(host: &str, port: u16) -> Result<std::net::SocketAddr, Str
 /// setup beats silently degrading it (a random fallback salt would
 /// reset every identity on restart and corrupt the recurring-user
 /// metric invisibly), so each half-configured case warns and disables.
+///
+/// The deployment label comes from `ENV` (env var only, no flag): it is
+/// deployment metadata like `PORT`, not a shellshare setting.
 fn analytics_config(
     key: Option<String>,
     host: String,
@@ -225,6 +228,7 @@ fn analytics_config(
             api_key,
             host,
             salt,
+            environment: std::env::var("ENV").ok().filter(|e| !e.is_empty()),
         }),
         (Some(_), None) => {
             tracing::warn!("Analytics disabled: --posthog-key is set but --posthog-salt is not");
