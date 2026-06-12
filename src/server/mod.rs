@@ -6,6 +6,7 @@ mod analytics;
 mod binaries;
 mod pages;
 mod rooms;
+mod viewers;
 
 pub use analytics::{Config as AnalyticsConfig, DEFAULT_POSTHOG_HOST};
 
@@ -70,6 +71,8 @@ struct AppState {
     fanout: Arc<OnceLock<Vec<tokio::sync::mpsc::UnboundedSender<FanoutItem>>>>,
     /// Rooms whose user count changed and needs re-broadcasting
     usercount: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<String>>>,
+    /// Raw-WebSocket viewers, by room
+    viewers: viewers::Viewers,
     /// Track which rooms each socket is in (for disconnect handling)
     socket_rooms: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Cleanup configuration for abandoned rooms
@@ -191,7 +194,7 @@ pub async fn serve_on(
     for _ in 0..shards {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         fanout_txs.push(tx);
-        tokio::spawn(fanout_loop(rx, app_state.io.clone()));
+        tokio::spawn(fanout_loop(rx, app_state.io.clone(), app_state.viewers.clone()));
     }
     let _ = app_state.fanout.set(fanout_txs);
 
@@ -199,7 +202,7 @@ pub async fn serve_on(
     // room here instead of broadcasting inline
     let (usercount_tx, usercount_rx) = tokio::sync::mpsc::unbounded_channel();
     let _ = app_state.usercount.set(usercount_tx);
-    tokio::spawn(usercount_loop(usercount_rx, app_state.io.clone()));
+    tokio::spawn(usercount_loop(usercount_rx, app_state.io.clone(), app_state.viewers.clone()));
 
     // Spawn background cleanup task for abandoned rooms
     spawn_cleanup_task(app_state.clone());
@@ -213,6 +216,8 @@ pub async fn serve_on(
         .route("/r/{*room}", delete(delete_room_handler))
         // WebSocket ingest - the fast path for broadcasting clients
         .route("/ws/r/{*room}", get(ws_ingest_handler))
+        // WebSocket viewers - raw frames out, no Socket.IO framing
+        .route("/ws/v/r/{*room}", get(ws_view_handler))
         // Binary download (serves embedded binaries or self)
         .route("/bin/shellshare", get(serve_binary))
         // Static files - fallback
@@ -320,11 +325,13 @@ fn setup_socket_handlers(io: &SocketIo) {
                     warn!("Failed to emit broadcasting: {:?}", e);
                 }
 
-                // Get fresh user count right before emissions
+                // Get fresh user count right before emissions; raw-WS
+                // viewers watch the same room and count the same
                 let user_count = socket
                     .within(room_name.clone())
                     .sockets()
-                    .map_or(0, |s| s.len());
+                    .map_or(0, |s| s.len())
+                    + state.viewers.count(&room_name);
 
                 // Send user count directly to this client (guaranteed
                 // delivery - clients treat it as the join confirmation)
@@ -470,6 +477,7 @@ const FANOUT_MAX_BATCH: usize = 64 * 1024;
 async fn fanout_loop(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<FanoutItem>,
     io: Arc<OnceLock<SocketIo>>,
+    viewers: viewers::Viewers,
 ) {
     /// Payloads accumulated for one room, flushed as one emit.
     #[derive(Default)]
@@ -478,7 +486,7 @@ async fn fanout_loop(
         len: usize,
     }
 
-    fn flush(io: &SocketIo, room: &str, p: Pending) {
+    fn flush(io: &SocketIo, viewers: &viewers::Viewers, room: &str, p: Pending) {
         if p.chunks.is_empty() {
             return;
         }
@@ -491,6 +499,7 @@ async fn fanout_loop(
             }
             buf.freeze()
         };
+        viewers.send_bytes(room, &payload);
         if let Some(ns) = io.of("/") {
             let _ = ns.within(room.to_string()).emit("message", &payload);
         }
@@ -510,8 +519,10 @@ async fn fanout_loop(
                 // A size event is an ordering barrier within its room:
                 // anything queued before it must reach viewers first
                 if let Some(p) = pending.remove(&item.room) {
-                    flush(io, &item.room, p);
+                    flush(io, &viewers, &item.room, p);
                 }
+                let control = serde_json::json!({ "size": size }).to_string();
+                viewers.send_control(&item.room, &control);
                 if let Some(ns) = io.of("/") {
                     let _ = ns.within(item.room.clone()).emit("size", &size);
                 }
@@ -521,7 +532,7 @@ async fn fanout_loop(
                     std::collections::hash_map::Entry::Occupied(mut e) => {
                         if e.get().len + payload.len() > FANOUT_MAX_BATCH {
                             let full = std::mem::take(e.get_mut());
-                            flush(io, e.key(), full);
+                            flush(io, &viewers, e.key(), full);
                         }
                         let p = e.get_mut();
                         p.len += payload.len();
@@ -537,7 +548,7 @@ async fn fanout_loop(
             }
         }
         for (room, p) in pending {
-            flush(io, &room, p);
+            flush(io, &viewers, &room, p);
         }
     }
 }
@@ -555,6 +566,7 @@ async fn fanout_loop(
 async fn usercount_loop(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<String>,
     io: Arc<OnceLock<SocketIo>>,
+    viewers: viewers::Viewers,
 ) {
     let mut rooms = std::collections::HashSet::new();
     while let Some(first) = rx.recv().await {
@@ -568,15 +580,147 @@ async fn usercount_loop(
             continue;
         };
         for room in rooms.drain() {
-            let count = io
+            let socketio = io
                 .of("/")
                 .and_then(|ns| ns.within(room.clone()).sockets().ok())
                 .map_or(0, |sockets| sockets.len());
+            let count = socketio + viewers.count(&room);
+            viewers.send_control(&room, &format!("{{\"usersCount\":{count}}}"));
             if let Some(ns) = io.of("/") {
                 let _ = ns.within(room).emit("usersCount", &count);
             }
         }
     }
+}
+
+/// GET /ws/v/r/:room - raw-WebSocket viewer endpoint.
+///
+/// The room is the URL: no join handshake exists to lose. On connect
+/// the server pushes, in order: the current `size` (a JSON text frame,
+/// so the terminal is sized before content), the accumulated history
+/// (one binary frame), the `broadcasting` state, and the current
+/// `usersCount`. After that, binary frames are live terminal bytes and
+/// text frames are JSON control events - the exact mirror of the
+/// ingest protocol on `/ws/r/:room`.
+async fn ws_view_handler(
+    Path(room_path): Path<String>,
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let room_id = RoomId::parse(&room_path);
+    ws.on_upgrade(move |socket| ws_view_loop(socket, state, room_id))
+}
+
+/// How long a viewer may go without sending anything (pong frames
+/// answer our pings automatically in every browser) before the
+/// connection is presumed dead. Pings go out every 25s, so a healthy
+/// peer is never close to this.
+const VIEWER_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
+/// Viewer ping cadence; keeps NATs open and detects dead peers.
+const VIEWER_PING_INTERVAL: Duration = Duration::from_secs(25);
+
+/// One viewer connection: replay the catch-up snapshot, then relay the
+/// registry queue until the peer leaves or stalls out.
+async fn ws_view_loop(mut socket: WebSocket, state: AppState, room_id: RoomId) {
+    let room = room_id.as_str().to_string();
+    // Register BEFORE the snapshot: a frame broadcast in between shows
+    // up in the queue (and possibly also in the snapshot - the
+    // accepted at-least-once duplicate), but can never be missed
+    let (viewer_id, mut rx) = state.viewers.join(&room);
+    info!("WS viewer {viewer_id} joined room {room_id:?}");
+
+    let snapshot = state.rooms.snapshot(&room_id);
+    let broadcasting = snapshot.as_ref().is_some_and(|s| s.broadcasting);
+    let room_exists = snapshot.is_some();
+    let catch_up = async {
+        if let Some(snap) = snapshot {
+            if let Some(size) = snap.size {
+                let frame = serde_json::json!({ "size": size }).to_string();
+                socket.send(WsMessage::Text(frame.into())).await?;
+            }
+            if let Some(history) = snap.history {
+                socket.send(WsMessage::Binary(history)).await?;
+            }
+        }
+        let frame = format!("{{\"broadcasting\":{broadcasting}}}");
+        socket.send(WsMessage::Text(frame.into())).await?;
+        let count = total_viewers(&state, &room);
+        socket
+            .send(WsMessage::Text(format!("{{\"usersCount\":{count}}}").into()))
+            .await
+    };
+    if catch_up.await.is_err() {
+        state.viewers.leave(&room, viewer_id);
+        return;
+    }
+    // The rest of the room learns the new count via the coalescing task
+    if let Some(tx) = state.usercount.get() {
+        let _ = tx.send(room.clone());
+    }
+    // Joins to nonexistent rooms (dead links) are not an audience
+    if room_exists {
+        state
+            .analytics
+            .viewer_joined(room_id.as_str(), total_viewers(&state, &room), broadcasting);
+    }
+
+    let mut ping = tokio::time::interval(VIEWER_PING_INTERVAL);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut last_seen = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            queued = rx.recv() => {
+                let sent = match queued {
+                    Some(viewers::ViewerMsg::Bytes(payload)) => {
+                        socket.send(WsMessage::Binary(payload)).await
+                    }
+                    Some(viewers::ViewerMsg::Control(json)) => {
+                        socket.send(WsMessage::Text(json.into())).await
+                    }
+                    // Dropped by the registry for stalling: close, so
+                    // the page reconnects and resyncs from history
+                    None => break,
+                };
+                if sent.is_err() {
+                    break;
+                }
+            }
+            frame = socket.recv() => {
+                match frame {
+                    // Pongs (and anything else): proof of life. The
+                    // viewer is read-only, so content is ignored
+                    Some(Ok(_)) => last_seen = tokio::time::Instant::now(),
+                    None | Some(Err(_)) => break,
+                }
+            }
+            _ = ping.tick() => {
+                if last_seen.elapsed() > VIEWER_IDLE_TIMEOUT {
+                    info!("WS viewer {viewer_id} in {room_id:?} timed out");
+                    break;
+                }
+                if socket.send(WsMessage::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    state.viewers.leave(&room, viewer_id);
+    info!("WS viewer {viewer_id} left room {room_id:?}");
+    if let Some(tx) = state.usercount.get() {
+        let _ = tx.send(room);
+    }
+}
+
+/// Viewers across both stacks: raw-WebSocket viewers plus Socket.IO
+/// room members (the transitional path while both exist).
+fn total_viewers(state: &AppState, room: &str) -> usize {
+    let socketio = state
+        .io
+        .get()
+        .and_then(|io| io.of("/"))
+        .and_then(|ns| ns.within(room.to_string()).sockets().ok())
+        .map_or(0, |sockets| sockets.len());
+    socketio + state.viewers.count(room)
 }
 
 /// GET /ws/r/:room - WebSocket ingest for broadcasting clients.
@@ -739,6 +883,9 @@ async fn recv_with_timeout(
 
 /// Tell every viewer in the room whether a broadcaster is attached
 fn emit_broadcasting(state: &AppState, room_id: &RoomId, live: bool) {
+    state
+        .viewers
+        .send_control(room_id.as_str(), &format!("{{\"broadcasting\":{live}}}"));
     if let Some(ns) = state.io.get().and_then(|io| io.of("/")) {
         let _ = ns
             .within(room_id.as_str().to_string())

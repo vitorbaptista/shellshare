@@ -107,25 +107,18 @@ class Viewer:
     def connect(self, timeout=15):
         ws_url = self.server_url.replace("http://", "ws://")
         self._ws = websocket.create_connection(
-            f"{ws_url}/socket.io/?EIO=4&transport=websocket", timeout=timeout
+            f"{ws_url}/ws/v/r/{self.room}", timeout=timeout
         )
-        opening = self._ws.recv()  # engine.io open packet
-        assert opening.startswith("0"), f"unexpected engine.io opening: {opening!r}"
-        self._ws.send("40")  # socket.io connect to the default namespace
+        # The connect snapshot always ends with usersCount: once it
+        # arrives the viewer is registered and caught up
         deadline = time.time() + timeout
         joined = False
-        join = json.dumps(["join", f"/r/{self.room}"])
         while time.time() < deadline:
             frame = self._ws.recv()
-            if isinstance(frame, str):
-                if frame.startswith("40"):  # connect ack: now join
-                    self._ws.send(f"42{join}")
-                elif frame.startswith('42["usersCount"'):  # join confirmed
-                    joined = True
-                    break
-                elif frame == "2":
-                    self._ws.send("3")
-        assert joined, "join never confirmed by usersCount"
+            if isinstance(frame, str) and "usersCount" in frame:
+                joined = True
+                break
+        assert joined, "connect snapshot never delivered usersCount"
 
     def start(self, stop_event):
         self._thread = threading.Thread(
@@ -145,12 +138,8 @@ class Viewer:
                 break
             self.last_activity = time.time()
             if isinstance(frame, str):
-                if frame == "2":  # engine.io ping
-                    try:
-                        self._ws.send("3")
-                    except (websocket.WebSocketException, OSError):
-                        self.disconnected = True
-                        break
+                # Control frames (usersCount/broadcasting/size) are not
+                # measured; WS pings are answered by websocket-client
                 continue
             self._on_payload(bytes(frame))
         try:

@@ -12,9 +12,10 @@
 //!
 //! Usage: fanout-loadgen <server_url> <room> <count> <deadline_s>
 //!
-//! Each viewer speaks minimal Socket.IO over a raw WebSocket (engine.io
-//! open -> "40" connect -> join -> usersCount confirmation), then counts
-//! frames by their embedded chunk markers, mirroring the Python
+//! Each viewer connects to the raw-WebSocket viewer endpoint
+//! (`/ws/v/r/<room>`; the connect snapshot ends with a usersCount
+//! control frame, which doubles as join confirmation), then counts
+//! binary frames by their embedded chunk markers, mirroring the Python
 //! `Viewer._on_payload` exactly (the server may coalesce chunks, so
 //! markers are counted inside each frame: `T:<seq>:<t_send>:` paced
 //! chunks yield latency samples, `F:` firehose chunks are counted,
@@ -113,16 +114,15 @@ fn set_nodelay(stream: &WsStream) {
     }
 }
 
-/// Connect and complete the handshake: engine.io open -> socket.io
-/// connect ("40") -> join -> usersCount confirmation. Runs under the
-/// connect-rate semaphore; the receive loop does not.
+/// Connect the viewer WebSocket and wait for the connect snapshot to
+/// finish (the server always ends it with a usersCount control frame).
+/// Runs under the connect-rate semaphore; the receive loop does not.
 async fn connect_and_join(ws_url: &str, room: &str, deadline: f64) -> Result<WsStream, ()> {
-    let Ok((mut stream, _)) = tokio_tungstenite::connect_async(ws_url).await else {
+    let url = format!("{ws_url}/ws/v/r/{room}");
+    let Ok((mut stream, _)) = tokio_tungstenite::connect_async(&url).await else {
         return Err(());
     };
     set_nodelay(&stream);
-    let mut connected = false;
-    let join = format!("42[\"join\",\"/r/{room}\"]");
     while now() < deadline {
         let frame = match tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
             Err(_) => continue, // poll the deadline
@@ -130,22 +130,12 @@ async fn connect_and_join(ws_url: &str, room: &str, deadline: f64) -> Result<WsS
             Ok(_) => return Err(()),
         };
         match frame {
-            Message::Text(text) => {
-                if text == "2" {
-                    stream.send(Message::Text("3".into())).await.map_err(|_| ())?;
-                } else if !connected && text.starts_with('0') {
-                    stream.send(Message::Text("40".into())).await.map_err(|_| ())?;
-                } else if !connected && text.starts_with("40") {
-                    connected = true;
-                    stream
-                        .send(Message::Text(join.clone()))
-                        .await
-                        .map_err(|_| ())?;
-                } else if text.starts_with("42[\"usersCount\"") {
-                    return Ok(stream);
-                }
+            Message::Text(text) if text.contains("\"usersCount\"") => {
+                return Ok(stream);
             }
             Message::Close(_) => return Err(()),
+            // The history snapshot may precede usersCount; ignore it
+            // here - benchmark rooms are empty at connect time
             _ => {}
         }
     }
@@ -170,15 +160,9 @@ async fn viewer(mut stream: WsStream, activity: Arc<Activity>, deadline: f64) ->
         };
         activity.touch();
         match frame {
-            Message::Text(text) => {
-                if text == "2" {
-                    // engine.io ping
-                    if stream.send(Message::Text("3".into())).await.is_err() {
-                        outcome.disconnected = true;
-                        break;
-                    }
-                }
-            }
+            // Control frames (usersCount/broadcasting/size) are not
+            // measured; WS-level pings are answered by tungstenite
+            Message::Text(_) => {}
             Message::Binary(data) => handle_payload(&data, &mut outcome),
             Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
             Message::Close(_) => {
@@ -354,10 +338,7 @@ async fn run() {
         .collect();
     let count: usize = rooms.iter().map(|(_, n)| n).sum();
     let deadline = now() + deadline_s.parse::<f64>().expect("deadline must be a number");
-    let ws_url = format!(
-        "{}/socket.io/?EIO=4&transport=websocket",
-        server_url.replace("http://", "ws://")
-    );
+    let ws_url = server_url.replace("http://", "ws://");
 
     let joined = Arc::new(AtomicUsize::new(0));
     let connect_limit = Arc::new(tokio::sync::Semaphore::new(256));

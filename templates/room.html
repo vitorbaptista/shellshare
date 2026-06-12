@@ -47,7 +47,6 @@
       <p>Made by <a href="https://vitorbaptista.com">Vitor Baptista</a>.</p>
     </footer>
   </div>
-  <script src="/javascript/vendor/socket.io.min.js"></script>
   <script src="/javascript/vendor/xterm.js"></script>
   <script src="/javascript/vendor/xterm-addon-webgl.js"></script>
   <script src="/javascript/vendor/xterm-addon-unicode11.js"></script>
@@ -59,11 +58,16 @@
       var THEMES = {{THEMES_JSON}};
       // Matches the base terminal font size in room.css
       var BASE_FONT_PX = 14;
-      // WebSocket only - the server rejects HTTP long-polling (its
-      // engine.io polling path corrupts binary frames), and skipping
-      // the polling-then-upgrade dance avoids its races entirely
-      var socket = io({transports: ['websocket']});
+      // A raw WebSocket to /ws/v + this page's path: binary frames are
+      // terminal bytes, JSON text frames are control events (size,
+      // usersCount, broadcasting) - the mirror of the broadcaster's
+      // ingest protocol. The room is the URL, so there is no join
+      // handshake to confirm or lose; the server replays the room
+      // snapshot on every (re)connect.
       var room = window.location.pathname;
+      var WS_URL =
+        (window.location.protocol === 'https:' ? 'wss://' : 'ws://') +
+        window.location.host + '/ws/v' + room;
       // Broadcasts are end-to-end encrypted by default: the key rides
       // in the URL fragment, which browsers never send to the server,
       // and each message is a sequence of whole records -
@@ -354,81 +358,94 @@
         return lines.join('\n');
       };
 
-      // Join on every connect: socket.io reconnects by itself after a
-      // network blip, but room membership is lost server-side, so a
-      // viewer that doesn't re-join goes silently dead.
-      //
-      // The join must be confirmed, not fire-and-forget: a bare emit
-      // can be lost (e.g. it reaches the server before the connection
-      // handler finished registering events), and a viewer whose join
-      // vanished would stare at an empty terminal forever. The server
-      // answers every join with usersCount, re-joining is idempotent,
-      // and the history catch-up is only sent for a socket's first
-      // join - so emit and re-emit until confirmed.
-      var joinConfirmed = false;
-      var joinTimer = null;
-      function joinUntilConfirmed() {
-        joinTimer = null;
-        if (joinConfirmed || !socket.connected) {
-          return;
-        }
-        socket.emit('join', room);
-        joinTimer = setTimeout(joinUntilConfirmed, 500);
-      }
-      socket.on('connect', function () {
-        if (joinedBefore) {
-          // The server replays the room history on join; start from a
-          // clean screen instead of appending a duplicate. The size
-          // is kept: the server re-sends it (before the history)
-          // whenever the room has one. RIS through the write queue,
-          // not term.reset(): writes are asynchronous, so an
-          // out-of-band reset could run before leftover pre-disconnect
-          // chunks parse; queued RIS is ordered after them and also
-          // resets the VT parser and UTF-8 decoder state they may
-          // have left mid-sequence.
-          //
-          // Encrypted rooms additionally discard in-flight
-          // decryptions: their plaintext would otherwise resolve
-          // after this reset, replaying pre-disconnect output on top
-          // of the fresh history (which re-delivers it anyway). A
-          // fresh chain also keeps it from deepening across rejoins.
-          decryptEpoch++;
-          decryptChain = Promise.resolve();
-          pendingWrites = [];
-          if (term) {
-            term.write('\x1bc');
+      // Reconnect with backoff on every close: the server replays the
+      // room snapshot (size, history, broadcasting, usersCount) on
+      // each connect, so a rejoin is a clean resync. The server also
+      // disconnects viewers that fall hopelessly behind, on purpose -
+      // this same path then recovers them.
+      var RECONNECT_MIN_MS = 500;
+      var RECONNECT_MAX_MS = 10000;
+      var reconnectDelayMs = RECONNECT_MIN_MS;
+
+      function connect() {
+        var ws = new WebSocket(WS_URL);
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = function () {
+          reconnectDelayMs = RECONNECT_MIN_MS;
+          if (joinedBefore) {
+            // The server replays the room history on connect; start
+            // from a clean screen instead of appending a duplicate.
+            // The size is kept: the server re-sends it (before the
+            // history) whenever the room has one. RIS through the
+            // write queue, not term.reset(): writes are asynchronous,
+            // so an out-of-band reset could run before leftover
+            // pre-disconnect chunks parse; queued RIS is ordered after
+            // them and also resets the VT parser and UTF-8 decoder
+            // state they may have left mid-sequence.
+            //
+            // Encrypted rooms additionally discard in-flight
+            // decryptions: their plaintext would otherwise resolve
+            // after this reset, replaying pre-disconnect output on top
+            // of the fresh history (which re-delivers it anyway). A
+            // fresh chain also keeps it from deepening across rejoins.
+            decryptEpoch++;
+            decryptChain = Promise.resolve();
+            pendingWrites = [];
+            if (term) {
+              term.write('\x1bc');
+            }
           }
-        }
-        joinedBefore = true;
-        joinConfirmed = false;
-        if (joinTimer) {
-          clearTimeout(joinTimer);
-        }
-        joinUntilConfirmed();
-      });
-      socket.on('usersCount', function (onlineUsers) {
-        joinConfirmed = true;
+          joinedBefore = true;
+        };
+        ws.onmessage = function (event) {
+          if (typeof event.data === 'string') {
+            var control;
+            try {
+              control = JSON.parse(event.data);
+            } catch (e) {
+              return;
+            }
+            if (control.size) {
+              onSize(control.size);
+            }
+            if (typeof control.usersCount === 'number') {
+              onUsersCount(control.usersCount);
+            }
+            if (typeof control.broadcasting === 'boolean') {
+              onBroadcasting(control.broadcasting);
+            }
+            return;
+          }
+          onMessage(new Uint8Array(event.data));
+        };
+        // Our own connection is down: we can't know the broadcaster's
+        // state, so report the session as offline until we resync
+        ws.onclose = function () {
+          setBroadcastStatus('offline');
+          setFaviconBlink(false);
+          setTimeout(connect, reconnectDelayMs);
+          reconnectDelayMs =
+            Math.min(reconnectDelayMs * 2, RECONNECT_MAX_MS);
+        };
+      }
+      connect();
+
+      function onUsersCount(onlineUsers) {
         onlineCounter.innerHTML = onlineUsers;
         if (onlineUsers == 1) {
           onlineCounterPlural.innerHTML = '';
         } else {
           onlineCounterPlural.innerHTML = 's';
         }
-      });
+      }
       // Whether the broadcaster's client is attached to the room right
       // now (it pings even when idle, so "live" means the session is
       // open, not that output is flowing). The server reports the
-      // current state on join and every transition afterwards.
-      socket.on('broadcasting', function (live) {
+      // current state on connect and every transition afterwards.
+      function onBroadcasting(live) {
         setBroadcastStatus(live ? 'online' : 'offline');
         setFaviconBlink(live);
-      });
-      // Our own connection is down: we can't know the broadcaster's
-      // state, so report the session as offline until we rejoin
-      socket.on('disconnect', function () {
-        setBroadcastStatus('offline');
-        setFaviconBlink(false);
-      });
+      }
 
       function setBroadcastStatus(state) {
         broadcastStatus.title = state;
@@ -437,11 +454,10 @@
         // role="status" live regions only announce content changes
         broadcastStatusText.textContent = 'broadcaster ' + state;
       }
-      socket.on('message', function (message) {
-        if (!message) {
+      function onMessage(bytes) {
+        if (!bytes.length) {
           return;
         }
-        var bytes = new Uint8Array(message);
         if (keyHex) {
           // Decrypt mode. A broken key dropped cryptoKeyPromise to
           // null and the notice already explains why; drop the bytes
@@ -457,8 +473,7 @@
         // Plaintext (--disable-encryption) room: raw terminal bytes,
         // xterm.js does its own streaming UTF-8 decode
         writeBytes(bytes);
-      });
-      socket.on('size', onSize);
+      }
 
       // The broadcaster controls the size: sanitize it so resize()
       // never throws (it requires positive integers) and a hostile

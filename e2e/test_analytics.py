@@ -171,16 +171,10 @@ def test_viewer_rejoin_and_dead_rooms_are_not_counted(dedicated_server, mock_pos
             assert poll_until(
                 lambda: mock_posthog.events_named("viewer_joined"), timeout=10
             )
-            # Clients re-emit join until confirmed; a re-emitted join is
-            # not a new viewer. Wait for its usersCount confirmation so
-            # the server has definitely processed it before asserting.
-            counts_before = len(listener._user_counts)
-            listener._sio.emit("join", f"/r/{room}")
-            assert poll_until(
-                lambda: len(listener._user_counts) > counts_before, timeout=10
-            ), "re-emitted join was never confirmed"
-            # Neither the dead-link join nor the re-join may have produced
-            # an event: exactly one for the single live join
+            # The dead-link join may not have produced an event: exactly
+            # one for the single live join. (The old Socket.IO re-emitted
+            # join needed a dedupe to test; a raw-WS viewer's room rides
+            # the URL, so a duplicate join cannot exist.)
             time.sleep(1)
             assert len(mock_posthog.events_named("viewer_joined")) == 1
         finally:
