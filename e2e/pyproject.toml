@@ -8,6 +8,7 @@ dependencies = [
     "playwright>=1.40.0",
     "pytest>=8.0.0",
     "python-socketio[client]>=5.0.0",
+    "wsaccel>=0.6.7",
 ]
 
 [tool.pytest.ini_options]
