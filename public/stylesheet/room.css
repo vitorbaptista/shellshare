@@ -85,30 +85,26 @@ header {
   margin: 0;
 }
 
-#terminal,
-.terminal {
-  background-color: black;
-  color: rgb(240, 240, 240);
-  font-family: 'Inconsolata', 'Symbols Nerd Font', monospace;
-  font-size: 14px;
-  padding: 5px;
-  overflow: hidden;
-}
-
-/* Terminals wider than the page scroll horizontally instead of
-   wrapping or clipping */
+/* The terminal itself (font, colors, sizing) is fully driven by
+   xterm.js options in the viewer script; the container only frames
+   it. Terminals wider than the page scroll horizontally instead of
+   wrapping or clipping. */
 #terminal {
   position: relative;
+  background-color: black;
+  padding: 5px;
   overflow-x: auto;
 }
 
-.terminal {
-  width: max-content;
-  max-width: none;
+/* Hide the scrollback scrollbar: xterm handles wheel and touch
+   scrolling itself, the native scrollbar is only a visual mirror
+   (and Chrome draws it with the ugly default chrome) */
+#terminal .xterm-viewport {
+  scrollbar-width: none;
 }
 
-.terminal > div {
-  white-space: nowrap;
+#terminal .xterm-viewport::-webkit-scrollbar {
+  display: none;
 }
 
 /* Fullscreen toggle: hidden until the terminal is hovered or the
@@ -181,10 +177,9 @@ header {
   left: 0;
   z-index: 100;
   overflow: auto;
+  /* No padding while fullscreen: the viewer's font-fit measures the
+     grid against the container's clientWidth/Height, which include
+     padding, so restoring it would reintroduce overflow the fit loop
+     then eats on every pass */
   padding: 0;
-}
-
-.reverse-video {
-  color: #000000;
-  background: #ccc;
 }

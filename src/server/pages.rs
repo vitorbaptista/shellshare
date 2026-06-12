@@ -71,7 +71,9 @@ fn room_page() -> &'static Page {
                 // and every room URL is unique, so the 103 only helps
                 // from the second request to a given room onwards
                 ("javascript/vendor/socket.io.min.js", "script"),
-                ("javascript/vendor/term.js", "script"),
+                ("javascript/vendor/xterm.js", "script"),
+                ("javascript/vendor/xterm-addon-webgl.js", "script"),
+                ("javascript/vendor/xterm-addon-unicode11.js", "script"),
                 // Only the latin subset: it covers nearly every session,
                 // while the other subsets and the (large) Nerd Font
                 // fallback load on demand

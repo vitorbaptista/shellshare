@@ -10,9 +10,15 @@ colors actually rendered in a browser.
 import subprocess
 import time
 
-from playwright.sync_api import sync_playwright, expect
+from playwright.sync_api import sync_playwright
 
-from conftest import CLI_COMMAND, SERVER_URL, SocketListener, random_id
+from conftest import (
+    CLI_COMMAND,
+    SERVER_URL,
+    SocketListener,
+    random_id,
+    wait_for_terminal_text,
+)
 
 # Background colors from themes.json, as computed CSS values
 DRACULA_BG = "rgb(40, 42, 54)"
@@ -143,9 +149,7 @@ class TestThemeRendering:
             )
             assert returncode == 0, f"CLI failed: {stderr}"
 
-            expect(page.locator("#terminal")).to_contain_text(
-                "themed output", timeout=10000
-            )
+            wait_for_terminal_text(page, "themed output")
             assert terminal_background(page) == DRACULA_BG
             browser.close()
 
@@ -179,9 +183,7 @@ class TestThemeRendering:
                 page.goto(f"{server.url}/r/{room_id}")
                 page.wait_for_selector("#terminal", timeout=10000)
 
-                expect(page.locator("#terminal")).to_contain_text(
-                    "early content", timeout=10000
-                )
+                wait_for_terminal_text(page, "early content")
                 assert terminal_background(page) == SOLARIZED_LIGHT_BG
                 browser.close()
         finally:
@@ -208,8 +210,6 @@ class TestThemeRendering:
             )
             assert returncode == 0, f"CLI failed: {stderr}"
 
-            expect(page.locator("#terminal")).to_contain_text(
-                "plain output", timeout=10000
-            )
+            wait_for_terminal_text(page, "plain output")
             assert terminal_background(page) == TANGO_BG
             browser.close()

@@ -60,10 +60,12 @@ Routes:
 ### Wire Protocol (`src/protocol.rs`)
 Terminal output is **raw bytes** end to end: binary WebSocket frames from
 the CLI, raw bytes in room history, binary Socket.IO attachments to
-viewers, decoded in the browser by a streaming `TextDecoder` (the viewer
-script is inline in `templates/room.html`). History accumulation for late
-joiners lives here too. Must stay in lockstep with `templates/room.html`
-and `e2e/conftest.py`.
+viewers, written as bytes into xterm.js, which does its own streaming
+UTF-8 decode (the viewer script is inline in `templates/room.html`;
+xterm.js and its WebGL/Unicode11 addons are vendored under
+`public/javascript/vendor/`). History accumulation for late joiners
+lives here too. Must stay in lockstep with `templates/room.html` and
+`e2e/conftest.py`.
 
 ## Cross-Platform Notes
 

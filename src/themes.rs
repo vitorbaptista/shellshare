@@ -3,7 +3,7 @@
 //! The JSON file is the single source of truth: the CLI validates
 //! `--theme` against its keys, and the server injects the file verbatim
 //! into the viewer page (`templates/room.html`), which maps a theme to
-//! term.js colors. Adding a theme means adding one entry to the file.
+//! xterm.js colors. Adding a theme means adding one entry to the file.
 //!
 //! A theme is `{foreground, background, palette}` where `palette` holds
 //! the 16 ANSI colors as hex strings, matching asciinema's theme format.

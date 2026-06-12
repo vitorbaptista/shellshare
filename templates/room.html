@@ -11,7 +11,7 @@
   <meta property="og:site_name" content="shellshare">
   <meta property="og:description" content="Shellshare allows you to broadcast your terminal live with a single command.">
   <meta property="og:image" content="https://shellshare.net/shellshare-og-image.png">
-  <link rel="stylesheet" href="/stylesheet/vendor/ansi2html.css">
+  <link rel="stylesheet" href="/stylesheet/vendor/xterm.css">
   <link rel="stylesheet" href="/stylesheet/room.css">
   <link id="favicon" rel="icon" type="image/png" href="/favicon.png">
 </head>
@@ -47,23 +47,27 @@
     </footer>
   </div>
   <script src="/javascript/vendor/socket.io.min.js"></script>
-  <script src="/javascript/vendor/term.js"></script>
+  <script src="/javascript/vendor/xterm.js"></script>
+  <script src="/javascript/vendor/xterm-addon-webgl.js"></script>
+  <script src="/javascript/vendor/xterm-addon-unicode11.js"></script>
   <script>
     (function () {
       'use strict';
 
       // Theme definitions injected by the server from themes.json
       var THEMES = {{THEMES_JSON}};
+      // Matches the base terminal font size in room.css
+      var BASE_FONT_PX = 14;
       // WebSocket only - the server rejects HTTP long-polling (its
       // engine.io polling path corrupts binary frames), and skipping
       // the polling-then-upgrade dance avoids its races entirely
       var socket = io({transports: ['websocket']});
       var room = window.location.pathname;
-      var term;
-      var currentSize = {};
-      // Messages are binary: raw terminal bytes, decoded as one
-      // continuous UTF-8 stream (sequences may split across messages)
-      var decoder = new TextDecoder('utf-8');
+      var term = null;
+      var currentSize = {cols: 80, rows: 30};
+      // Output that arrives before the terminal exists (creation waits
+      // for the webfont) is queued and flushed on creation
+      var pendingWrites = [];
       var joinedBefore = false;
       var onlineCounter = document.getElementById('online-counter');
       var onlineCounterPlural = document.getElementById('online-counter-plural');
@@ -100,14 +104,98 @@
         }
       }
 
-      if (typeof Terminal !== 'undefined') {
-        Terminal.bindKeys = function() {
-          // Disable key capture - read-only terminal
-        };
+      // xterm.js measures the font once at open(): wait for the
+      // webfont so cell metrics come from Inconsolata, not a fallback.
+      // load() also resolves when the font is unavailable, so this can
+      // only delay creation, never block it.
+      var fontReady = document.fonts && document.fonts.load ?
+        document.fonts.load(BASE_FONT_PX + "px 'Inconsolata'") :
+        Promise.resolve();
+      fontReady.catch(function () {}).then(createTerminal);
+
+      function createTerminal() {
+        term = new Terminal({
+          cols: currentSize.cols,
+          rows: currentSize.rows,
+          fontFamily: "'Inconsolata', 'Symbols Nerd Font', monospace",
+          fontSize: BASE_FONT_PX,
+          scrollback: 5000,
+          // Read-only viewer: keystrokes must not reach the terminal
+          disableStdin: true,
+          // The Unicode 11 addon needs the proposed API surface
+          allowProposedApi: true,
+        });
+        // Wide-character widths per Unicode 11 instead of xterm's
+        // Unicode 6 default (emoji and CJK render at correct width).
+        // A failed addon script must cost only character widths, not
+        // the whole viewer.
+        if (typeof Unicode11Addon !== 'undefined') {
+          term.loadAddon(new Unicode11Addon.Unicode11Addon());
+          term.unicode.activeVersion = '11';
+        }
+        applyTheme(currentSize.theme);
+        term.open(terminalContainer);
+        // Read-only viewer: xterm focuses its hidden textarea on
+        // click, which then swallows keydown events before they reach
+        // the page (breaking the `f` fullscreen toggle and Ctrl+C
+        // copy below). Nothing needs that focus - there is no input -
+        // so refuse it. Mouse selection is unaffected.
+        term.textarea.tabIndex = -1;
+        term.textarea.addEventListener('focus', function () {
+          term.textarea.blur();
+        });
+        enableWebglRenderer();
+        for (var i = 0; i < pendingWrites.length; i++) {
+          term.write(pendingWrites[i]);
+        }
+        pendingWrites = [];
+        // The renderer caches glyphs in a texture atlas, so fonts
+        // that load lazily after first paint (the Nerd Font symbols
+        // fallback, non-latin Inconsolata subsets) would otherwise
+        // stay rendered as the fallback glyphs they were drawn with
+        if (document.fonts && document.fonts.addEventListener) {
+          document.fonts.addEventListener('loadingdone', function () {
+            term.clearTextureAtlas();
+          });
+        }
+        // For the e2e suite and console debugging: the WebGL renderer
+        // leaves no text in the DOM to scrape
+        window.term = term;
+        fitTerminal();
       }
 
-      // Init terminal with a default size.
-      onSize({cols: 80, rows: 30});
+      // GPU renderer with graceful degradation: a load failure (no
+      // WebGL2) or a later context loss falls back to xterm's DOM
+      // renderer, which needs no addon
+      function enableWebglRenderer() {
+        if (typeof WebglAddon === 'undefined') {
+          return;
+        }
+        try {
+          var webgl = new WebglAddon.WebglAddon();
+          webgl.onContextLoss(function () {
+            webgl.dispose();
+          });
+          term.loadAddon(webgl);
+        } catch (e) {
+          // DOM renderer remains active
+        }
+      }
+
+      // The rendered buffer (scrollback + screen) as plain text; used
+      // by the e2e suite, handy in the console
+      window.shellshareText = function () {
+        if (!term) {
+          return '';
+        }
+        var buffer = term.buffer.active;
+        var lines = [];
+        for (var i = 0; i < buffer.length; i++) {
+          var line = buffer.getLine(i);
+          lines.push(line ? line.translateToString(true) : '');
+        }
+        return lines.join('\n');
+      };
 
       // Join on every connect: socket.io reconnects by itself after a
       // network blip, but room membership is lost server-side, so a
@@ -133,14 +221,18 @@
       socket.on('connect', function () {
         if (joinedBefore) {
           // The server replays the room history on join; start from a
-          // clean terminal instead of appending a duplicate
+          // clean screen instead of appending a duplicate. The size
+          // is kept: the server re-sends it (before the history)
+          // whenever the room has one. RIS through the write queue,
+          // not term.reset(): writes are asynchronous, so an
+          // out-of-band reset could run before leftover pre-disconnect
+          // chunks parse; queued RIS is ordered after them and also
+          // resets the VT parser and UTF-8 decoder state they may
+          // have left mid-sequence.
+          pendingWrites = [];
           if (term) {
-            term.destroy();
-            term = null;
+            term.write('\x1bc');
           }
-          currentSize = {};
-          decoder = new TextDecoder('utf-8');
-          onSize({cols: 80, rows: 30});
         }
         joinedBefore = true;
         joinConfirmed = false;
@@ -181,46 +273,78 @@
         broadcastStatusText.textContent = 'broadcaster ' + state;
       }
       socket.on('message', function (message) {
-        if (term && message) {
-          term.write(decoder.decode(message, {stream: true}));
+        if (!message) {
+          return;
+        }
+        // Raw terminal bytes: xterm.js does its own streaming UTF-8
+        // decode, so sequences may split across messages
+        var bytes = new Uint8Array(message);
+        if (term) {
+          term.write(bytes);
+        } else {
+          pendingWrites.push(bytes);
         }
       });
       socket.on('size', onSize);
 
+      // The broadcaster controls the size: sanitize it so resize()
+      // never throws (it requires positive integers) and a hostile
+      // value can't make every viewer allocate a million-row buffer
+      var MAX_DIMENSION = 1000;
+
+      function clampDimension(value) {
+        var n = Math.floor(value);
+        return n >= 1 ? Math.min(n, MAX_DIMENSION) : 0;
+      }
+
       function onSize(size) {
-        var sizeChanged;
-        if (!size || !size.cols || !size.rows) {
+        if (!size) {
           return;
         }
-
-        sizeChanged = (currentSize.cols != size.cols ||
-                       currentSize.rows != size.rows ||
-                       currentSize.theme != size.theme);
-
-        if (term && sizeChanged) {
-          term.destroy();
+        var cols = clampDimension(size.cols);
+        var rows = clampDimension(size.rows);
+        if (!cols || !rows) {
+          return;
         }
-
-        if (typeof Terminal !== 'undefined' && (!term || sizeChanged)) {
-          var options = {
-            cols: size.cols,
-            rows: size.rows,
-            body: terminalContainer,
-          };
-          var theme = THEMES[size.theme];
-          if (theme) {
-            // term.js takes the 16 ANSI colors plus background and
-            // foreground as the last two entries
-            options.colors = theme.palette.concat([theme.background,
-                                                   theme.foreground]);
-            terminalContainer.style.backgroundColor = theme.background;
-          }
-          term = new Terminal(options);
-          term.open();
+        var themeChanged = currentSize.theme !== size.theme;
+        currentSize = {cols: cols, rows: rows, theme: size.theme};
+        if (!term) {
+          // Applied when the terminal is created
+          return;
         }
-
-        currentSize = size;
+        term.resize(cols, rows);
+        if (themeChanged) {
+          applyTheme(size.theme);
+        }
         fitTerminal();
+      }
+
+      // Map a themes.json entry (16 ANSI palette colors plus
+      // background and foreground) onto xterm's named theme slots.
+      // Unknown or absent themes get the default look the page CSS
+      // assumes (black background, light foreground).
+      var ANSI_SLOTS = [
+        'black', 'red', 'green', 'yellow',
+        'blue', 'magenta', 'cyan', 'white',
+        'brightBlack', 'brightRed', 'brightGreen', 'brightYellow',
+        'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite',
+      ];
+
+      function applyTheme(name) {
+        var entry = THEMES[name];
+        var colors = {
+          background: entry ? entry.background : '#000000',
+          foreground: entry ? entry.foreground : '#f0f0f0',
+        };
+        if (entry && entry.palette && entry.palette.length >= 16) {
+          for (var i = 0; i < ANSI_SLOTS.length; i++) {
+            colors[ANSI_SLOTS[i]] = entry.palette[i];
+          }
+        }
+        term.options.theme = colors;
+        // The container peeks out around the canvas (padding, short
+        // pages); keep it matched to the terminal background
+        terminalContainer.style.backgroundColor = colors.background;
       }
 
       // Fullscreen: the `fullscreen` class on #terminal drives all
@@ -271,44 +395,63 @@
       }
 
       // Scale the font so the broadcaster's cols×rows fill the screen.
-      // term.js sizing is purely font-size driven and .terminal is
-      // width: max-content, so its bounding box at the base size gives
-      // the exact ratio to scale by.
+      // xterm sizes its grid from options.fontSize: the rendered grid
+      // (.xterm-screen) is measured, the font scaled proportionally,
+      // then nudged down for rounding overflow. xterm re-renders after
+      // a font-size change, so the nudge converges across animation
+      // frames instead of measuring synchronously.
       var MIN_FONT_PX = 7;
       var fitScheduled = false;
+      // Each fit invalidates any in-flight convergence loop
+      var fitToken = 0;
+
+      function setFontSize(px) {
+        if (term.options.fontSize !== px) {
+          term.options.fontSize = px;
+        }
+      }
+
+      function screenRect() {
+        var screen = term.element.querySelector('.xterm-screen');
+        return screen ? screen.getBoundingClientRect() : null;
+      }
+
+      function overflows(rect) {
+        return rect.width > terminalContainer.clientWidth ||
+               rect.height > terminalContainer.clientHeight;
+      }
 
       function fitTerminal() {
-        if (!term) {
+        if (!term || !term.element) {
           return;
         }
-        var el = term.element;
-        el.style.fontSize = '';
+        var token = ++fitToken;
         if (!isFullscreen()) {
+          setFontSize(BASE_FONT_PX);
           return;
         }
-        // The stylesheet's base size, measured with the inline
-        // override cleared above
-        var baseFont = parseFloat(getComputedStyle(el).fontSize) || 14;
-        var rect = el.getBoundingClientRect();
-        var availWidth = terminalContainer.clientWidth;
-        var availHeight = terminalContainer.clientHeight;
-        if (!rect.width || !rect.height) {
+        // Cell dimensions are near-linear in font size, so the ratio
+        // at the current size gives the target directly
+        var rect = screenRect();
+        if (!rect || !rect.width || !rect.height) {
           return;
         }
-        var scale = Math.min(availWidth / rect.width,
-                             availHeight / rect.height);
+        var scale = Math.min(terminalContainer.clientWidth / rect.width,
+                             terminalContainer.clientHeight / rect.height);
         // Integer px keeps glyphs crisp
-        var px = Math.max(MIN_FONT_PX, Math.floor(baseFont * scale));
-        el.style.fontSize = px + 'px';
-        // Line-height rounding can push a pixel of overflow; nudge down
-        while (px > MIN_FONT_PX) {
-          rect = el.getBoundingClientRect();
-          if (rect.width <= availWidth && rect.height <= availHeight) {
-            break;
+        setFontSize(Math.max(MIN_FONT_PX,
+                             Math.floor(term.options.fontSize * scale)));
+        requestAnimationFrame(function nudge() {
+          if (token !== fitToken || !isFullscreen()) {
+            return;
           }
-          px -= 1;
-          el.style.fontSize = px + 'px';
-        }
+          var rect = screenRect();
+          if (rect && overflows(rect) &&
+              term.options.fontSize > MIN_FONT_PX) {
+            setFontSize(term.options.fontSize - 1);
+            requestAnimationFrame(nudge);
+          }
+        });
       }
 
       function scheduleFit() {
@@ -338,6 +481,18 @@
       document.addEventListener('fullscreenchange', onFullscreenChange);
       document.addEventListener('webkitfullscreenchange', onFullscreenChange);
       document.addEventListener('keydown', function (e) {
+        // Ctrl/Cmd+C copies the terminal selection: the renderer
+        // keeps no text in the DOM, so the browser's native copy
+        // sees nothing to take (right-click Copy works regardless;
+        // xterm fills the `copy` event itself). The viewer is
+        // read-only, so the chord is free to mean "copy".
+        if ((e.ctrlKey || e.metaKey) && !e.altKey &&
+            (e.key === 'c' || e.key === 'C') &&
+            term && term.hasSelection() && navigator.clipboard) {
+          navigator.clipboard.writeText(term.getSelection())
+            .catch(function () {});
+          return;
+        }
         if (e.defaultPrevented || e.repeat ||
             e.ctrlKey || e.metaKey || e.altKey) {
           return;
