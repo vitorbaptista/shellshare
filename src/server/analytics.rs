@@ -8,17 +8,18 @@
 //!   channel with `try_send` (full channel = event dropped) into one
 //!   background task that does the HTTP work. Losing events is fine;
 //!   blocking ingest is not.
-//! - **No PII**: no IP addresses (`PostHog` only ever sees this server's
-//!   own requests, sent with `$geoip_disable`), no room names, no
-//!   passwords. The identifiers are `HMAC-SHA256(salt, password)` for
-//!   broadcasters and `HMAC-SHA256(salt, room_name)` for rooms: the
-//!   default client password is MAC-derived, so the broadcaster HMAC is
-//!   stable per machine (recurring-user detection) while the secret salt
-//!   keeps the small MAC space safe from enumeration and keeps custom
-//!   passwords and room names uncrackable from the analytics data.
-//!   Broadcast events carry the room id as a property, deliberately
-//!   linking a broadcaster to its rooms in the analytics data - that is
-//!   what lets the operator join broadcast metrics to viewer metrics.
+//! - **No secrets, no IPs**: no IP addresses (`PostHog` only ever sees
+//!   this server's own requests, sent with `$geoip_disable`) and no
+//!   passwords. The broadcaster identifier is `HMAC-SHA256(salt,
+//!   password)`: the default client password is MAC-derived, so the
+//!   HMAC is stable per machine (recurring-user detection) while the
+//!   secret salt keeps the small MAC space safe from enumeration and
+//!   keeps custom passwords uncrackable from the analytics data. Room
+//!   names, by contrast, are sent in plaintext - they are share-link
+//!   slugs, visible to anyone with the link, and readable dashboards
+//!   beat hiding them. Broadcast events carry the room id as a
+//!   property, linking a broadcaster to its rooms so the operator can
+//!   join broadcast metrics to viewer metrics.
 //! - **Stateless server**: the salt is operator-supplied, not generated,
 //!   so identities survive restarts and server moves (reuse the salt).
 //!
@@ -194,11 +195,12 @@ impl Inner {
         format!("bc:{}", hmac_hex(&self.salt, password))
     }
 
-    /// Stable pseudonymous room identity: the distinct id of viewer
-    /// events and the `room` property of broadcast events, so the two
-    /// sides join on it.
+    /// Room identity: the distinct id of viewer events and the `room`
+    /// property of broadcast events, so the two sides join on it.
+    /// Plaintext by choice (see the module doc); the `room:` prefix
+    /// keeps this id space disjoint from broadcaster ids.
     fn room_id(&self, room_name: &str) -> String {
-        format!("room:{}", hmac_hex(&self.salt, room_name))
+        format!("room:{room_name}")
     }
 }
 

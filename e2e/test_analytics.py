@@ -127,13 +127,13 @@ def test_full_lifecycle_emits_the_three_events(dedicated_server, mock_posthog):
     viewed = mock_posthog.events_named("viewer_joined")[0]
 
     # The broadcaster identity is stable across events and prefixed,
-    # the room identity lives in a different id space
+    # the room identity is the plaintext room name in its own id space
     assert started["distinct_id"].startswith("bc:")
     assert ended["distinct_id"] == started["distinct_id"]
-    assert viewed["distinct_id"].startswith("room:")
+    assert viewed["distinct_id"] == f"room:{room}"
 
-    # Broadcast events carry the room's pseudonymous id, so they join
-    # with viewer events (whose distinct_id IS the room)
+    # Broadcast events carry the room id, so they join with viewer
+    # events (whose distinct_id IS the room)
     assert started["properties"]["room"] == viewed["distinct_id"]
     assert ended["properties"]["room"] == viewed["distinct_id"]
     # This segment claimed the room - a fresh share, not a reconnect
@@ -149,11 +149,9 @@ def test_full_lifecycle_emits_the_three_events(dedicated_server, mock_posthog):
         assert event["properties"]["$geoip_disable"] is True
         # No ENV set: no environment label on any event
         assert "environment" not in event["properties"]
-        # No PII: neither the room name nor the password may appear
-        # anywhere in any payload
-        payload = json.dumps(event)
-        assert room not in payload
-        assert password not in payload
+        # The room name is sent openly, but the password is a secret
+        # and may never appear anywhere in any payload
+        assert password not in json.dumps(event)
 
 
 def test_viewer_rejoin_and_dead_rooms_are_not_counted(dedicated_server, mock_posthog):
@@ -238,6 +236,7 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
     first, second = mock_posthog.events_named("broadcast_started")
     assert first["properties"]["new_room"] is True
     assert second["properties"]["new_room"] is False
+    assert first["properties"]["room"] == f"room:{room}"
     assert second["properties"]["room"] == first["properties"]["room"]
     assert second["distinct_id"] == first["distinct_id"]
 
