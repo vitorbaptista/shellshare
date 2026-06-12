@@ -427,7 +427,10 @@
         ws.onclose = function () {
           setBroadcastStatus('offline');
           setFaviconBlink(false);
-          setTimeout(connect, reconnectDelayMs);
+          // Jittered: a server restart disconnects every open tab at
+          // once, and without jitter they all reconnect in synchronized
+          // waves, each wave replaying the full history snapshot
+          setTimeout(connect, reconnectDelayMs * (0.5 + Math.random()));
           reconnectDelayMs =
             Math.min(reconnectDelayMs * 2, RECONNECT_MAX_MS);
         };

@@ -109,6 +109,31 @@ This test suite is designed to:
    uv run pytest
    ```
 
+## Benchmarks
+
+Not pytest tests - run them directly. `benchmark.py` measures the
+single-viewer pipeline; `benchmark_fanout.py` measures fan-out to many
+viewers (paced latency, burst loss/throughput, `--capacity` ramps until
+the server fails criteria, `--rooms R` runs R concurrent broadcasters).
+
+```bash
+# Build the server and the Rust viewer swarm (used automatically when present)
+cargo build --release
+(cd loadgen && cargo build --release)
+
+uv run python benchmark_fanout.py                       # default sweep
+uv run python benchmark_fanout.py --capacity            # max sustainable viewers
+uv run python benchmark_fanout.py --rooms 16 --viewers 4000
+```
+
+Without the loadgen binary a pure-Python fallback runs, but its numbers
+are harness-bound well below the server's limits - build loadgen for
+anything you intend to compare. `FANOUT_LOADGEN=` (empty) forces the
+fallback; `LOADGEN_THREADS` caps the harness runtime so it doesn't
+starve the server it measures. Results land in gitignored
+`fanout-*`/`capacity-*`/`multiroom-*.json` files; `--out`/`--compare`
+support before/after workflows.
+
 ## Running Specific Tests
 
 ```bash
