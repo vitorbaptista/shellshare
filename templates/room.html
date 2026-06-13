@@ -606,16 +606,34 @@
       // visibilitychange while still immersive. Absent API or rejection
       // is a silent no-op.
       var wakeLock = null;
+      // A request is asynchronous, and the native-fullscreen path calls
+      // acquire twice in quick succession (enterFullscreen, then the
+      // fullscreenchange handler) before the first resolves. Without a
+      // pending guard both fire request('screen') and the second sentinel
+      // orphans the first, which then leaks. The flag collapses concurrent
+      // requests to one.
+      var wakeLockPending = false;
       function acquireWakeLock() {
-        if (wakeLock || !navigator.wakeLock) {
+        if (wakeLock || wakeLockPending || !navigator.wakeLock) {
           return;
         }
+        wakeLockPending = true;
         navigator.wakeLock.request('screen').then(function (lock) {
+          wakeLockPending = false;
+          // If we left immersive mode while the request was in flight,
+          // drop this lock instead of holding one releaseWakeLock has
+          // already missed.
+          if (!isFullscreen()) {
+            lock.release().catch(function () {});
+            return;
+          }
           wakeLock = lock;
           lock.addEventListener('release', function () {
             wakeLock = null;
           });
-        }).catch(function () {});
+        }).catch(function () {
+          wakeLockPending = false;
+        });
       }
 
       function releaseWakeLock() {
