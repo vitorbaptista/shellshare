@@ -467,6 +467,45 @@ def test_fullscreen_mode_scales_and_restores():
         browser.close()
 
 
+def test_fullscreen_button_visible_and_tappable_on_touch():
+    """
+    Touch devices have no hover to reveal the fullscreen button, so it
+    must be visible at rest (non-zero opacity) and a tap must toggle
+    fullscreen mode on and off. Emulates a Pixel-class phone.
+    """
+    room_id = f"test-{random_id()}"
+
+    wait_for_server(SERVER_URL)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context(**p.devices["Pixel 7"])
+        page = context.new_page()
+        page.goto(f"{SERVER_URL}/r/{room_id}")
+        page.wait_for_selector("#fullscreen-toggle", timeout=10000)
+
+        opacity = page.locator("#fullscreen-toggle").evaluate(
+            "el => parseFloat(getComputedStyle(el).opacity)"
+        )
+        assert opacity > 0, f"button invisible on touch device: opacity={opacity}"
+
+        page.locator("#fullscreen-toggle").tap()
+        page.wait_for_function(
+            "document.getElementById('terminal')"
+            ".classList.contains('fullscreen')",
+            timeout=10000,
+        )
+
+        page.locator("#fullscreen-toggle").tap()
+        page.wait_for_function(
+            "!document.getElementById('terminal')"
+            ".classList.contains('fullscreen')",
+            timeout=10000,
+        )
+
+        browser.close()
+
+
 if __name__ == "__main__":
     test_happy_path_broadcast_appears_in_browser()
     test_user_counter_shows_in_browser()
@@ -476,3 +515,4 @@ if __name__ == "__main__":
     test_unicode_renders_in_browser()
     test_resize_updates_browser_terminal()
     test_fullscreen_mode_scales_and_restores()
+    test_fullscreen_button_visible_and_tappable_on_touch()

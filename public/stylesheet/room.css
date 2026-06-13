@@ -158,9 +158,9 @@ header {
   top: 8px;
   right: 8px;
   z-index: 2;
-  width: 32px;
-  height: 32px;
-  padding: 6px;
+  width: 44px;
+  height: 44px;
+  padding: 11px;
   border: 0;
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.45);
@@ -173,6 +173,14 @@ header {
 #terminal:hover #fullscreen-toggle,
 #fullscreen-toggle:focus-visible {
   opacity: 1;
+}
+
+/* Touch devices have no hover to reveal the button: keep it visible
+   at rest */
+@media (hover: none) {
+  #fullscreen-toggle {
+    opacity: 0.5;
+  }
 }
 
 /* While fullscreen the button must stay reachable: touch devices have
