@@ -148,6 +148,8 @@ make release VERSION=2.1.0  # explicit version
 
 This bumps Cargo.toml, commits, tags, and pushes. CI then runs the e2e tests, builds all platforms, creates the GitHub release with binaries, and publishes the [npm packages](https://www.npmjs.com/package/shellshare).
 
+Working in Claude Code? The `release` skill (`.claude/skills/release/SKILL.md`) walks the whole flow — picking the semver bump (major only when old CLI binaries break), running `make release`, and writing the GitHub release notes.
+
 ## Limitations
 
 This project is intended for live broadcasts only. If you'd like to record your terminal, check [asciinema.org](https://asciinema.org)
