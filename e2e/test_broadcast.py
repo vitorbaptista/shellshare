@@ -577,6 +577,77 @@ def test_touch_portrait_fits_terminal_to_width():
         browser.close()
 
 
+def test_touch_landscape_fits_whole_grid_and_overlay():
+    """
+    On a landscape touch device the whole grid fits BOTH axes (no vertical
+    scroll), unlike the width-only portrait preview, and the immersive
+    overlay sits inside the viewport - not floating in an over-tall scroll
+    height. The "rotate to landscape" hint is dropped (already landscape).
+    Regression guard for the landscape overlay rendering as a stray icon.
+    """
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+    key = os.urandom(32).hex()
+
+    wait_for_server(SERVER_URL)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        # Pixel 7 rotated to landscape: width > height flips the
+        # orientation media query and gives the grid a wide box to fill.
+        device = dict(p.devices["Pixel 7"])
+        vp = device["viewport"]
+        device["viewport"] = {"width": vp["height"], "height": vp["width"]}
+        context = browser.new_context(**device)
+        page = context.new_page()
+        page.goto(f"{SERVER_URL}/r/{room_id}#{key}")
+        page.wait_for_selector("#terminal", timeout=10000)
+        page.wait_for_function(
+            "document.getElementById('online-counter').textContent !== '0'",
+            timeout=10000,
+        )
+
+        status = broadcast_message(
+            SERVER_URL, room_id, password, "landscape fit test",
+            size={"cols": 80, "rows": 24}, key=key,
+        )
+        assert status == 200
+        wait_for_terminal_text(page, "landscape fit test")
+
+        # Both axes fit: the grid is no taller than its viewport-bounded
+        # box (a width-only fit of 24 rows would overflow this height).
+        page.wait_for_function(
+            "(function () {"
+            "  var s = window.term.element.querySelector('.xterm-screen');"
+            "  var c = document.getElementById('terminal');"
+            "  var r = s.getBoundingClientRect();"
+            "  return r.height <= c.clientHeight + 1 &&"
+            "         r.width <= c.clientWidth + 1;"
+            "})()",
+            timeout=10000,
+        )
+
+        # The overlay covers the visible area, not an off-screen mid-scroll
+        # band: its box stays within the viewport.
+        overlay_in_view = page.evaluate(
+            "(function () {"
+            "  var r = document.getElementById('immersive-overlay')"
+            "    .getBoundingClientRect();"
+            "  return r.top >= -1 && r.bottom <= window.innerHeight + 1;"
+            "})()"
+        )
+        assert overlay_in_view, "immersive overlay floats outside the viewport"
+
+        # The rotate hint is meaningless in landscape, so it's hidden.
+        sub_display = page.locator("#immersive-overlay .io-sub").evaluate(
+            "el => getComputedStyle(el).display"
+        )
+        assert sub_display == "none", \
+            f"'rotate to landscape' hint should be hidden in landscape, got {sub_display}"
+
+        browser.close()
+
+
 def test_immersive_overlay_hidden_on_desktop():
     """
     The immersive overlay is touch-only. A desktop (fine-pointer) viewer
@@ -620,4 +691,5 @@ if __name__ == "__main__":
     test_fullscreen_mode_scales_and_restores()
     test_touch_overlay_enters_immersive_and_toggle_exits()
     test_touch_portrait_fits_terminal_to_width()
+    test_touch_landscape_fits_whole_grid_and_overlay()
     test_immersive_overlay_hidden_on_desktop()

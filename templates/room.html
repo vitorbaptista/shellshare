@@ -736,25 +736,61 @@
                   window.matchMedia('(pointer: coarse)').matches);
       }
 
-      // Two scaling regimes share one convergence loop:
+      // Phone held in landscape. The not-fullscreen preview fits the
+      // whole grid on screen here (see fitTerminal), and the immersive
+      // overlay drops its "rotate to landscape" hint (room.css) - there's
+      // nothing left to rotate.
+      function isLandscape() {
+        return !!(window.matchMedia &&
+                  window.matchMedia('(orientation: landscape)').matches);
+      }
+
+      // Height available to a viewport-pinned preview: everything below
+      // the terminal's top edge. offsetTop is a layout offset (scroll
+      // independent), so this stays stable as the live tail scrolls.
+      function previewHeight() {
+        return Math.max(0, window.innerHeight - terminalContainer.offsetTop);
+      }
+
+      // Three scaling regimes share one convergence loop:
       // - Fullscreen: fit the grid to both axes (fill the screen).
-      // - Touch, not fullscreen: fit to WIDTH only, so all the
-      //   broadcaster's columns are visible without horizontal scroll.
-      //   The result is a small but complete "preview" the viewer taps
-      //   to enter the readable landscape view; height is free to grow
-      //   and scroll. A fine-pointer page out of fullscreen keeps the
-      //   base font (desktop is unchanged).
+      // - Touch + portrait, not fullscreen: fit to WIDTH only, so every
+      //   column shows without horizontal scroll. Height is free to grow
+      //   and scroll - a small but complete "preview" the viewer taps to
+      //   enter the readable landscape view.
+      // - Touch + landscape, not fullscreen: the grid already has a wide
+      //   aspect to fill, so fit BOTH axes into a viewport-bounded box.
+      //   The whole session shows at once with no scroll, and the
+      //   immersive overlay (inset:0 of that box) covers exactly the
+      //   visible area instead of floating in an over-tall scroll height.
+      // A fine-pointer page out of fullscreen keeps the base font
+      // (desktop is unchanged).
       function fitTerminal() {
         if (!term || !term.element) {
           return;
         }
         var token = ++fitToken;
         var fs = isFullscreen();
-        var fitWidthOnly = !fs && isCoarsePointer();
-        if (!fs && !fitWidthOnly) {
+        var preview = !fs && isCoarsePointer();
+        // Pin the landscape preview to the viewport so both axes have a
+        // bounded box to fit into; every other regime lets height follow
+        // content (fullscreen fills the CSS-fixed box). border-box so the
+        // height includes #terminal's padding - otherwise the padding
+        // pushes the box (and the overlay covering it) past the viewport.
+        if (preview && isLandscape()) {
+          terminalContainer.style.boxSizing = 'border-box';
+          terminalContainer.style.height = previewHeight() + 'px';
+        } else {
+          terminalContainer.style.boxSizing = '';
+          terminalContainer.style.height = '';
+        }
+        if (!fs && !preview) {
           setFontSize(BASE_FONT_PX);
           return;
         }
+        // Fullscreen and the landscape preview fit both axes; portrait
+        // fits width only.
+        var fitBoth = fs || isLandscape();
         // Cell dimensions are near-linear in font size, so the ratio
         // at the current size gives the target directly
         var rect = screenRect();
@@ -762,7 +798,7 @@
           return;
         }
         var scaleW = terminalContainer.clientWidth / rect.width;
-        var scale = fs ?
+        var scale = fitBoth ?
           Math.min(scaleW, terminalContainer.clientHeight / rect.height) :
           scaleW;
         // Integer px keeps glyphs crisp
@@ -770,12 +806,13 @@
                              Math.floor(term.options.fontSize * scale)));
         requestAnimationFrame(function nudge() {
           var stillFs = isFullscreen();
-          var stillFitWidth = !stillFs && isCoarsePointer();
-          if (token !== fitToken || (!stillFs && !stillFitWidth)) {
+          var stillPreview = !stillFs && isCoarsePointer();
+          if (token !== fitToken || (!stillFs && !stillPreview)) {
             return;
           }
+          var stillBoth = stillFs || isLandscape();
           var rect = screenRect();
-          var over = stillFs ? overflows(rect) : overflowsWidth(rect);
+          var over = stillBoth ? overflows(rect) : overflowsWidth(rect);
           if (rect && over && term.options.fontSize > MIN_FONT_PX) {
             setFontSize(term.options.fontSize - 1);
             requestAnimationFrame(nudge);
