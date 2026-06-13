@@ -26,6 +26,18 @@ from conftest import (
 
 IS_WINDOWS = platform.system() == "Windows"
 
+# Spawning the CLI and waiting for it to broadcast, then drain and shut
+# down its session, is normally ~60ms. But these subprocess timeouts are
+# WALL-CLOCK, and the suite runs `-n 10` on shared CI runners: under heavy
+# CPU oversubscription every thread-scheduling point and bounded sleep in
+# the CLI's shutdown path stretches out. Measured serial worst cases under
+# ~5x CPU oversubscription reached ~8s, with a tail that grows with load,
+# and the Python test process itself can be descheduled against its own
+# timeout. A generous wall-clock budget keeps these green under that
+# scheduling pressure without masking a genuine hang (a real hang never
+# returns at all). The median run is unaffected.
+CLI_SESSION_TIMEOUT = 60
+
 
 def parse_json_events(stdout):
     """Parse the shellshare events out of stdout. Exec mode interleaves the
@@ -56,7 +68,7 @@ class TestJsonContract:
             input="hello agents\n",
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=CLI_SESSION_TIMEOUT,
         )
         assert proc.returncode == 0
 
@@ -80,7 +92,7 @@ class TestJsonContract:
             input="hi\n",
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=CLI_SESSION_TIMEOUT,
         )
         assert "Sharing terminal in" not in proc.stdout + proc.stderr
         assert "End of transmission" not in proc.stdout + proc.stderr
@@ -101,7 +113,7 @@ class TestExecSubcommand:
                 + ["--", "echo", marker],
                 capture_output=True,
                 text=True,
-                timeout=20,
+                timeout=CLI_SESSION_TIMEOUT,
                 stdin=subprocess.DEVNULL,
             )
             assert proc.returncode == 0
@@ -129,7 +141,7 @@ class TestExecSubcommand:
             + ["--", "sh", "-c", "exit 3"],
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=CLI_SESSION_TIMEOUT,
             stdin=subprocess.DEVNULL,
         )
         assert proc.returncode == 3

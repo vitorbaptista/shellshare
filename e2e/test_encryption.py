@@ -41,10 +41,15 @@ def parse_share_url(text):
     return match.group(1) if match else None
 
 
-def run_cli(message, room, password, timeout=10, encrypt=True):
+def run_cli(message, room, password, timeout=30, encrypt=True):
     """Run the CLI in stdin mode until EOF.
 
     Returns (returncode, stderr, share_url).
+
+    `timeout` is wall-clock and deliberately generous: a full CLI session
+    is normally sub-second, but under `-n 10` on an oversubscribed CI
+    runner the CLI's bounded shutdown sleeps and thread scheduling stretch
+    to several seconds. The slack absorbs that without hiding a real hang.
     """
     args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room, "-W", password]
     if not encrypt:

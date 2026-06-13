@@ -65,11 +65,17 @@ def start_serve(port, room, password, host=None):
     )
 
 
-def finish(proc, message="", timeout=15):
+def finish(proc, message="", timeout=30):
     """Send the message, close stdin and wait for the CLI to exit.
 
     Kills the process on timeout so a hung CLI doesn't leak and hold its
     port for the rest of the (parallel) test run.
+
+    `timeout` is wall-clock and generous: `serve` boots an embedded
+    server and runs a full client session, normally a second or two, but
+    under `-n 10` on an oversubscribed CI runner thread scheduling and the
+    CLI's bounded shutdown sleeps stretch out. The kill-on-timeout above
+    still bounds a genuine hang.
     """
     try:
         stdout, stderr = proc.communicate(input=message, timeout=timeout)
