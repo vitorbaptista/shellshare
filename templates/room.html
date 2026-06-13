@@ -40,6 +40,16 @@
             <path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"/>
           </svg>
         </button>
+        <button id="immersive-overlay" type="button" aria-label="Watch fullscreen in landscape">
+          <svg class="io-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>
+          </svg>
+          <span class="io-label">Tap to watch fullscreen</span>
+          <span class="io-sub">&#x21bb; rotates to landscape for readable text</span>
+        </button>
+        <div id="rotate-nudge" role="status" aria-hidden="true">
+          <span class="rn-icon">&#x21bb;</span> Rotate your phone for readable text
+        </div>
       </div>
     </main>
     <footer>
@@ -94,6 +104,7 @@
         document.getElementById('broadcast-status-text');
       var terminalContainer = document.getElementById('terminal');
       var fullscreenToggle = document.getElementById('fullscreen-toggle');
+      var immersiveOverlay = document.getElementById('immersive-overlay');
       var favicon = document.getElementById('favicon');
       var cryptoNotice = document.getElementById('crypto-notice');
 
@@ -564,6 +575,87 @@
                document.webkitFullscreenElement || null;
       }
 
+      // Lock to landscape on entering immersive mode. Supported on
+      // Android Chrome (only while fullscreen); a no-op everywhere it
+      // isn't (notably iOS Safari, which has no orientation lock and no
+      // element Fullscreen API - the fill-the-page class fallback plus
+      // the CSS rotate nudge cover it there). Any rejection is silent.
+      function lockLandscape() {
+        try {
+          var o = window.screen && window.screen.orientation;
+          if (o && o.lock) {
+            var p = o.lock('landscape');
+            if (p && p.catch) {
+              p.catch(function () {});
+            }
+          }
+        } catch (e) {}
+      }
+
+      function unlockOrientation() {
+        try {
+          var o = window.screen && window.screen.orientation;
+          if (o && o.unlock) {
+            o.unlock();
+          }
+        } catch (e) {}
+      }
+
+      // Keep the screen awake while watching a live broadcast. The lock
+      // is auto-released when the tab is hidden, so it is re-acquired on
+      // visibilitychange while still immersive. Absent API or rejection
+      // is a silent no-op.
+      var wakeLock = null;
+      // A request is asynchronous, and the native-fullscreen path calls
+      // acquire twice in quick succession (enterFullscreen, then the
+      // fullscreenchange handler) before the first resolves. Without a
+      // pending guard both fire request('screen') and the second sentinel
+      // orphans the first, which then leaks. The flag collapses concurrent
+      // requests to one.
+      var wakeLockPending = false;
+      function acquireWakeLock() {
+        if (wakeLock || wakeLockPending || !navigator.wakeLock) {
+          return;
+        }
+        wakeLockPending = true;
+        navigator.wakeLock.request('screen').then(function (lock) {
+          wakeLockPending = false;
+          // If we left immersive mode while the request was in flight,
+          // drop this lock instead of holding one releaseWakeLock has
+          // already missed.
+          if (!isFullscreen()) {
+            lock.release().catch(function () {});
+            return;
+          }
+          wakeLock = lock;
+          lock.addEventListener('release', function () {
+            wakeLock = null;
+          });
+        }).catch(function () {
+          wakeLockPending = false;
+        });
+      }
+
+      function releaseWakeLock() {
+        if (wakeLock) {
+          wakeLock.release().catch(function () {});
+          wakeLock = null;
+        }
+      }
+
+      // Idempotent: both the class fallback (enterFullscreen, no native
+      // event on iOS) and the native fullscreenchange handler call these,
+      // and a re-entrant call must not double-lock or leak a wake lock.
+      function enterImmersive() {
+        lockLandscape();
+        acquireWakeLock();
+      }
+
+      function exitImmersive() {
+        unlockOrientation();
+        releaseWakeLock();
+      }
+
       function enterFullscreen() {
         terminalContainer.classList.add('fullscreen');
         var rfs = terminalContainer.requestFullscreen ||
@@ -575,6 +667,11 @@
             result.catch(function () {});
           }
         }
+        // Runs inside the tap/keypress gesture, which orientation lock
+        // requires. Native fullscreen also re-runs it from
+        // onFullscreenChange; the class fallback (iOS) has no such event,
+        // so this call is what covers it there.
+        enterImmersive();
         fitTerminal();
       }
 
@@ -587,6 +684,7 @@
           }
         }
         terminalContainer.classList.remove('fullscreen');
+        exitImmersive();
         fitTerminal();
       }
 
@@ -620,17 +718,40 @@
         return screen ? screen.getBoundingClientRect() : null;
       }
 
+      function overflowsWidth(rect) {
+        return rect.width > terminalContainer.clientWidth;
+      }
+
       function overflows(rect) {
-        return rect.width > terminalContainer.clientWidth ||
+        return overflowsWidth(rect) ||
                rect.height > terminalContainer.clientHeight;
       }
 
+      // Touch devices (phones, tablets). Mouse/keyboard devices - even
+      // ones with a touchscreen - keep a fine pointer and the desktop
+      // behavior. Drives both the fit-to-width preview here and, in
+      // room.css, the immersive overlay and rotate nudge.
+      function isCoarsePointer() {
+        return !!(window.matchMedia &&
+                  window.matchMedia('(pointer: coarse)').matches);
+      }
+
+      // Two scaling regimes share one convergence loop:
+      // - Fullscreen: fit the grid to both axes (fill the screen).
+      // - Touch, not fullscreen: fit to WIDTH only, so all the
+      //   broadcaster's columns are visible without horizontal scroll.
+      //   The result is a small but complete "preview" the viewer taps
+      //   to enter the readable landscape view; height is free to grow
+      //   and scroll. A fine-pointer page out of fullscreen keeps the
+      //   base font (desktop is unchanged).
       function fitTerminal() {
         if (!term || !term.element) {
           return;
         }
         var token = ++fitToken;
-        if (!isFullscreen()) {
+        var fs = isFullscreen();
+        var fitWidthOnly = !fs && isCoarsePointer();
+        if (!fs && !fitWidthOnly) {
           setFontSize(BASE_FONT_PX);
           return;
         }
@@ -640,18 +761,22 @@
         if (!rect || !rect.width || !rect.height) {
           return;
         }
-        var scale = Math.min(terminalContainer.clientWidth / rect.width,
-                             terminalContainer.clientHeight / rect.height);
+        var scaleW = terminalContainer.clientWidth / rect.width;
+        var scale = fs ?
+          Math.min(scaleW, terminalContainer.clientHeight / rect.height) :
+          scaleW;
         // Integer px keeps glyphs crisp
         setFontSize(Math.max(MIN_FONT_PX,
                              Math.floor(term.options.fontSize * scale)));
         requestAnimationFrame(function nudge() {
-          if (token !== fitToken || !isFullscreen()) {
+          var stillFs = isFullscreen();
+          var stillFitWidth = !stillFs && isCoarsePointer();
+          if (token !== fitToken || (!stillFs && !stillFitWidth)) {
             return;
           }
           var rect = screenRect();
-          if (rect && overflows(rect) &&
-              term.options.fontSize > MIN_FONT_PX) {
+          var over = stillFs ? overflows(rect) : overflowsWidth(rect);
+          if (rect && over && term.options.fontSize > MIN_FONT_PX) {
             setFontSize(term.options.fontSize - 1);
             requestAnimationFrame(nudge);
           }
@@ -675,13 +800,29 @@
       // fallback path never fires this event, so its class handling
       // is untouched.
       function onFullscreenChange() {
-        terminalContainer.classList.toggle('fullscreen',
-                                           !!nativeFullscreenElement());
+        var entering = !!nativeFullscreenElement();
+        terminalContainer.classList.toggle('fullscreen', entering);
+        if (entering) {
+          enterImmersive();
+        } else {
+          exitImmersive();
+        }
         scheduleFit();
       }
 
       fullscreenToggle.addEventListener('click', toggleFullscreen);
+      // On touch the overlay - not the corner toggle - is the entry
+      // point (room.css hides the toggle and shows the overlay there).
+      // It only ever shows out of fullscreen, so enter, don't toggle.
+      immersiveOverlay.addEventListener('click', enterFullscreen);
       window.addEventListener('resize', scheduleFit);
+      // The wake lock is dropped when the tab is hidden; take it back on
+      // return if still watching immersively.
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible' && isFullscreen()) {
+          acquireWakeLock();
+        }
+      });
       document.addEventListener('fullscreenchange', onFullscreenChange);
       document.addEventListener('webkitfullscreenchange', onFullscreenChange);
       document.addEventListener('keydown', function (e) {
