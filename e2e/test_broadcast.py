@@ -467,11 +467,13 @@ def test_fullscreen_mode_scales_and_restores():
         browser.close()
 
 
-def test_fullscreen_button_visible_and_tappable_on_touch():
+def test_touch_overlay_enters_immersive_and_toggle_exits():
     """
-    Touch devices have no hover to reveal the fullscreen button, so it
-    must be visible at rest (non-zero opacity) and a tap must toggle
-    fullscreen mode on and off. Emulates a Pixel-class phone.
+    On touch devices the immersive overlay - not the corner toggle - is
+    the entry point. Out of fullscreen the overlay is visible and the
+    corner toggle is hidden; tapping the overlay enters fullscreen, where
+    the corner toggle returns (now the way out) and the overlay hides.
+    Emulates a Pixel-class phone.
     """
     room_id = f"test-{random_id()}"
 
@@ -482,26 +484,127 @@ def test_fullscreen_button_visible_and_tappable_on_touch():
         context = browser.new_context(**p.devices["Pixel 7"])
         page = context.new_page()
         page.goto(f"{SERVER_URL}/r/{room_id}")
-        page.wait_for_selector("#fullscreen-toggle", timeout=10000)
+        page.wait_for_selector("#immersive-overlay", timeout=10000)
 
-        opacity = page.locator("#fullscreen-toggle").evaluate(
-            "el => parseFloat(getComputedStyle(el).opacity)"
+        # Out of fullscreen on touch: overlay shown, corner toggle hidden.
+        overlay_shown = page.locator("#immersive-overlay").evaluate(
+            "el => getComputedStyle(el).display !== 'none' && "
+            "parseFloat(getComputedStyle(el).opacity) > 0"
         )
-        assert opacity > 0, f"button invisible on touch device: opacity={opacity}"
+        assert overlay_shown, "immersive overlay not shown on touch device"
+        toggle_display = page.locator("#fullscreen-toggle").evaluate(
+            "el => getComputedStyle(el).display"
+        )
+        assert toggle_display == "none", \
+            f"corner toggle should be hidden out of fullscreen, got {toggle_display}"
 
-        page.locator("#fullscreen-toggle").tap()
+        # Tap the overlay -> enters fullscreen.
+        page.locator("#immersive-overlay").tap()
         page.wait_for_function(
             "document.getElementById('terminal')"
             ".classList.contains('fullscreen')",
             timeout=10000,
         )
+        # Inside fullscreen: corner toggle returns, overlay hides.
+        page.wait_for_function(
+            "getComputedStyle(document.getElementById('fullscreen-toggle'))"
+            ".display !== 'none'",
+            timeout=10000,
+        )
+        page.wait_for_function(
+            "getComputedStyle(document.getElementById('immersive-overlay'))"
+            ".display === 'none'",
+            timeout=10000,
+        )
 
+        # Tap the corner toggle -> exits fullscreen.
         page.locator("#fullscreen-toggle").tap()
         page.wait_for_function(
             "!document.getElementById('terminal')"
             ".classList.contains('fullscreen')",
             timeout=10000,
         )
+
+        browser.close()
+
+
+def test_touch_portrait_fits_terminal_to_width():
+    """
+    On a portrait touch device the font is scaled down so all of the
+    broadcaster's columns fit the viewport width - a readable-overview
+    preview, smaller than the desktop base font and with no horizontal
+    overflow. (Desktop keeps the base font; see the fullscreen test.)
+    """
+    room_id = f"test-{random_id()}"
+    password = f"secret-{random_id()}"
+    key = os.urandom(32).hex()
+
+    wait_for_server(SERVER_URL)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context(**p.devices["Pixel 7"])
+        page = context.new_page()
+        page.goto(f"{SERVER_URL}/r/{room_id}#{key}")
+        page.wait_for_selector("#terminal", timeout=10000)
+        page.wait_for_function(
+            "document.getElementById('online-counter').textContent !== '0'",
+            timeout=10000,
+        )
+
+        status = broadcast_message(
+            SERVER_URL, room_id, password, "fit to width test",
+            size={"cols": 80, "rows": 24}, key=key,
+        )
+        assert status == 200
+        wait_for_terminal_text(page, "fit to width test")
+
+        # 80 cols at the 14px base would overflow a ~412px phone; the
+        # preview shrinks the font below the base to fit the width.
+        page.wait_for_function(
+            "window.term && window.term.options.fontSize < 14",
+            timeout=10000,
+        )
+        no_overflow = page.evaluate(
+            "(function () {"
+            "  var s = window.term.element.querySelector('.xterm-screen');"
+            "  var c = document.getElementById('terminal');"
+            "  return s.getBoundingClientRect().width <= c.clientWidth + 1;"
+            "})()"
+        )
+        assert no_overflow, "terminal grid overflows viewport width on touch"
+
+        browser.close()
+
+
+def test_immersive_overlay_hidden_on_desktop():
+    """
+    The immersive overlay is touch-only. A desktop (fine-pointer) viewer
+    never sees it and keeps the hover-revealed corner toggle as the
+    fullscreen entry point.
+    """
+    room_id = f"test-{random_id()}"
+
+    wait_for_server(SERVER_URL)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()  # default desktop context: fine pointer
+        page.goto(f"{SERVER_URL}/r/{room_id}")
+        # Hidden on desktop, so wait for it in the DOM, not for visibility.
+        page.wait_for_selector("#immersive-overlay", state="attached", timeout=10000)
+
+        overlay_display = page.locator("#immersive-overlay").evaluate(
+            "el => getComputedStyle(el).display"
+        )
+        assert overlay_display == "none", \
+            f"overlay should be hidden on desktop, got display={overlay_display}"
+
+        toggle_display = page.locator("#fullscreen-toggle").evaluate(
+            "el => getComputedStyle(el).display"
+        )
+        assert toggle_display != "none", \
+            "corner toggle should remain the desktop entry point"
 
         browser.close()
 
@@ -515,4 +618,6 @@ if __name__ == "__main__":
     test_unicode_renders_in_browser()
     test_resize_updates_browser_terminal()
     test_fullscreen_mode_scales_and_restores()
-    test_fullscreen_button_visible_and_tappable_on_touch()
+    test_touch_overlay_enters_immersive_and_toggle_exits()
+    test_touch_portrait_fits_terminal_to_width()
+    test_immersive_overlay_hidden_on_desktop()

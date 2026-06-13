@@ -29,3 +29,6 @@ e2e/multiroom-*.json
 # Misc
 ecosystem.json5
 e2e/loadgen/target/
+
+# Visual companion (brainstorming) scratch
+/.superpowers/

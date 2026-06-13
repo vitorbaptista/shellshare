@@ -243,3 +243,94 @@ header {
      then eats on every pass */
   padding: 0;
 }
+
+/* Immersive entry affordance for touch devices. Out of fullscreen, the
+   whole terminal becomes one tap target with a centered prompt: the
+   viewer sees a small fit-to-width preview (all columns visible, set by
+   the viewer script) and taps to enter the readable landscape view. On
+   touch this REPLACES the corner toggle as the entry point; the toggle
+   returns inside fullscreen as the way out. Hidden on fine-pointer
+   (desktop) devices, where hover + the corner toggle already work. */
+#immersive-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 0;
+  background: linear-gradient(rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.55));
+  color: rgba(255, 255, 255, 0.95);
+  font-family: 'Open Sans', sans-serif;
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#immersive-overlay .io-icon {
+  box-sizing: border-box;
+  width: 64px;
+  height: 64px;
+  padding: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+#immersive-overlay .io-label {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+#immersive-overlay .io-sub {
+  margin-top: -0.4rem;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+/* Rotate nudge: the honest fallback when we can't lock orientation
+   (iOS, or Android where the lock was refused). Shown only while
+   fullscreen AND the device is still portrait, so it disappears the
+   instant the viewer rotates - no JS polling needed. */
+#rotate-nudge {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 101;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 0.85rem;
+  padding: 0.5em 0.9em;
+  border-radius: 999px;
+}
+
+@media (pointer: coarse) {
+  #terminal:not(.fullscreen) #immersive-overlay {
+    display: flex;
+  }
+
+  #terminal:not(.fullscreen) #fullscreen-toggle {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) and (orientation: portrait) {
+  #terminal.fullscreen #rotate-nudge {
+    display: block;
+  }
+}
+
+/* A blocked encrypted broadcast shows its explanatory notice instead;
+   don't cover it with the tap-to-watch prompt. */
+#terminal.crypto-blocked #immersive-overlay {
+  display: none;
+}
