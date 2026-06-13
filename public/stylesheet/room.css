@@ -163,8 +163,9 @@ header {
      the hit-test for a tap landing on the button. A bare z-index: 2 tied
      the link layer, so which one received the tap was render-order
      dependent - it worked under one renderer and silently failed under
-     another (e.g. the canvas fallback on GPU-less CI). */
-  z-index: 6;
+     another (e.g. the canvas fallback on GPU-less CI). Parked far above
+     anything xterm uses so a future layer can't quietly tie it again. */
+  z-index: 9999;
   width: 44px;
   height: 44px;
   padding: 11px;
