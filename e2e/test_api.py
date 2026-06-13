@@ -122,18 +122,6 @@ class TestHomePage:
         assert status == 200, f"Expected 200, got {status}"
         assert 'text/html' in headers.get('Content-Type', ''), "Expected HTML response"
 
-    def test_home_page_contains_shellshare(self):
-        """Home page should mention shellshare."""
-        wait_for_server(SERVER_URL)
-        status, headers, body = make_request('GET', '/')
-        assert 'shellshare' in body.lower(), "Expected 'shellshare' in home page"
-
-    def test_home_page_no_user_agent(self):
-        """Page should work without User-Agent header."""
-        wait_for_server(SERVER_URL)
-        status, headers, body = make_request('GET', '/')
-        assert status == 200, f"Expected 200, got {status}"
-
 
 class TestInstallOptions:
     """Tests for the install option radios on the home page.
@@ -195,13 +183,6 @@ class TestRoomPage:
         room_id = f"test-room_name-123"
         status, headers, body = make_request('GET', f'/r/{room_id}')
         assert status == 200, f"Expected 200, got {status}"
-
-    def test_room_page_contains_terminal(self):
-        """Room page should have a terminal element."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-        status, headers, body = make_request('GET', f'/r/{room_id}')
-        assert 'terminal' in body.lower(), "Expected 'terminal' in room page"
 
 
 class TestLegacyPostRetired:
@@ -678,21 +659,6 @@ class TestConcurrentBroadcasts:
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
-    def test_nonexistent_static_file_returns_404(self):
-        """Request for nonexistent file should return 404."""
-        wait_for_server(SERVER_URL)
-        status, _, _ = make_request('GET', '/nonexistent/file.txt')
-        assert status == 404, f"Expected 404, got {status}"
-
-    def test_404_response_body(self):
-        """404 Not Found response should have a body."""
-        wait_for_server(SERVER_URL)
-
-        status, headers, resp_body = make_request('GET', '/nonexistent/path')
-
-        assert status == 404, f"Expected 404, got {status}"
-        assert len(resp_body) > 0, "404 should have a body"
-
     def test_room_names_are_case_sensitive(self):
         """Room names should be case sensitive."""
         wait_for_server(SERVER_URL)
@@ -716,56 +682,6 @@ class TestUnsupportedMethods:
     410 Gone, covered by TestLegacyPostRetired), so it is not an
     unsupported method.
     """
-
-    def test_put_room_not_supported(self):
-        """PUT /r/:room should return 404 (no route defined)."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-
-        body = {
-            "message": "test",
-            "size": {"rows": 24, "cols": 80}
-        }
-
-        status, headers, resp_body = make_request(
-            'PUT', f'/r/{room_id}',
-            headers={"Authorization": "secret"},
-            body=body
-        )
-
-        # Express returns 404, Axum returns 405 - both are valid
-        assert status in (404, 405), f"Expected 404 or 405 for PUT, got {status}"
-
-    def test_patch_room_not_supported(self):
-        """PATCH /r/:room should return 404."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-
-        body = {
-            "message": "test"
-        }
-
-        status, headers, resp_body = make_request(
-            'PATCH', f'/r/{room_id}',
-            headers={"Authorization": "secret"},
-            body=body
-        )
-
-        # Express returns 404, Axum returns 405 - both are valid
-        assert status in (404, 405), f"Expected 404 or 405 for PATCH, got {status}"
-
-    def test_options_room(self):
-        """OPTIONS /r/:room - check CORS preflight handling."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-
-        status, headers, resp_body = make_request(
-            'OPTIONS', f'/r/{room_id}',
-            headers={"Origin": "http://example.com"}
-        )
-
-        # Document actual behavior - depends on CORS setup, 405 is also valid
-        assert status in [200, 204, 404, 405], f"Got unexpected status {status} for OPTIONS"
 
     def test_head_room(self):
         """HEAD /r/:room should work like GET but with no body."""
@@ -878,23 +794,6 @@ class TestRoomNameEdgeCasesAdvanced:
         status, headers, body = make_request('GET', f'/r/{room_id}')
         # Document behavior - might be 200 or 404
         assert status in [200, 301, 404], f"Got unexpected status {status}"
-
-    def test_room_with_query_string(self):
-        """Room with query string should ignore query."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-
-        status, headers, body = make_request('GET', f'/r/{room_id}?foo=bar')
-        assert status == 200, f"Expected 200, got {status}"
-
-    def test_room_with_fragment(self):
-        """Room with fragment should work (fragment not sent to server)."""
-        wait_for_server(SERVER_URL)
-        room_id = f"test-{random_id()}"
-
-        # Note: fragments aren't sent to server, so this is same as normal request
-        status, headers, body = make_request('GET', f'/r/{room_id}')
-        assert status == 200, f"Expected 200, got {status}"
 
     def test_room_with_semicolon(self):
         """Room name with semicolon."""

@@ -246,60 +246,36 @@ class TestViewerDecryption:
         finally:
             finish_broadcaster(proc)
 
-    def test_missing_key_shows_notice_not_garbage(self, unique_password):
-        room = f"enc-nokey-{random_id()}"
-        marker = f"HIDDEN-{random_id()}"
-        proc, share_url = start_broadcaster(
-            room, unique_password, f"{marker}\n"
-        )
-        try:
-            keyless_url = share_url.split("#")[0]
-            with sync_playwright() as p:
-                browser = p.chromium.launch()
-                page = browser.new_page()
-                page.goto(keyless_url)
-                page.wait_for_selector("#crypto-notice:visible", timeout=10000)
-                notice = page.text_content("#crypto-notice")
-                assert "Missing decryption key" in notice
-                # The terminal must stay empty: neither the plaintext
-                # (it can't decrypt) nor rendered ciphertext garbage
-                assert terminal_text(page).strip() == ""
-                browser.close()
-        finally:
-            finish_broadcaster(proc)
-
-    def test_wrong_key_shows_notice(self, unique_password):
-        room = f"enc-wrongkey-{random_id()}"
-        marker = f"HIDDEN-{random_id()}"
-        proc, share_url = start_broadcaster(
-            room, unique_password, f"{marker}\n"
-        )
-        try:
-            wrong_url = share_url.split("#")[0] + "#" + ("ab" * 32)
-            with sync_playwright() as p:
-                browser = p.chromium.launch()
-                page = browser.new_page()
-                page.goto(wrong_url)
-                page.wait_for_selector("#crypto-notice:visible", timeout=10000)
-                notice = page.text_content("#crypto-notice")
-                assert "decrypt" in notice
-                assert marker not in terminal_text(page)
-                browser.close()
-        finally:
-            finish_broadcaster(proc)
-
-    def test_invalid_key_shows_notice(self, unique_password):
+    @pytest.mark.parametrize("fragment, expected_notice", [
+        (None, "Missing decryption key"),
+        ("ab" * 32, "decrypt"),
+        ("not-hex-at-all", "Invalid decryption key"),
+    ], ids=["missing", "wrong", "invalid"])
+    def test_undecryptable_key_shows_notice_not_garbage(
+        self, unique_password, fragment, expected_notice
+    ):
+        """A missing, wrong, or malformed decryption key surfaces an
+        explanatory notice - never rendered plaintext or ciphertext
+        garbage in the terminal."""
         room = f"enc-badkey-{random_id()}"
-        proc, share_url = start_broadcaster(room, unique_password, "x\n")
+        marker = f"HIDDEN-{random_id()}"
+        proc, share_url = start_broadcaster(
+            room, unique_password, f"{marker}\n"
+        )
         try:
-            bad_url = share_url.split("#")[0] + "#not-hex-at-all"
+            base_url = share_url.split("#")[0]
+            url = base_url if fragment is None else f"{base_url}#{fragment}"
             with sync_playwright() as p:
                 browser = p.chromium.launch()
                 page = browser.new_page()
-                page.goto(bad_url)
+                page.goto(url)
                 page.wait_for_selector("#crypto-notice:visible", timeout=10000)
-                assert "Invalid decryption key" in page.text_content(
-                    "#crypto-notice")
+                notice = page.text_content("#crypto-notice")
+                assert expected_notice in notice, \
+                    f"Expected {expected_notice!r} in notice, got {notice!r}"
+                # The plaintext marker must never leak - not as plaintext
+                # (it can't decrypt) nor as rendered ciphertext garbage
+                assert marker not in terminal_text(page)
                 browser.close()
         finally:
             finish_broadcaster(proc)

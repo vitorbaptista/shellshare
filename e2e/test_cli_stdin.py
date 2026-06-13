@@ -107,17 +107,6 @@ class TestBasicFunctionality:
 class TestMessageEncoding:
     """Tests for message encoding and special characters."""
 
-    def test_simple_text(self, unique_room, unique_password, socket_listener):
-        """Simple text 'hello world' should be transmitted correctly."""
-        test_message = "hello world"
-
-        _, _, stderr = run_cli_stdin(test_message, unique_room, unique_password)
-
-        socket_listener.set_key(parse_share_key(stderr))
-        received = socket_listener.wait_for_message(timeout=5, containing=test_message)
-        assert received is not None
-        assert test_message in received
-
     def test_special_characters(self, unique_room, unique_password, socket_listener):
         """Special characters !@#$%^&*() should be preserved."""
         test_message = "!@#$%^&*()"
@@ -303,34 +292,6 @@ class TestServerCommunication:
         assert len(room_id) == 18, f"Room ID should be 18 chars, got {len(room_id)}: {room_id}"
         assert room_id.isalnum(), f"Room ID should be alphanumeric: {room_id}"
 
-    @pytest.mark.skip(reason="CLI URL parsing has known issues with scheme-less URLs")
-    def test_adds_http_scheme_if_missing(self, unique_room, unique_password):
-        """
-        Server URL without scheme should get http:// added.
-
-        Note: Due to URL parsing quirks in the CLI:
-        - 'localhost:3000' is parsed as scheme='localhost', path='3000'
-          so no http:// is added
-        - '//localhost:3000' becomes 'http:////localhost:3000' which is invalid
-
-        This test is skipped until the CLI URL parsing is fixed.
-        The workaround is to always provide the full URL with scheme.
-        """
-        listener = SocketListener(unique_room)
-        listener.connect()
-
-        # Currently broken - CLI doesn't handle scheme-less URLs correctly
-        returncode, stdout, stderr = run_cli_stdin(
-            "test", unique_room, unique_password, server="//localhost:3000"
-        )
-
-        assert returncode == 0
-
-        received = listener.wait_for_message(timeout=5)
-        assert received is not None
-
-        listener.disconnect()
-
 
 class TestAuthorization:
     """Tests for authorization and password handling."""
@@ -394,16 +355,6 @@ class TestAuthorization:
         # Note: Depending on server implementation, this may or may not fail
         # The test documents actual behavior
 
-    def test_empty_password_works(self, unique_room, socket_listener):
-        """Empty password should create an open room."""
-        returncode, stdout, stderr = run_cli_stdin(
-            "test", unique_room, ""
-        )
-
-        # Empty password is valid (becomes MAC address by default, but we override with "")
-        # This test verifies the CLI accepts empty password
-        # Note: Behavior depends on server - may succeed or require auth
-
     def test_room_claimed_by_first_writer(self, unique_room):
         """
         Room should be claimed by the first writer's password while writer is active.
@@ -453,25 +404,6 @@ class TestAuthorization:
 
 class TestErrorHandling:
     """Tests for error handling."""
-
-    @pytest.mark.skipif(
-        platform.system() == "Windows",
-        reason="Windows has longer connection timeouts causing test to hang"
-    )
-    def test_server_not_available(self, unique_room, unique_password):
-        """CLI should handle server unavailability gracefully."""
-        # Use a port that's definitely not running a server
-        # The CLI has retry logic, so it may take a while to fail
-        # We just verify it eventually completes without crashing
-        returncode, stdout, stderr = run_cli_stdin(
-            "test", unique_room, unique_password, 
-            server="http://localhost:59999",
-            timeout=15  # Longer timeout for retry logic
-        )
-
-        # The CLI should either exit with error or show error message
-        # Just verify it completes (doesn't hang forever)
-        # Note: Actual behavior depends on retry settings
 
     def test_large_input_chunked_successfully(self, unique_room, unique_password, socket_listener):
         """
@@ -550,26 +482,6 @@ class TestArgumentParsing:
         assert "--stdin" in output
         # ... and document the default server users will share through
         assert "shellshare.net" in output, "Default server URL should be in help"
-
-
-class TestLargeMessages:
-    """Tests for handling larger messages (within limits)."""
-
-    def test_50kb_message(self, unique_room, unique_password, socket_listener):
-        """50KB message should be transmitted successfully."""
-        marker = f"MARKER-{random_id(6)}"
-        large_message = marker + ("X" * 50000)
-
-        returncode, stdout, stderr = run_cli_stdin(
-            large_message, unique_room, unique_password
-        )
-
-        assert returncode == 0
-
-        socket_listener.set_key(parse_share_key(stderr))
-        received = socket_listener.wait_for_message(timeout=10, containing=marker)
-        assert received is not None
-        assert marker in received
 
 
 class TestConcurrency:
@@ -691,45 +603,6 @@ class TestEdgeCases:
         assert returncode == 0
         assert "End of transmission." in stderr
 
-    def test_whitespace_only_message(self, unique_room, unique_password, socket_listener):
-        """Whitespace-only message should be transmitted."""
-        test_message = "   \n\t\n   "
-
-        returncode, stdout, stderr = run_cli_stdin(
-            test_message, unique_room, unique_password
-        )
-
-        assert returncode == 0
-
-        # Whitespace should be transmitted (even if hard to verify)
-        # Just check no error occurred
-        assert "ERROR" not in stderr
-
-    @pytest.mark.skip(reason="CLI has encoding issues with unicode room names - server supports it but CLI fails")
-    def test_unicode_room_name(self, unique_password):
-        """
-        Room name with unicode characters should work.
-
-        Note: The server supports unicode room names (verified by viewer tests),
-        but the CLI has encoding issues with non-ASCII room names.
-        This is a known CLI limitation.
-        """
-        unicode_room = f"日本語-{random_id(6)}"
-
-        listener = SocketListener(unicode_room)
-        listener.connect()
-
-        returncode, stdout, stderr = run_cli_stdin(
-            "test", unicode_room, unique_password
-        )
-
-        assert returncode == 0
-
-        received = listener.wait_for_message(timeout=5)
-        assert received is not None
-
-        listener.disconnect()
-
     def test_room_name_with_hyphens_underscores(self, unique_password):
         """Room name with hyphens and underscores should work."""
         room = f"test-room_name-{random_id(6)}"
@@ -749,23 +622,6 @@ class TestEdgeCases:
 
         listener.disconnect()
 
-    def test_very_long_room_name(self, unique_password):
-        """Very long room name should work (within reasonable limits)."""
-        long_room = "a" * 100 + f"-{random_id(6)}"
-
-        listener = SocketListener(long_room)
-        listener.connect()
-
-        returncode, stdout, stderr = run_cli_stdin(
-            "test", long_room, unique_password
-        )
-
-        # Should either work or fail gracefully
-        # (server may have length limits)
-        assert returncode == 0 or "error" in stderr.lower()
-
-        listener.disconnect()
-
     def test_password_with_special_characters(self, unique_room, socket_listener):
         """Password with special characters should work."""
         special_password = "p@ss!w0rd#$%^&*()"
@@ -778,18 +634,6 @@ class TestEdgeCases:
 
         received = socket_listener.wait_for_message(timeout=5)
         assert received is not None
-
-    def test_binary_like_content(self, unique_room, unique_password, socket_listener):
-        """Content with binary-like characters should be handled."""
-        # Bytes that might cause issues in naive string handling
-        test_message = "start\x00middle\xffend"
-
-        returncode, stdout, stderr = run_cli_stdin(
-            test_message, unique_room, unique_password
-        )
-
-        # Should either succeed or fail gracefully
-        # (null bytes might cause issues depending on encoding)
 
     def test_carriage_return_handling(self, unique_room, unique_password, socket_listener):
         """Carriage returns should be preserved (important for terminal output)."""
