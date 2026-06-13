@@ -329,6 +329,15 @@ header {
   }
 }
 
+/* Already landscape: the preview fits the whole grid on screen (viewer
+   script) and the "rotate to landscape" hint no longer applies, so drop
+   it and leave just the tap-to-watch label. */
+@media (pointer: coarse) and (orientation: landscape) {
+  #immersive-overlay .io-sub {
+    display: none;
+  }
+}
+
 /* A blocked encrypted broadcast shows its explanatory notice instead;
    don't cover it with the tap-to-watch prompt. */
 #terminal.crypto-blocked #immersive-overlay {
