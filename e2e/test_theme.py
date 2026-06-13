@@ -29,8 +29,14 @@ SOLARIZED_LIGHT_BG = "rgb(253, 246, 227)"
 TANGO_BG = "rgb(18, 19, 20)"  # the default theme
 
 
-def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, timeout=10):
-    """Run the CLI in stdin mode. Returns (returncode, stdout, stderr)."""
+def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, timeout=30):
+    """Run the CLI in stdin mode. Returns (returncode, stdout, stderr).
+
+    `timeout` is wall-clock and generous: a full CLI session is normally
+    sub-second, but under `-n 10` on an oversubscribed CI runner the CLI's
+    bounded shutdown sleeps and thread scheduling stretch to several
+    seconds. The slack absorbs that without masking a genuine hang.
+    """
     args = CLI_COMMAND + ["--stdin", "-s", server, "-r", room, "-W", password]
     if extra_args:
         args.extend(extra_args)

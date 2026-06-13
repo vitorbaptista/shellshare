@@ -29,11 +29,19 @@ from conftest import (
 )
 
 
-def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, timeout=10):
+def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, timeout=30):
     """
     Run the CLI in stdin mode with the given message.
 
     Returns (returncode, stdout, stderr)
+
+    `timeout` is wall-clock and generous on purpose: a full CLI session
+    (connect, broadcast, drain, shut down) is normally well under a
+    second, but under `-n 10` on an oversubscribed CI runner the CLI's
+    bounded shutdown sleeps and thread scheduling stretch out - measured
+    serial worst cases reached several seconds. The slack absorbs that
+    scheduling pressure without masking a genuine hang (which never
+    returns at all).
     """
     args = CLI_COMMAND + ["--stdin", "-s", server, "-r", room, "-W", password]
     if extra_args:
