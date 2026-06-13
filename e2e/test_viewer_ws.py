@@ -383,7 +383,8 @@ class TestViewerMessageAccumulation:
     """Tests for message accumulation and retrieval."""
 
     def test_messages_accumulate_in_order(self, unique_room, unique_password):
-        """Multiple messages accumulate and are delivered concatenated."""
+        """Multiple messages accumulate and are delivered concatenated in
+        broadcast order."""
         wait_for_server(SERVER_URL)
 
         messages_sent = ["Line1\n", "Line2\n", "Line3\n"]
@@ -395,34 +396,12 @@ class TestViewerMessageAccumulation:
         try:
             full_content = listener.wait_for_message(timeout=15)
             assert full_content is not None, "No messages received"
-            for msg in messages_sent:
-                assert msg.strip() in full_content, \
+            indices = [full_content.find(msg.strip()) for msg in messages_sent]
+            for msg, idx in zip(messages_sent, indices):
+                assert idx != -1, \
                     f"Expected '{msg.strip()}' in accumulated content"
-        finally:
-            listener.disconnect()
-
-    def test_accumulated_messages_format(self, unique_room, unique_password):
-        """Accumulated messages are concatenated in broadcast order."""
-        wait_for_server(SERVER_URL)
-
-        msg1, msg2, msg3 = "FIRST", "SECOND", "THIRD"
-        broadcast(unique_room, msg1, unique_password)
-        broadcast(unique_room, msg2, unique_password)
-        broadcast(unique_room, msg3, unique_password)
-
-        listener = make_listener(unique_room)
-        try:
-            decoded = listener.wait_for_message(timeout=15)
-            assert decoded is not None, "Message not received"
-
-            idx1 = decoded.find(msg1)
-            idx2 = decoded.find(msg2)
-            idx3 = decoded.find(msg3)
-            assert idx1 != -1, f"'{msg1}' not found in '{decoded}'"
-            assert idx2 != -1, f"'{msg2}' not found in '{decoded}'"
-            assert idx3 != -1, f"'{msg3}' not found in '{decoded}'"
-            assert idx1 < idx2 < idx3, \
-                f"Messages not in order: {idx1}, {idx2}, {idx3}"
+            assert indices == sorted(indices), \
+                f"Messages not in broadcast order: {indices}"
         finally:
             listener.disconnect()
 
@@ -632,28 +611,12 @@ class TestViewerEventOrder:
         assert "size" in kinds, f"Should receive size, got {kinds}"
         assert "binary" in kinds, f"Should receive history, got {kinds}"
         assert "usersCount" in kinds, f"Should receive usersCount, got {kinds}"
+        # size must precede history so the viewer can size the terminal
+        # before replaying content; usersCount always terminates.
+        assert kinds.index("size") < kinds.index("binary"), \
+            f"size should come before history, got order: {kinds}"
         assert kinds[-1] == "usersCount", \
             f"usersCount terminates the snapshot, got order {kinds}"
-
-    def test_size_before_history(self, unique_room, unique_password):
-        """The size frame precedes the history frame, so the viewer can
-        size the terminal before replaying content."""
-        wait_for_server(SERVER_URL)
-
-        status = broadcast(unique_room, "Content", unique_password,
-                           size={"rows": 30, "cols": 100})
-        assert status == 200, f"Broadcast failed: {status}"
-
-        ws = viewer_connect(unique_room)
-        try:
-            events = collect_snapshot(ws)
-        finally:
-            ws.close()
-
-        kinds = [k for k, _ in events]
-        assert "size" in kinds and "binary" in kinds, f"Missing events: {kinds}"
-        assert kinds.index("size") < kinds.index("binary"), \
-            f"Size should come before history, got order: {kinds}"
 
     def test_size_matches_last_broadcast(self, unique_room, unique_password):
         """The snapshot size is the LAST broadcast size."""
@@ -675,24 +638,6 @@ class TestViewerEventOrder:
 
 class TestViewerEmptyRoom:
     """Tests for connecting to empty rooms."""
-
-    def test_empty_room_no_history_no_size(self, unique_room):
-        """An empty room's snapshot has usersCount but no history and no
-        size frame."""
-        wait_for_server(SERVER_URL)
-
-        ws = viewer_connect(unique_room)
-        try:
-            events = collect_snapshot(ws)
-        finally:
-            ws.close()
-
-        kinds = [k for k, _ in events]
-        assert "usersCount" in kinds, "Should receive usersCount"
-        assert "binary" not in kinds, \
-            f"Should NOT receive history for empty room, got {events}"
-        assert "size" not in kinds, \
-            f"Should NOT receive size for empty room, got {events}"
 
     def test_connect_after_delete_no_old_messages(self, unique_room, unique_password):
         """After DELETE, a fresh connection gets no old history."""
@@ -855,21 +800,6 @@ class TestViewerLateJoinerHistory:
     so they don't see a blank screen.
     """
 
-    def test_late_joiner_receives_single_message_history(self, unique_room, unique_password):
-        """A late joiner receives a message broadcast before they connected."""
-        wait_for_server(SERVER_URL)
-
-        test_message = f"HistorySingle-{random_id()}"
-        status = broadcast(unique_room, test_message, unique_password)
-        assert status == 200, f"Broadcast failed: {status}"
-
-        listener = make_listener(unique_room)
-        try:
-            received = listener.wait_for_message(timeout=15, containing=test_message)
-            assert received is not None, "Late joiner did not receive history"
-        finally:
-            listener.disconnect()
-
     def test_late_joiner_receives_multiple_messages_in_order(self, unique_room, unique_password):
         """A late joiner receives accumulated messages in broadcast order."""
         wait_for_server(SERVER_URL)
@@ -924,46 +854,6 @@ class TestViewerLateJoinerHistory:
             live_viewer.disconnect()
             if late_joiner is not None:
                 late_joiner.disconnect()
-
-    def test_late_joiner_receives_correct_terminal_size(self, unique_room, unique_password):
-        """A late joiner receives the room's terminal size."""
-        wait_for_server(SERVER_URL)
-
-        expected_size = {"rows": 48, "cols": 160}
-        status = broadcast(unique_room, "Size test", unique_password, size=expected_size)
-        assert status == 200, f"Broadcast failed: {status}"
-
-        listener = make_listener(unique_room)
-        try:
-            assert listener.wait_for_size(timeout=15), \
-                "Late joiner did not receive size"
-            assert listener.get_last_size() == expected_size, \
-                f"Expected {expected_size}, got {listener.get_last_size()}"
-        finally:
-            listener.disconnect()
-
-    def test_late_joiner_size_before_message(self, unique_room, unique_password):
-        """A late joiner receives size BEFORE the history frame, so the
-        terminal can be sized before content renders."""
-        wait_for_server(SERVER_URL)
-
-        expected_size = {"rows": 30, "cols": 100}
-        status = broadcast(unique_room, "Content", unique_password, size=expected_size)
-        assert status == 200, f"Broadcast failed: {status}"
-
-        ws = viewer_connect(unique_room)
-        try:
-            events = collect_snapshot(ws)
-        finally:
-            ws.close()
-
-        kinds = [k for k, _ in events]
-        assert "size" in kinds, f"Should receive size, got {kinds}"
-        assert "binary" in kinds, f"Should receive history, got {kinds}"
-        assert kinds.index("size") < kinds.index("binary"), \
-            f"Size should come before message, got order: {kinds}"
-        sizes = [p for k, p in events if k == "size"]
-        assert sizes[0] == expected_size
 
 
 if __name__ == "__main__":

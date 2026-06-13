@@ -11,6 +11,7 @@ import re
 import subprocess
 import time
 
+import pytest
 from playwright.sync_api import sync_playwright
 
 from conftest import (
@@ -137,7 +138,13 @@ class TestThemeRendering:
     predates themes.
     """
 
-    def test_theme_colors_render_in_browser(self, dedicated_server):
+    @pytest.mark.parametrize("theme_args, expected_bg", [
+        (["--theme", "dracula"], DRACULA_BG),
+        ([], TANGO_BG),
+    ], ids=["dracula", "default-tango"])
+    def test_theme_colors_render_in_browser(self, dedicated_server, theme_args, expected_bg):
+        """A broadcast renders in the chosen theme's colors - an explicit
+        --theme and the default (tango) alike."""
         server = dedicated_server()
         room_id = f"theme-{random_id()}"
         password = f"secret-{random_id()}"
@@ -145,8 +152,7 @@ class TestThemeRendering:
         proc = subprocess.Popen(
             CLI_COMMAND + [
                 "--stdin", "-s", server.url, "-r", room_id, "-W", password,
-                "--theme", "dracula",
-            ],
+            ] + theme_args,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -171,7 +177,7 @@ class TestThemeRendering:
                 proc.stdin.flush()
 
                 wait_for_terminal_text(page, "themed output")
-                assert terminal_background(page) == DRACULA_BG
+                assert terminal_background(page) == expected_bg
                 browser.close()
         finally:
             proc.stdin.close()
@@ -222,41 +228,3 @@ class TestThemeRendering:
             proc.stdin.close()
             proc.wait(timeout=10)
 
-    def test_tango_colors_without_theme_flag(self, dedicated_server):
-        server = dedicated_server()
-        room_id = f"theme-default-{random_id()}"
-        password = f"secret-{random_id()}"
-
-        proc = subprocess.Popen(
-            CLI_COMMAND + [
-                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            share_url = None
-            for line in proc.stderr:
-                match = SHARE_LINK_RE.search(line)
-                if match:
-                    share_url = match.group(1)
-                    break
-            assert share_url, "No share link in CLI output"
-
-            with sync_playwright() as p:
-                browser = p.chromium.launch()
-                page = browser.new_page()
-                page.goto(share_url)
-                page.wait_for_selector("#terminal", timeout=10000)
-
-                proc.stdin.write("plain output\n")
-                proc.stdin.flush()
-
-                wait_for_terminal_text(page, "plain output")
-                assert terminal_background(page) == TANGO_BG
-                browser.close()
-        finally:
-            proc.stdin.close()
-            proc.wait(timeout=10)

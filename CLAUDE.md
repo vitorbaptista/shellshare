@@ -83,6 +83,27 @@ E2E tests are the single source of truth - there are no Rust unit tests by desig
 
 The suite in `e2e/` uses Python pytest + Playwright and manages its own servers: a shared one started automatically on a free port (pin it with `SHELLSHARE_E2E_PORT` to reuse a pre-started server) plus per-test dedicated servers with custom flags (e.g. short `--room-ttl` for eviction tests). Coverage spans the HTTP API, the viewer WebSocket protocol, full CLI-to-browser integration, real-TTY CLI sessions (`test_cli_tty.py`: resize/SIGWINCH, Ctrl+C handling, cleanup on exit), room TTL eviction, and binary downloads.
 
+### What to test (and what not to)
+
+The suite is the whole safety net, but every test also costs CI minutes and maintenance. Keep it lean: one strong test per behavior beats five overlapping ones. Before adding a test, ask whether it guards a real Shellshare failure mode that nothing else already covers.
+
+**Worth a test:**
+- **Happy paths** for every public surface: a CLI session broadcasts and a viewer sees it; the home/viewer pages render; binaries download.
+- **Lockstep contracts** that span files and break silently if drifted - the wire protocol (`protocol.rs` ↔ `templates/room.html` ↔ `conftest.py`), the encryption record format, the `size` control message (theme, `encrypted` flag, cols/rows omission), and the `--json` event contract (`sharing`/`end`, mirrored in `AGENTS.md` + `public/llms.txt`). Test each contract once, at the layer that owns it.
+- **Auth and isolation**: password claiming/rejection, per-room message isolation, room TTL eviction.
+- **Reliability paths**: reconnect/replay, late-joiner history, user-count convergence, ordering.
+- **Platform-specific code** only reachable one way - e.g. real-TTY signal handling in `test_cli_tty.py` (a pipe can't deliver SIGWINCH/SIGINT).
+- **The same behavior at genuinely different layers** when each layer can fail independently (e.g. UTF-8 survival across raw history, viewer WS, frame-split, and xterm render are NOT redundant).
+
+**Not worth a test - don't add these, and prefer deleting them:**
+- **Skipped tests** (`@pytest.mark.skip`) for known unfixed bugs - they provide zero coverage and only noise. Delete, or unskip with a fix.
+- **Assertion-less or tautological tests** - no `assert`, or assertions like `rc == 0 or "error" in stderr` that accept every outcome. They guard nothing.
+- **Trivial substring/status checks** already implied by a stronger test (e.g. "page contains the word X" when another test already asserts the page renders).
+- **Framework-level behavior**, not ours: standard 404 bodies, unsupported-method status codes, query-string/fragment handling, baseline HTTP semantics.
+- **Redundant duplicates within a file** - if two tests exercise the same path with cosmetic differences, merge into one (parametrize when the only difference is input/expected value).
+
+When trimming, fold any unique assertion from the test being removed into the one being kept, then verify the keeper still covers it.
+
 # Additional instructions
 
 - When adding new dependency, always use `cargo add`
