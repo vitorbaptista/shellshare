@@ -69,7 +69,7 @@ class TestPageCaching:
         link = headers.get('Link', '')
         for asset in ['xterm.js', 'xterm-addon-webgl.js',
                       'xterm-addon-unicode11.js',
-                      'Inconsolata-latin.woff2']:
+                      'Inconsolata.woff2']:
             assert asset in link, f"Link preload header must announce {asset}"
             assert re.search(rf'{re.escape(asset)}\?v=[0-9a-f]+', body), \
                 f"{asset} must be referenced with a content-hash version"
