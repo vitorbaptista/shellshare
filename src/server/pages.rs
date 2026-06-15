@@ -73,10 +73,9 @@ fn room_page() -> &'static Page {
                 ("javascript/vendor/xterm.js", "script"),
                 ("javascript/vendor/xterm-addon-webgl.js", "script"),
                 ("javascript/vendor/xterm-addon-unicode11.js", "script"),
-                // Only the latin subset: it covers nearly every session,
-                // while the other subsets and the (large) Nerd Font
-                // fallback load on demand
-                ("font/Inconsolata-latin.woff2", "font"),
+                // One Inconsolata file (latin + latin-ext + vietnamese);
+                // the (large) Nerd Font fallback still loads on demand
+                ("font/Inconsolata.woff2", "font"),
             ],
         )
     })
