@@ -348,10 +348,17 @@
         // The renderer caches glyphs in a texture atlas, so fonts
         // that load lazily after first paint (the Nerd Font symbols
         // fallback, non-latin Inconsolata subsets) would otherwise
-        // stay rendered as the fallback glyphs they were drawn with
+        // stay rendered as the fallback glyphs they were drawn with.
+        // Clearing the atlas empties the glyph cache, but the WebGL
+        // renderer only re-rasterizes cells it considers dirty - cells
+        // on a settled screen (a static TUI pane) keep pointing at the
+        // now-empty atlas and, at fractional devicePixelRatio, paint as
+        // solid black boxes until something rewrites them. Forcing a
+        // full repaint re-rasterizes every visible cell so none go dark.
         if (document.fonts && document.fonts.addEventListener) {
           document.fonts.addEventListener('loadingdone', function () {
             term.clearTextureAtlas();
+            term.refresh(0, term.rows - 1);
           });
         }
         // For the e2e suite and console debugging: the WebGL renderer
