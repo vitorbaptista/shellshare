@@ -39,6 +39,56 @@
   font-display: swap;
 }
 
+/* Page chrome follows the broadcast terminal's theme so a dark terminal
+   never sits on a blinding white page (and a light theme like
+   solarized-light gets a light page). The viewer script derives these
+   custom properties from the theme's own background/foreground and sets
+   them on <html>; the fallbacks here are the chrome the script computes
+   for the default theme (tango), so the page already looks right before
+   the first size message lands - no flash, even for the common case of a
+   broadcast that took the default theme. The theme can't be known server
+   side: this page is rendered once and shared across every room, and the
+   theme only arrives later over the WebSocket.
+   Scoped to the room page (this stylesheet) - the home page is untouched. */
+html {
+  background-color: var(--page-bg, #222324);
+}
+
+body {
+  background-color: var(--page-bg, #222324);
+  color: var(--page-fg, #cccccc);
+}
+
+/* Animate only live theme changes (the broadcaster re-themes mid-session),
+   not the first paint - the initial apply must land instantly so there's
+   no fade from the pre-size default into the real theme. */
+body.theme-transitions {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* The fallbacks below are tango's accent (bright blue) and muted tone,
+   matching the script's output for the default theme - see above. */
+a,
+a:visited {
+  color: var(--page-accent, #729fcf);
+}
+
+a:hover {
+  color: var(--page-muted, #787979);
+}
+
+.title a,
+.title a:hover,
+.title a:visited {
+  color: var(--page-fg, #cccccc);
+}
+
+footer,
+footer a,
+footer a:visited {
+  color: var(--page-muted, #787979);
+}
+
 /* div.online, not .online: the broadcast-status span also carries an
    `online` class when the broadcaster is live, and must not match */
 div.online {
