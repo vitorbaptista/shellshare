@@ -10,6 +10,7 @@ colors actually rendered in a browser.
 import re
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -79,6 +80,24 @@ def perceived_luminance(rgb):
     """sRGB perceived brightness in 0..1 - mirrors the viewer script."""
     r, g, b = rgb
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+
+
+ROOM_CSS = Path(__file__).resolve().parent.parent / "public" / "stylesheet" / "room.css"
+
+
+def css_page_fallbacks():
+    """The fallback hex literals for the --page-* custom properties in
+    room.css (e.g. `var(--page-bg, #222324)` -> {'--page-bg': '#222324'}).
+    These paint the page before the viewer script applies the theme."""
+    # Explicit utf-8: room.css has non-ASCII bytes, and Windows would
+    # otherwise default to cp1252 and choke decoding them
+    text = ROOM_CSS.read_text(encoding="utf-8")
+    found = re.findall(r"var\((--page-[a-z]+),\s*(#[0-9a-fA-F]{6})\)", text)
+    # First fallback wins (page-bg appears on both html and body, identical)
+    fallbacks = {}
+    for prop, value in found:
+        fallbacks.setdefault(prop, value.lower())
+    return fallbacks
 
 
 class TestThemeWireFormat:
@@ -258,6 +277,66 @@ class TestThemeRendering:
         finally:
             proc.stdin.close()
             proc.wait(timeout=10)
+
+    def test_default_theme_css_fallback_matches_script(self, dedicated_server):
+        """Lockstep: the pre-JS CSS fallbacks (room.css) must equal the
+        chrome the viewer script computes for the DEFAULT theme, so the
+        default-theme page shows no flash before JS runs. This drifts if
+        the default theme, its colors in themes.json, the script's
+        derivation, or the fallbacks themselves change out of sync - and
+        the default is the common case (most broadcasts take no --theme),
+        which can't be resolved server-side (the page is shared by every
+        room). Uses the real browser script, not a reimplementation."""
+        server = dedicated_server()
+        room_id = f"default-chrome-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        # No --theme: exercise the built-in default the fallbacks target
+        proc = subprocess.Popen(
+            CLI_COMMAND + [
+                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            share_url = None
+            for line in proc.stderr:
+                match = SHARE_LINK_RE.search(line)
+                if match:
+                    share_url = match.group(1)
+                    break
+            assert share_url, "No share link in CLI output"
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(share_url)
+                page.wait_for_selector("#terminal", timeout=10000)
+
+                proc.stdin.write("default chrome\n")
+                proc.stdin.flush()
+
+                wait_for_terminal_text(page, "default chrome")
+                computed = page.evaluate(
+                    "() => Object.fromEntries("
+                    "  ['--page-bg', '--page-fg', '--page-muted', '--page-accent']"
+                    "  .map(p => [p, document.documentElement.style"
+                    "    .getPropertyValue(p).trim().toLowerCase()]))"
+                )
+                browser.close()
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=10)
+
+        fallbacks = css_page_fallbacks()
+        assert computed == fallbacks, (
+            "room.css --page-* fallbacks must match the script's default-theme "
+            f"chrome (else the default page flashes before JS): script computed "
+            f"{computed}, room.css falls back to {fallbacks}"
+        )
 
     def test_late_joiner_sees_theme(self, dedicated_server):
         """The theme is replayed with the stored size, so a viewer who
