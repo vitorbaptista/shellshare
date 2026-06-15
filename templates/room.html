@@ -560,7 +560,91 @@
         // The container peeks out around the canvas (padding, short
         // pages); keep it matched to the terminal background
         terminalContainer.style.backgroundColor = colors.background;
+        applyPageChrome(colors, entry);
       }
+
+      // Drive the page chrome (body/header/footer/links) from the
+      // terminal theme so a dark terminal never blinds the viewer on a
+      // white page, and a light theme gets a light page. The values ride
+      // as CSS custom properties on <html> (see room.css); deciding
+      // dark-vs-light from the background's luminance only picks the link
+      // accent (a palette blue) and keeps text legible against it.
+      function parseHex(hex) {
+        if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) {
+          return null;
+        }
+        return [
+          parseInt(hex.substr(1, 2), 16),
+          parseInt(hex.substr(3, 2), 16),
+          parseInt(hex.substr(5, 2), 16),
+        ];
+      }
+
+      function toHex(rgb) {
+        return '#' + rgb.map(function (c) {
+          var h = Math.round(Math.max(0, Math.min(255, c))).toString(16);
+          return h.length === 1 ? '0' + h : h;
+        }).join('');
+      }
+
+      // Perceived brightness (0-1) of an sRGB color
+      function luminance(rgb) {
+        return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+      }
+
+      // Blend two colors; t=0 returns a, t=1 returns b
+      function mix(a, b, t) {
+        return [
+          a[0] + (b[0] - a[0]) * t,
+          a[1] + (b[1] - a[1]) * t,
+          a[2] + (b[2] - a[2]) * t,
+        ];
+      }
+
+      function applyPageChrome(colors, entry) {
+        // No real theme yet (pre-size default, or an unknown name): leave
+        // the page at the CSS default (dark) rather than forcing it black,
+        // so there's no flash before the broadcaster's theme lands.
+        if (!entry) {
+          return;
+        }
+        var bg = parseHex(colors.background) || [18, 19, 20];
+        var fg = parseHex(colors.foreground) || [204, 204, 204];
+        var lum = luminance(bg);
+        var dark = lum < 0.5;
+        // Offset the page background from the terminal so the terminal
+        // reads as a distinct surface instead of bleeding into the page.
+        // Normally the page goes a bit darker (the terminal "floats"
+        // above it); a near-black terminal can't go darker, so lift the
+        // page instead. toHex clamps, so the shift never wraps.
+        var SHIFT = 16;
+        var dir = lum < 0.12 ? 1 : -1;
+        var pageBg = toHex([
+          bg[0] + dir * SHIFT, bg[1] + dir * SHIFT, bg[2] + dir * SHIFT,
+        ]);
+        // Muted text (footer, link hover): foreground faded toward the
+        // background, staying readable on either tone
+        var muted = toHex(mix(fg, bg, 0.45));
+        // Link accent: the theme's own blue (bright blue on dark themes
+        // for contrast, plain blue on light), falling back to foreground
+        var palette = entry.palette;
+        var accent = (palette && palette[dark ? 12 : 4]) || colors.foreground;
+        var root = document.documentElement.style;
+        root.setProperty('--page-bg', pageBg);
+        root.setProperty('--page-fg', colors.foreground);
+        root.setProperty('--page-muted', muted);
+        root.setProperty('--page-accent', accent);
+        // The first apply lands instantly (no fade from the pre-size
+        // default); enable the smooth transition only afterwards, so a
+        // live re-theme animates. Next frame, so this apply isn't caught.
+        if (!pageChromeApplied) {
+          pageChromeApplied = true;
+          requestAnimationFrame(function () {
+            document.body.classList.add('theme-transitions');
+          });
+        }
+      }
+      var pageChromeApplied = false;
 
       // Fullscreen: the `fullscreen` class on #terminal drives all
       // layout, so browsers without requestFullscreen on divs (iOS

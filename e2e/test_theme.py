@@ -60,6 +60,27 @@ def terminal_background(page):
     )
 
 
+def page_background(page):
+    """The page body's computed background color - the chrome around the
+    terminal, which the viewer tints to match the theme."""
+    return page.evaluate(
+        "getComputedStyle(document.body).backgroundColor"
+    )
+
+
+def parse_rgb(value):
+    """('rgb(r, g, b)' as served by getComputedStyle) -> (r, g, b)."""
+    match = re.match(r"rgb\((\d+),\s*(\d+),\s*(\d+)\)", value)
+    assert match, f"unexpected color value: {value!r}"
+    return tuple(int(c) for c in match.groups())
+
+
+def perceived_luminance(rgb):
+    """sRGB perceived brightness in 0..1 - mirrors the viewer script."""
+    r, g, b = rgb
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+
+
 class TestThemeWireFormat:
     """The theme must ride inside the size event, verbatim."""
 
@@ -178,6 +199,61 @@ class TestThemeRendering:
 
                 wait_for_terminal_text(page, "themed output")
                 assert terminal_background(page) == expected_bg
+                browser.close()
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=10)
+
+    @pytest.mark.parametrize("theme_args, light", [
+        (["--theme", "solarized-light"], True),
+        ([], False),  # the default theme (tango) is dark
+    ], ids=["light", "default-dark"])
+    def test_page_chrome_follows_theme(self, dedicated_server, theme_args, light):
+        """The page chrome (body background) tracks the theme so a light
+        terminal doesn't sit on a dark page or a dark one on white, yet is
+        offset from the terminal so the terminal still reads as a distinct
+        surface. Driven client-side from the theme in the size message."""
+        server = dedicated_server()
+        room_id = f"chrome-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        proc = subprocess.Popen(
+            CLI_COMMAND + [
+                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+            ] + theme_args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            share_url = None
+            for line in proc.stderr:
+                match = SHARE_LINK_RE.search(line)
+                if match:
+                    share_url = match.group(1)
+                    break
+            assert share_url, "No share link in CLI output"
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(share_url)
+                page.wait_for_selector("#terminal", timeout=10000)
+
+                proc.stdin.write("chrome output\n")
+                proc.stdin.flush()
+
+                wait_for_terminal_text(page, "chrome output")
+                page_bg = parse_rgb(page_background(page))
+                term_bg = parse_rgb(terminal_background(page))
+                # Tracks the theme's tone...
+                if light:
+                    assert perceived_luminance(page_bg) > 0.6
+                else:
+                    assert perceived_luminance(page_bg) < 0.4
+                # ...but is offset so the terminal isn't lost in the page
+                assert page_bg != term_bg
                 browser.close()
         finally:
             proc.stdin.close()
