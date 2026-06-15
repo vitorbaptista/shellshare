@@ -78,6 +78,30 @@
       var WS_URL =
         (window.location.protocol === 'https:' ? 'wss://' : 'ws://') +
         window.location.host + '/ws/v' + room;
+      // A user-chosen room name goes in the tab title, but an
+      // auto-generated id is noise. We can't see the broadcaster's CLI,
+      // so we guess from the name's shape: generate_room_id (src/cli/
+      // mod.rs) emits exactly 18 chars from [A-Za-z0-9], and random over
+      // 62 symbols it virtually always mixes upper, lower, and digits -
+      // a human "standup" or "team-demo" does not. Mistitling a rare
+      // edge-case tab is harmless, so this cheap heuristic is enough.
+      (function setTitleFromRoom() {
+        var match = /\/r\/([^/]+)\/?$/.exec(window.location.pathname);
+        if (!match) {
+          return;
+        }
+        var name;
+        try {
+          name = decodeURIComponent(match[1]);
+        } catch (e) {
+          name = match[1];
+        }
+        var looksGenerated = /^[A-Za-z0-9]{18}$/.test(name) &&
+          /[a-z]/.test(name) && /[A-Z]/.test(name) && /[0-9]/.test(name);
+        if (!looksGenerated) {
+          document.title = name + ' - shellshare';
+        }
+      })();
       // Broadcasts are end-to-end encrypted by default: the key rides
       // in the URL fragment, which browsers never send to the server,
       // and each message is a sequence of whole records -
