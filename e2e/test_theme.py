@@ -89,7 +89,9 @@ def css_page_fallbacks():
     """The fallback hex literals for the --page-* custom properties in
     room.css (e.g. `var(--page-bg, #222324)` -> {'--page-bg': '#222324'}).
     These paint the page before the viewer script applies the theme."""
-    text = ROOM_CSS.read_text()
+    # Explicit utf-8: room.css has non-ASCII bytes, and Windows would
+    # otherwise default to cp1252 and choke decoding them
+    text = ROOM_CSS.read_text(encoding="utf-8")
     found = re.findall(r"var\((--page-[a-z]+),\s*(#[0-9a-fA-F]{6})\)", text)
     # First fallback wins (page-bg appears on both html and body, identical)
     fallbacks = {}
