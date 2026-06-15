@@ -3,10 +3,9 @@ E2E tests for the room name in the viewer page title.
 
 The viewer puts a user-chosen room name in the tab title, but leaves an
 auto-generated id out (it's noise). It can't see the broadcaster's CLI,
-so it guesses from the name's shape: an auto id is exactly 18 chars from
-[A-Za-z0-9] mixing upper, lower, and digits (see generate_room_id in
-src/cli/mod.rs). The title is set from the URL alone, so these load the
-viewer page directly - no broadcaster required.
+so it guesses from the name's length: an auto id is exactly 18 chars
+(see generate_room_id in src/cli/mod.rs). The title is set from the URL
+alone, so these load the viewer page directly - no broadcaster required.
 """
 
 import re
@@ -28,11 +27,11 @@ SHARE_LINK_RE = re.compile(r"Sharing terminal in (\S+)")
         ("standup", "standup - shellshare"),
         ("team-demo", "team-demo - shellshare"),
         ("Q3Review", "Q3Review - shellshare"),
-        # Auto-generated shape (18 chars, mixed upper/lower/digit): hidden.
+        # Auto-generated length (exactly 18 chars): hidden.
         ("aB3dEf6hIj9kLm2nOp", DEFAULT_TITLE),
-        # 18 chars but no digit / all one case: not the generated shape,
-        # so treated as a custom name and shown.
-        ("abcdefghijklmnopqr", "abcdefghijklmnopqr - shellshare"),
+        ("abcdefghijklmnopqr", DEFAULT_TITLE),
+        # 17 chars: just shy of the generated length, so shown.
+        ("abcdefghijklmnopq", "abcdefghijklmnopq - shellshare"),
     ],
 )
 def test_room_name_in_page_title(room, expected_title):
@@ -46,11 +45,11 @@ def test_room_name_in_page_title(room, expected_title):
 
 
 def test_real_auto_generated_room_keeps_default_title(unique_password):
-    """Lockstep guard: the viewer's heuristic encodes the shape of
+    """Lockstep guard: the viewer's heuristic encodes the length of
     generate_room_id (src/cli/mod.rs). Run the real CLI so an actual
     auto-generated id - not a hand-written look-alike - lands in the URL,
-    and assert the title stays default. If the generator drifts out of
-    the heuristic's recognition, this fails instead of silently
+    and assert the title stays default. If the generator's length drifts
+    out of the heuristic's recognition, this fails instead of silently
     mistitling every shared room."""
     # The title comes from the URL alone, so the broadcast need not stay
     # live; just capture the printed link and visit it.
