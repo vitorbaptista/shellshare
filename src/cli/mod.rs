@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::protocol::TermSize;
+use qrcode::{render::unicode, QrCode};
 use rand::Rng;
 
 /// Get the current terminal size using ioctl (TIOCGWINSZ) via `term_size`.
@@ -126,6 +127,28 @@ fn emit_json(event: &serde_json::Value) {
     let _ = io::stdout().flush();
 }
 
+/// Render a compact terminal QR code for the share URL. Failure should
+/// never prevent a broadcast; the plain link remains the source of truth.
+fn render_qr_code(url: &str) -> Option<String> {
+    QrCode::new(url.as_bytes())
+        .ok()
+        .map(|code| code.render::<unicode::Dense1x2>().build())
+}
+
+fn emit_human_sharing_message<W: Write>(writer: &mut W, share_url: &str, show_qr: bool) {
+    let _ = writeln!(writer, "Sharing terminal in {share_url}");
+
+    if show_qr {
+        if let Some(qr) = render_qr_code(share_url) {
+            let _ = writeln!(writer);
+            let _ = writeln!(writer, "Scan this QR code with your phone:");
+            let _ = writeln!(writer, "{qr}");
+        }
+    }
+
+    let _ = writer.flush();
+}
+
 /// Run the shellshare client. Returns the exit code to propagate: the
 /// child command's status for `exec`, otherwise 0.
 pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
@@ -196,7 +219,9 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     let exit_code = if args.stdin {
         // Stdin mode - prose goes to stderr (stdout may be piped onward)
         if !args.json {
-            eprintln!("Sharing terminal in {share_url}");
+            let mut stderr = io::stderr();
+            let show_qr = stderr.is_terminal();
+            emit_human_sharing_message(&mut stderr, &share_url, show_qr);
         }
 
         // Read from stdin and stream to server
@@ -217,7 +242,9 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 println!("You can resize it anytime.");
             }
 
-            println!("Sharing terminal in {share_url}");
+            let mut stdout = io::stdout();
+            let show_qr = stdout.is_terminal();
+            emit_human_sharing_message(&mut stdout, &share_url, show_qr);
         }
 
         // Run script mode with PTY
