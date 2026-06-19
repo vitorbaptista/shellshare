@@ -76,6 +76,13 @@ embedded server on localhost (nothing leaves the machine); add `--tunnel` to
 get a public `https://*.trycloudflare.com` link without using shellshare.net
 (requires `cloudflared` installed).
 
+**Recover the link from inside a session** — `shellshare status` re-prints
+the current broadcast's link (and QR code). With `--json` it prints a single
+object `{"url":"...","room":"..."}`; outside a live session it prints
+`ERROR: ...` to stderr and exits non-zero. It reads the link from the
+`SHELLSHARE_URL` environment variable the broadcaster exports into the shell
+it spawns, so it only works from within that shell.
+
 ## Behavior worth knowing
 
 - One-way only: viewers cannot send input to the terminal.

@@ -37,6 +37,11 @@ your network. The key is derived from your computer and the room name, so
 re-broadcasting to a named room from the same machine reproduces the same
 link, and a link you've already shared keeps working.
 
+Lost the link after it scrolled off screen? From inside the shared shell,
+run `shellshare status` to re-print the link and its QR code. It reads the
+link from the environment of the session you're in, so it only works from
+within a live broadcast — and nothing is written to disk.
+
 ### Scripting & AI agents
 
 shellshare is built to be driven by scripts and AI agents — for example, an
