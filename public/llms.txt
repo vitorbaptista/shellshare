@@ -50,6 +50,11 @@ Recipes:
 - Live-only: broadcasts are not recorded. Rooms are deleted when the
   broadcast ends or after a period of inactivity.
 - Late joiners see recent history, not a blank page.
+- `shellshare status`, run from inside a live session, re-prints that
+  session's link and QR code (read from the `SHELLSHARE_URL` env var the
+  broadcaster exports into the spawned shell; nothing is written to disk).
+  With `--json` it prints `{"url":"...","room":"..."}`; outside a session it
+  errors on stderr and exits non-zero.
 - Network drops are handled: output is buffered and replayed on reconnect.
 - `--theme` sets viewer colors (asciinema themes: dracula, gruvbox-dark,
   monokai, nord, seti, solarized-dark, solarized-light, tango, asciinema).

@@ -261,6 +261,38 @@ class TestTtyBroadcast:
         cli.send("exit\n")
         cli.wait_exit()
 
+    def test_status_reprints_link_and_qr_from_inside_session(
+        self, unique_room, unique_password, tty_cli
+    ):
+        cli = tty_cli(unique_room, unique_password)
+        assert cli.wait_for_screen("Sharing terminal in"), (
+            f"CLI did not start sharing. Screen: {cli.screen!r}"
+        )
+        key = parse_share_key(cli.screen)
+        assert key, f"No share key on CLI screen. Screen: {cli.screen!r}"
+
+        # `shellshare status`, run from inside the shared shell, recovers
+        # the link from the environment the broadcaster exported into the
+        # shell it spawned - nothing was written to disk.
+        cli.send(f"{CLI_PATH} status\n")
+        assert cli.wait_for_screen("Sharing this terminal at"), (
+            f"status did not reprint the link. Screen: {cli.screen!r}"
+        )
+        # A second QR block appears (the first was the startup banner's).
+        assert poll_until(
+            lambda: cli.screen.count("Scan this QR code with your phone:") >= 2,
+            timeout=10,
+        ), f"status did not print a QR code. Screen: {cli.screen!r}"
+        # The recovered link carries the same #fragment key: the exact URL
+        # rode through the environment, so there is no re-derivation that
+        # could silently diverge from the live broadcast.
+        assert cli.screen.count(key) >= 2, (
+            f"status link key did not match the broadcast. Screen: {cli.screen!r}"
+        )
+
+        cli.send("exit\n")
+        cli.wait_exit()
+
 
 class TestTtyResize:
     """Resizing the terminal must propagate to viewers."""

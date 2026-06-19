@@ -128,6 +128,9 @@ enum Commands {
         #[arg(long)]
         tunnel: bool,
     },
+    /// Show the share link (and QR code) for the broadcast this terminal
+    /// is part of. Run it from inside a live `shellshare` session.
+    Status,
     /// Run a single command, share its output live, and exit with its
     /// exit code when it finishes (designed for scripts and AI agents)
     Exec {
@@ -322,6 +325,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 encrypt: !cli.disable_encryption,
             };
             serve(&host, port, tunnel, share);
+        }
+        Some(Commands::Status) => {
+            std::process::exit(cli::status(cli.json));
         }
         Some(Commands::Exec { command }) => {
             // The stdin branch would win and silently drop the command

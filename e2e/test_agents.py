@@ -3,11 +3,13 @@ E2E tests for the machine-readable surfaces aimed at scripts and AI agents:
 
 - The CLI's --json output contract (stdin mode and exec mode)
 - The `exec` subcommand: single command, live broadcast, exit code propagation
+- `shellshare status --json`: recovering a live session's link from the env
 - The discovery endpoints the website serves: /llms.txt, /robots.txt,
   /sitemap.xml, and the structured data on the home page
 """
 
 import json
+import os
 import platform
 import subprocess
 
@@ -209,3 +211,45 @@ class TestDiscoveryEndpoints:
         assert 'application/ld+json' in response.text
         assert '"SoftwareApplication"' in response.text
         assert '"FAQPage"' in response.text
+
+
+class TestStatusContract:
+    """`shellshare status --json`: recover the live session's link.
+
+    The broadcaster exports the share URL into the shell it spawns
+    (`SHELLSHARE_URL`); `status` reads it back. No server or broadcast is
+    needed to exercise the contract - just the environment.
+    """
+
+    def test_status_json_reads_session_from_env(self):
+        url = f"{SERVER_URL}/r/demo-status#{'a' * 64}"
+        proc = subprocess.run(
+            CLI_COMMAND + ["status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=CLI_SESSION_TIMEOUT,
+            env={
+                **os.environ,
+                "SHELLSHARE_URL": url,
+                "SHELLSHARE_ROOM": "demo-status",
+            },
+        )
+        assert proc.returncode == 0
+        assert json.loads(proc.stdout.strip()) == {
+            "url": url,
+            "room": "demo-status",
+        }
+
+    def test_status_json_outside_session_errors(self):
+        env = {k: v for k, v in os.environ.items() if k != "SHELLSHARE_URL"}
+        proc = subprocess.run(
+            CLI_COMMAND + ["status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=CLI_SESSION_TIMEOUT,
+            env=env,
+        )
+        # The --json contract: errors on stderr, nothing on stdout, exit 1.
+        assert proc.returncode == 1
+        assert proc.stdout.strip() == ""
+        assert "ERROR" in proc.stderr

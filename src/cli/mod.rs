@@ -50,6 +50,19 @@ pub struct ClientArgs {
     pub encrypt: bool,
 }
 
+/// Environment variable carrying the live broadcast's share URL into the
+/// spawned shell, so `shellshare status` can re-print it from inside the
+/// session. Kept in memory only - never written to disk.
+pub const ENV_URL: &str = "SHELLSHARE_URL";
+/// Environment variable carrying the live broadcast's room name.
+pub const ENV_ROOM: &str = "SHELLSHARE_ROOM";
+
+/// The live session details exported into the spawned shell's environment.
+pub struct SessionEnv<'a> {
+    pub url: &'a str,
+    pub room: &'a str,
+}
+
 /// Generate a random 18-character alphanumeric room ID
 fn generate_room_id() -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -135,18 +148,61 @@ fn render_qr_code(url: &str) -> Option<String> {
         .map(|code| code.render::<unicode::Dense1x2>().build())
 }
 
+/// Write the phone-scannable QR block for `url`, prefixed by an invitation
+/// line. Best-effort: a QR render failure leaves the plain link as the
+/// source of truth and prints nothing.
+fn write_qr_code<W: Write>(writer: &mut W, url: &str) {
+    if let Some(qr) = render_qr_code(url) {
+        let _ = writeln!(writer);
+        let _ = writeln!(writer, "Scan this QR code with your phone:");
+        let _ = writeln!(writer, "{qr}");
+    }
+}
+
 fn emit_human_sharing_message<W: Write>(writer: &mut W, share_url: &str, show_qr: bool) {
     let _ = writeln!(writer, "Sharing terminal in {share_url}");
 
     if show_qr {
-        if let Some(qr) = render_qr_code(share_url) {
-            let _ = writeln!(writer);
-            let _ = writeln!(writer, "Scan this QR code with your phone:");
-            let _ = writeln!(writer, "{qr}");
-        }
+        write_qr_code(writer, share_url);
     }
 
     let _ = writer.flush();
+}
+
+/// `shellshare status`: re-print the link (and QR) for the broadcast this
+/// terminal is part of. The share URL is read from the `SHELLSHARE_URL`
+/// environment variable that the broadcaster exports into the shell it
+/// spawns, so this works only from inside a live shellshare session - and
+/// without anything having been written to disk. Returns the exit code:
+/// 0 when a session is found, 1 otherwise.
+pub fn status(json: bool) -> i32 {
+    let url = std::env::var(ENV_URL).ok().filter(|u| !u.is_empty());
+    let Some(url) = url else {
+        if json {
+            // Mirror the --json contract: errors go to stderr, exit non-zero.
+            eprintln!("ERROR: not inside a shellshare session");
+        } else {
+            eprintln!(
+                "Not inside a shellshare session. Run `shellshare` first, then \
+                 `shellshare status` from within the shared shell to see the link."
+            );
+        }
+        return 1;
+    };
+
+    if json {
+        let room = std::env::var(ENV_ROOM).ok();
+        emit_json(&serde_json::json!({ "url": url, "room": room }));
+        return 0;
+    }
+
+    let mut stdout = io::stdout();
+    let _ = writeln!(stdout, "Sharing this terminal at {url}");
+    if stdout.is_terminal() {
+        write_qr_code(&mut stdout, &url);
+    }
+    let _ = stdout.flush();
+    0
 }
 
 /// Run the shellshare client. Returns the exit code to propagate: the
@@ -247,8 +303,13 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
             emit_human_sharing_message(&mut stdout, &share_url, show_qr);
         }
 
-        // Run script mode with PTY
-        let code = script::run_script_mode(transport, &running, args.exec.as_deref())?;
+        // Run script mode with PTY. The share URL and room ride into the
+        // shell's environment so `shellshare status` can recover the link.
+        let session = SessionEnv {
+            url: &share_url,
+            room: &room,
+        };
+        let code = script::run_script_mode(transport, &running, args.exec.as_deref(), &session)?;
 
         if !args.json {
             println!("End of transmission.");

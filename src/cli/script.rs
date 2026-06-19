@@ -89,11 +89,17 @@ impl RawModeGuard {
 /// Run script mode - spawn a shell (or, for `exec`, a single command) in a
 /// PTY and stream output to server. Returns the exit code to propagate:
 /// the child's status when it can be observed, otherwise 0.
+///
+/// `session` carries the share URL and room name; they are exported into
+/// the spawned process's environment (`SHELLSHARE_URL`, `SHELLSHARE_ROOM`)
+/// so `shellshare status`, run from inside the shared shell, can re-print
+/// the link and QR code without anything being written to disk.
 #[allow(clippy::too_many_lines)] // Complex PTY setup with multiple threads
 pub fn run_script_mode(
     transport: ws::Transport,
     running: &Arc<AtomicBool>,
     exec: Option<&[String]>,
+    session: &super::SessionEnv<'_>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     // Enable raw mode BEFORE spawning shell
     // This allows character-by-character input and proper escape sequence handling
@@ -134,6 +140,16 @@ pub fn run_script_mode(
     };
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
+    }
+    // Export the live session into the spawned shell's environment so
+    // `shellshare status`, run from inside it, can recover the link -
+    // kept in memory only, never written to disk. Only for an interactive
+    // shell: `exec` runs one arbitrary command that can't usefully call
+    // `status` and might forward its environment onward (CI logs, crash
+    // reporters), so it must not carry the URL's secret #fragment.
+    if exec.is_none() {
+        cmd.env(super::ENV_URL, session.url);
+        cmd.env(super::ENV_ROOM, session.room);
     }
 
     // Spawn the shell in the PTY
