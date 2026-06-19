@@ -377,7 +377,9 @@
           return;
         }
         try {
-          var webgl = new WebglAddon.WebglAddon();
+          // Static terminal panes must survive browser compositor idle
+          // clears; otherwise only cells that keep changing repaint.
+          var webgl = new WebglAddon.WebglAddon(true);
           webgl.onContextLoss(function () {
             webgl.dispose();
           });
