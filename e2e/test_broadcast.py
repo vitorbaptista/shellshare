@@ -409,6 +409,45 @@ def test_resize_updates_browser_terminal():
         browser.close()
 
 
+def test_webgl_renderer_preserves_idle_screen_buffer(dedicated_server):
+    """
+    xterm's WebGL renderer only redraws dirty rows. The viewer must ask
+    the browser to preserve the WebGL drawing buffer so a settled screen
+    does not fade to black while only animated cells keep repainting.
+    """
+    server = dedicated_server()
+    room_id = f"webgl-{random_id()}"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.add_init_script(
+            """
+            (() => {
+              const originalGetContext = HTMLCanvasElement.prototype.getContext;
+              HTMLCanvasElement.prototype.getContext = function(type, attrs) {
+                if (type === 'webgl2') {
+                  window.__shellshareWebgl2ContextAttributes = attrs || {};
+                }
+                return originalGetContext.apply(this, arguments);
+              };
+            })();
+            """
+        )
+
+        page.goto(f"{server.url}/r/{room_id}")
+        page.wait_for_function(
+            "window.term && "
+            "window.__shellshareWebgl2ContextAttributes !== undefined",
+            timeout=10000,
+        )
+
+        attrs = page.evaluate("window.__shellshareWebgl2ContextAttributes")
+        assert attrs.get("preserveDrawingBuffer") is True
+
+        browser.close()
+
+
 def test_fullscreen_mode_scales_and_restores():
     """
     Pressing `f` enters fullscreen: #terminal gets the `fullscreen`
