@@ -248,6 +248,19 @@ class TestTtyBroadcast:
         cli.send("exit\n")
         cli.wait_exit()
 
+    def test_terminal_output_includes_phone_qr_code(
+        self, unique_room, unique_password, tty_cli
+    ):
+        cli = tty_cli(unique_room, unique_password)
+        assert cli.wait_for_screen("Scan this QR code with your phone:"), (
+            f"No QR prompt on CLI screen. Screen: {cli.screen!r}"
+        )
+        assert any(ch in cli.screen for ch in "▀▄█"), (
+            f"No terminal QR block characters on CLI screen. Screen: {cli.screen!r}"
+        )
+        cli.send("exit\n")
+        cli.wait_exit()
+
 
 class TestTtyResize:
     """Resizing the terminal must propagate to viewers."""

@@ -95,6 +95,7 @@ class TestJsonContract:
             timeout=CLI_SESSION_TIMEOUT,
         )
         assert "Sharing terminal in" not in proc.stdout + proc.stderr
+        assert "Scan this QR code" not in proc.stdout + proc.stderr
         assert "End of transmission" not in proc.stdout + proc.stderr
 
 

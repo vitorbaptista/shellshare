@@ -76,6 +76,7 @@ machine-uid = "0.6.0"
 hkdf = "0.12.4"
 dashmap = "6.2.1"
 futures-util = { version = "0.3.32", default-features = false, features = ["std", "sink"] }
+qrcode = { version = "0.14.1", default-features = false }
 
 [profile.release]
 lto = true
