@@ -4,6 +4,7 @@
 //! output to a shellshare server.
 
 mod crypto;
+mod screen;
 mod script;
 mod ws;
 

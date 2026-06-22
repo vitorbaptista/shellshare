@@ -13,6 +13,7 @@
 //! the room now belongs to another password.
 
 use crate::cli::crypto::Encryptor;
+use crate::cli::screen::Keyframer;
 use crate::protocol::TermSize;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -94,6 +95,10 @@ pub struct Transport {
     /// and reconnect replay all operate on ciphertext - a replayed
     /// record is byte-identical, never re-encrypted (no nonce reuse)
     cipher: Option<Encryptor>,
+    /// Headless terminal emulator over the broadcast stream; periodically
+    /// injects a full-screen redraw so late joiners reconstruct the whole
+    /// screen of a long-running TUI (issue #164).
+    keyframer: Keyframer,
     backoff: Duration,
     /// Do not attempt to reconnect before this instant
     next_attempt: Option<Instant>,
@@ -136,6 +141,7 @@ impl Transport {
             sent_size: None,
             theme,
             cipher,
+            keyframer: Keyframer::new(size),
             backoff: INITIAL_BACKOFF,
             next_attempt: None,
             last_ping: Instant::now(),
@@ -148,33 +154,49 @@ impl Transport {
     /// failures keep data buffered and schedule a reconnect; only
     /// authorization failures surface.
     pub fn send(&mut self, data: &[u8], size: TermSize) -> Result<(), TransportError> {
+        // Feed the emulator the exact bytes being broadcast, then buffer the
+        // data, then (when due) a keyframe AFTER it, so the redraw reflects the
+        // screen as of this frame. The keyframe is an ordinary sealed record:
+        // it rides the same acks/cap/replay path with no protocol change.
+        self.keyframer.feed(data, size);
         if !data.is_empty() {
-            // Sealed here, before buffering: everything downstream
-            // (acks, the cap, replay) counts ciphertext bytes, exactly
-            // what the server sees and acknowledges
-            let data: Bytes = self.cipher.as_ref().map_or_else(
-                || Bytes::copy_from_slice(data),
-                |cipher| cipher.seal(data).into(),
-            );
-            self.buffered_bytes += data.len();
-            self.pending.push_back(data);
-            // Drop the oldest buffered output (acked data is already
-            // gone; the oldest is the front of `unacked`, then `pending`)
-            while self.buffered_bytes > MAX_BUFFERED_BYTES {
-                if let Some(dropped) = self.unacked.pop_front() {
-                    // Already written: its ack may still arrive and must
-                    // not be credited to a later chunk
-                    self.dropped_unacked += dropped.len() as u64;
-                    self.buffered_bytes -= dropped.len();
-                } else if let Some(dropped) = self.pending.pop_front() {
-                    self.buffered_bytes -= dropped.len();
-                } else {
-                    break;
-                }
-            }
+            self.buffer_plaintext(data);
+        }
+        if let Some(keyframe) = self.keyframer.maybe_keyframe() {
+            self.buffer_plaintext(&keyframe);
         }
         self.size = size;
         self.flush()
+    }
+
+    /// Seal a chunk (when encrypting) and queue it for delivery, evicting the
+    /// oldest buffered output if the replay cap is exceeded.
+    ///
+    /// Sealed here, before buffering: everything downstream (acks, the cap,
+    /// replay) counts ciphertext bytes, exactly what the server sees and
+    /// acknowledges. A replayed record is byte-identical, never re-encrypted
+    /// (no nonce reuse).
+    fn buffer_plaintext(&mut self, data: &[u8]) {
+        let sealed: Bytes = self.cipher.as_ref().map_or_else(
+            || Bytes::copy_from_slice(data),
+            |cipher| cipher.seal(data).into(),
+        );
+        self.buffered_bytes += sealed.len();
+        self.pending.push_back(sealed);
+        // Drop the oldest buffered output (acked data is already
+        // gone; the oldest is the front of `unacked`, then `pending`)
+        while self.buffered_bytes > MAX_BUFFERED_BYTES {
+            if let Some(dropped) = self.unacked.pop_front() {
+                // Already written: its ack may still arrive and must
+                // not be credited to a later chunk
+                self.dropped_unacked += dropped.len() as u64;
+                self.buffered_bytes -= dropped.len();
+            } else if let Some(dropped) = self.pending.pop_front() {
+                self.buffered_bytes -= dropped.len();
+            } else {
+                break;
+            }
+        }
     }
 
     /// Idle housekeeping: process acknowledgments, retry delivery of
