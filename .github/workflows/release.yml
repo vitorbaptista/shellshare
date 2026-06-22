@@ -45,7 +45,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -63,7 +63,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload bare binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -113,25 +113,25 @@ jobs:
 
       # Download all bare binaries from Pass 1
       - name: Download Linux bare binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bare-linux-x86_64
           path: binaries-temp/linux
 
       - name: Download Windows bare binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bare-windows-x86_64
           path: binaries-temp/windows
 
       - name: Download macOS Intel bare binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bare-macos-x86_64
           path: binaries-temp/macos-intel
 
       - name: Download macOS ARM bare binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bare-macos-aarch64
           path: binaries-temp/macos-arm
@@ -161,7 +161,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }} --features embed-binaries
 
       - name: Upload embedded binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
@@ -177,10 +177,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download Linux embedded binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: shellshare-linux-x86_64
           path: .
@@ -189,14 +189,14 @@ jobs:
         run: chmod +x shellshare
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.release
@@ -216,25 +216,25 @@ jobs:
 
     steps:
       - name: Download Linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: shellshare-linux-x86_64
           path: release/linux
 
       - name: Download Windows binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: shellshare-windows-x86_64
           path: release/windows
 
       - name: Download macOS Intel binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: shellshare-macos-x86_64
           path: release/macos-intel
 
       - name: Download macOS ARM binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: shellshare-macos-aarch64
           path: release/macos-arm
@@ -250,7 +250,7 @@ jobs:
           ls -la assets/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             assets/shellshare-linux-x86_64
@@ -272,10 +272,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
@@ -285,7 +285,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download embedded binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: 'shellshare-*'
           path: npm-binaries
