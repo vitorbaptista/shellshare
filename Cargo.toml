@@ -77,6 +77,7 @@ hkdf = "0.12.4"
 dashmap = "6.2.1"
 futures-util = { version = "0.3.32", default-features = false, features = ["std", "sink"] }
 qrcode = { version = "0.14.1", default-features = false }
+avt = "0.16.0"
 
 [profile.release]
 lto = true
