@@ -43,7 +43,7 @@ const DEFAULT_ROOM_TTL_SECS: u64 = 21600;
     and exit non-zero.\n\n  \
     Recipes:\n    \
     shellshare exec --json -- npm test     # share one command, exit with its code\n    \
-    tail -f build.log | shellshare --stdin --json\n\n  \
+    tail -f build.log | shellshare --json\n\n  \
     Machine-readable docs: https://shellshare.net/llms.txt")]
 #[command(disable_version_flag = true)]
 struct Cli {
@@ -64,10 +64,6 @@ struct Cli {
     /// Password for room authentication (default: MAC address as integer)
     #[arg(short = 'W', long, global = true)]
     password: Option<String>,
-
-    /// Read from stdin instead of spawning a shell
-    #[arg(long, global = true)]
-    stdin: bool,
 
     /// Print machine-readable JSON events to stdout (for scripts and agents).
     /// First line: `{"event":"sharing","url":...}`; last line:
@@ -319,7 +315,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let share = ShareArgs {
                 room: cli.room,
                 password: cli.password,
-                stdin: cli.stdin,
                 json: cli.json,
                 theme: cli.theme,
                 encrypt: !cli.disable_encryption,
@@ -330,17 +325,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(cli::status(cli.json));
         }
         Some(Commands::Exec { command }) => {
-            // The stdin branch would win and silently drop the command
-            if cli.stdin {
-                eprintln!("ERROR: --stdin cannot be combined with 'exec'");
-                std::process::exit(1);
-            }
             let args = cli::ClientArgs {
                 server: cli.server,
                 display_server: None,
                 room: cli.room,
                 password: cli.password,
-                stdin: cli.stdin,
                 json: cli.json,
                 exec: Some(command),
                 theme: cli.theme,
@@ -355,7 +344,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 display_server: None,
                 room: cli.room,
                 password: cli.password,
-                stdin: cli.stdin,
                 json: cli.json,
                 exec: None,
                 theme: cli.theme,
@@ -373,7 +361,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct ShareArgs {
     room: Option<String>,
     password: Option<String>,
-    stdin: bool,
     json: bool,
     theme: Option<String>,
     encrypt: bool,
@@ -453,7 +440,6 @@ fn serve(host: &str, port: u16, tunnel: bool, share: ShareArgs) {
         display_server: tunnel_handle.as_ref().map(|t| t.url.clone()),
         room: share.room,
         password: share.password,
-        stdin: share.stdin,
         json: share.json,
         exec: None,
         theme: share.theme,

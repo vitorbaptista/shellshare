@@ -60,8 +60,7 @@ def run_serve_tunnel(env, message="hello tunnel", timeout=30, extra_args=()):
     port = _free_port()
     room = random_id()
     proc = subprocess.run(
-        [str(CLI_PATH), "serve", "--port", str(port), "--tunnel", "--stdin",
-         "-r", room, "-W", "pw", *extra_args],
+        [str(CLI_PATH), "serve", "--port", str(port), "--tunnel", "-r", room, "-W", "pw", *extra_args],
         input=message,
         capture_output=True,
         text=True,

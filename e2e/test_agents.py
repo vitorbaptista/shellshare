@@ -1,7 +1,7 @@
 """
 E2E tests for the machine-readable surfaces aimed at scripts and AI agents:
 
-- The CLI's --json output contract (stdin mode and exec mode)
+- The CLI's --json output contract (piped stream mode and exec mode)
 - The `exec` subcommand: single command, live broadcast, exit code propagation
 - `shellshare status --json`: recovering a live session's link from the env
 - The discovery endpoints the website serves: /llms.txt, /robots.txt,
@@ -66,7 +66,7 @@ class TestJsonContract:
     def test_stdin_mode_emits_sharing_and_end_events(self, unique_room, unique_password):
         proc = subprocess.run(
             CLI_COMMAND
-            + ["--stdin", "--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
+            + ["--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
             input="hello agents\n",
             capture_output=True,
             text=True,
@@ -90,7 +90,7 @@ class TestJsonContract:
     def test_json_mode_suppresses_prose(self, unique_room, unique_password):
         proc = subprocess.run(
             CLI_COMMAND
-            + ["--stdin", "--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
+            + ["--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
             input="hi\n",
             capture_output=True,
             text=True,
@@ -151,20 +151,6 @@ class TestExecSubcommand:
         events = parse_json_events(proc.stdout)
         assert events[-1] == {"event": "end", "exit_code": 3}, \
             f"stdout was: {proc.stdout!r}"
-
-    def test_exec_rejects_stdin_flag(self, unique_room, unique_password):
-        # --stdin would win over exec and silently drop the command
-        proc = subprocess.run(
-            CLI_COMMAND
-            + ["exec", "--stdin", "--json", "-s", SERVER_URL]
-            + ["-r", unique_room, "-W", unique_password, "--", "echo", "hi"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            stdin=subprocess.DEVNULL,
-        )
-        assert proc.returncode != 0
-        assert "ERROR" in proc.stderr
 
     def test_exec_requires_command(self):
         proc = subprocess.run(

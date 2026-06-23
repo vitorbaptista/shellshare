@@ -73,7 +73,7 @@ def _run_cli(message, password, server=SERVER_URL, timeout=30):
     """Run the CLI in stdin mode with no -r, so the room id is
     auto-generated. Returns (returncode, stdout, stderr)."""
     proc = subprocess.Popen(
-        CLI_COMMAND + ["--stdin", "-s", server, "-W", password],
+        CLI_COMMAND + ["-s", server, "-W", password],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

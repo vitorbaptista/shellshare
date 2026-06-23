@@ -56,8 +56,8 @@ with a non-zero exit.
 # Share a single command live; exits with the command's exit code
 shellshare exec --json -- npm test
 
-# Stream a log or any pipe (reads stdin until EOF)
-tail -f build.log | shellshare --stdin --json
+# Stream a log or any pipe (a non-TTY stdin auto-detects this, reads until EOF)
+tail -f build.log | shellshare --json
 ```
 
 See [AGENTS.md](AGENTS.md) (or https://shellshare.net/llms.txt) for the full
