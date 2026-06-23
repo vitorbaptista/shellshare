@@ -159,7 +159,7 @@ class TestReliability:
             wait_for_server(url)
 
             cli = subprocess.Popen(
-                CLI_COMMAND + ["--stdin", "-s", url, "-r", room, "-W", password],
+                CLI_COMMAND + ["-s", url, "-r", room, "-W", password],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,

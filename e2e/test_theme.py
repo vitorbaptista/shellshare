@@ -39,7 +39,7 @@ def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, t
     bounded shutdown sleeps and thread scheduling stretch to several
     seconds. The slack absorbs that without masking a genuine hang.
     """
-    args = CLI_COMMAND + ["--stdin", "-s", server, "-r", room, "-W", password]
+    args = CLI_COMMAND + ["-s", server, "-r", room, "-W", password]
     if extra_args:
         args.extend(extra_args)
 
@@ -140,7 +140,7 @@ class TestThemeValidation:
 
     def test_unknown_theme_fails_with_available_list(self):
         proc = subprocess.Popen(
-            CLI_COMMAND + ["--stdin", "--theme", "no-such-theme"],
+            CLI_COMMAND + ["--theme", "no-such-theme"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -191,7 +191,7 @@ class TestThemeRendering:
 
         proc = subprocess.Popen(
             CLI_COMMAND + [
-                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+                "-s", server.url, "-r", room_id, "-W", password,
             ] + theme_args,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
@@ -238,7 +238,7 @@ class TestThemeRendering:
 
         proc = subprocess.Popen(
             CLI_COMMAND + [
-                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+                "-s", server.url, "-r", room_id, "-W", password,
             ] + theme_args,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
@@ -294,7 +294,7 @@ class TestThemeRendering:
         # No --theme: exercise the built-in default the fallbacks target
         proc = subprocess.Popen(
             CLI_COMMAND + [
-                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+                "-s", server.url, "-r", room_id, "-W", password,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
@@ -349,7 +349,7 @@ class TestThemeRendering:
         # size+theme) is deleted when the CLI exits
         proc = subprocess.Popen(
             CLI_COMMAND + [
-                "--stdin", "-s", server.url, "-r", room_id, "-W", password,
+                "-s", server.url, "-r", room_id, "-W", password,
                 "--theme", "solarized-light",
             ],
             stdin=subprocess.PIPE,

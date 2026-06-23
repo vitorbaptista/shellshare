@@ -316,7 +316,7 @@ def test_serve_mode_sends_no_analytics(mock_posthog):
         SHELLSHARE_POSTHOG_SALT=POSTHOG_SALT,
     )
     proc = subprocess.Popen(
-        CLI_COMMAND + ["--stdin", "serve", "--host", "127.0.0.1", "--port", str(port)],
+        CLI_COMMAND + ["serve", "--host", "127.0.0.1", "--port", str(port)],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

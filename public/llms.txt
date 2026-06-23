@@ -20,8 +20,8 @@ newline-delimited JSON:
 - Last line: `{"event":"end","exit_code":N}`.
 - Errors: `ERROR: ...` on stderr, non-zero exit.
 
-    shellshare exec --json -- npm test            # share one command
-    tail -f build.log | shellshare --stdin --json # stream a pipe (reads stdin to EOF)
+    shellshare exec --json -- npm test       # share one command
+    tail -f build.log | shellshare --json    # stream a pipe (non-TTY stdin auto-detected, reads to EOF)
 
 Output is end-to-end encrypted by default; the key is the 64 hex chars after
 `#` in the `url` (a URL fragment the server never sees).

@@ -54,14 +54,14 @@ STEP_SECONDS = 0.02
 
 
 def _start_broadcaster(room, password):
-    """Start a long-lived encrypted `--stdin` broadcast; return (proc, key).
+    """Start a long-lived encrypted piped-stdin broadcast; return (proc, key).
 
-    `--stdin` broadcasts raw stdin bytes directly (no inner shell/PTY), so the
-    test emits an exact alt-screen byte stream and controls frame boundaries
-    from Python.
+    A piped stdin auto-detects into stream mode, broadcasting raw stdin bytes
+    directly (no inner shell/PTY), so the test emits an exact alt-screen byte
+    stream and controls frame boundaries from Python.
     """
     proc = subprocess.Popen(
-        CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room, "-W", password],
+        CLI_COMMAND + ["-s", SERVER_URL, "-r", room, "-W", password],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
