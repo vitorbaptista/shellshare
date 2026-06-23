@@ -42,6 +42,23 @@ Recipes:
     # Stable room name + password (same link every run)
     shellshare exec --json -r my-room -W my-password -- make deploy
 
+## Reading a broadcast as an agent (read-only)
+
+An agent can watch a broadcast without the CLI. Given a link
+.../r/<room>#<key>, the key after `#` is a URL fragment the server never
+sees, so you decrypt locally (Node's built-in crypto/WebSocket, no
+install):
+
+- Snapshot: `GET /r/<room>.bin` returns the accumulated history as
+  ciphertext bytes; decrypt with the key.
+- Live: open a WebSocket to `/ws/v/r/<room>`; binary frames are
+  ciphertext records, text frames are control JSON to ignore.
+
+Records: [u32 BE N][12-byte nonce][ciphertext || 16-byte tag], where
+N = 12 + len(ciphertext || tag), AES-256-GCM, key = the 64 hex chars
+after `#`. Reference decoders (Node, no install):
+https://github.com/vitorbaptista/shellshare/tree/main/agent
+
 ## Key facts
 
 - One-way: viewers can never send input to the broadcasting terminal.

@@ -176,7 +176,9 @@ pub async fn serve_on(
     let app = Router::new()
         // API routes
         .route("/", get(pages::index_handler))
-        .route("/r/{*room}", get(pages::room_page_handler))
+        // GET serves the viewer page, or the raw history bytes with a
+        // `.bin` suffix (the agent-friendly consumer door)
+        .route("/r/{*room}", get(room_get_handler))
         .route("/r/{*room}", post(broadcast_handler))
         .route("/r/{*room}", delete(delete_room_handler))
         // WebSocket ingest - the fast path for broadcasting clients
@@ -798,6 +800,42 @@ fn emit_broadcasting(state: &AppState, room_id: &RoomId, live: bool) {
     state
         .viewers
         .send_control(room_id.as_str(), &format!("{{\"broadcasting\":{live}}}"));
+}
+
+/// GET /r/:room - the viewer page, or - with a `.bin` suffix - the
+/// room's accumulated history as raw bytes.
+///
+/// `/r/<room>.bin` is the agent-friendly consumer door: the body is
+/// exactly what a WebSocket viewer receives as its history frame -
+/// opaque, self-delimiting ciphertext records when the broadcast is
+/// encrypted (the server never holds the key), or plaintext terminal
+/// bytes otherwise. A non-browser consumer (curl, an AI agent) fetches
+/// it once and decrypts client-side with the key from the share link's
+/// #fragment, so the server stays an opaque relay - the same guarantee
+/// the browser viewer relies on. Returns 404 when the room does not
+/// exist. (A room whose name literally ends in `.bin` is shadowed by
+/// this suffix; auto-generated room ids are alphanumeric, so only an
+/// explicitly chosen `--room ...bin` collides.)
+async fn room_get_handler(
+    Path(room_path): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(room) = room_path.strip_suffix(".bin") else {
+        return pages::room_page_response(&headers);
+    };
+    let room_id = RoomId::parse(room);
+    match state.rooms.snapshot(&room_id) {
+        Some(snapshot) => {
+            let body = snapshot.history.unwrap_or_default();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(body))
+                .unwrap()
+        }
+        None => plain_response(StatusCode::NOT_FOUND, "Room not found"),
+    }
 }
 
 /// DELETE /r/:room - Delete room
