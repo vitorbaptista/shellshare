@@ -9,16 +9,25 @@ Source code: https://github.com/vitorbaptista/shellshare
 
 ## Quick start
 
-Run one of these in a terminal:
+Run in a terminal (needs Node.js):
 
     npx -y shellshare
-    curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare && ./shellshare
 
 It prints `Sharing terminal in https://shellshare.net/r/<room>` — anyone who
 opens that link watches the terminal live. Exit the shell (Ctrl+D) to stop.
-Binaries: Linux x64, macOS x64/arm64, Windows x64, via
-https://get.shellshare.net/?os=linux|mac|mac-arm|windows (auto-detected
-without the parameter).
+
+## No Node.js? Download the binary
+
+Get the static binary, passing your OS in the query string, then make it
+executable and run it:
+
+    https://get.shellshare.net/?os=linux      # Linux x64
+    https://get.shellshare.net/?os=mac        # macOS x64
+    https://get.shellshare.net/?os=mac-arm    # macOS arm64 (Apple Silicon)
+    https://get.shellshare.net/?os=windows    # Windows x64
+
+The OS is auto-detected from the User-Agent if you omit the parameter.
+After downloading: `chmod +x shellshare && ./shellshare`.
 
 ## For scripts and AI agents
 
