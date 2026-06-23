@@ -17,7 +17,6 @@ use std::sync::OnceLock;
 
 use axum::{
     body::Body,
-    extract::Path,
     http::{header, HeaderMap, Method, Request, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -236,9 +235,11 @@ pub async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
     serve_page(index_page(), &headers)
 }
 
-/// GET /r/:room - Viewer page
-pub async fn room_page_handler(Path(_room): Path<String>, headers: HeaderMap) -> impl IntoResponse {
-    serve_page(room_page(), &headers)
+/// The viewer page response for `GET /r/:room`. Not an axum handler:
+/// `room_get_handler` calls it directly (after branching to the `.bin`
+/// raw-history response), so it takes a plain borrow and no extractors.
+pub fn room_page_response(headers: &HeaderMap) -> Response {
+    serve_page(room_page(), headers)
 }
 
 fn serve_page(page: &Page, request_headers: &HeaderMap) -> Response {

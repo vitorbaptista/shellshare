@@ -1,70 +1,95 @@
 # shellshare
 
-> Live terminal broadcasting: share a terminal session via a web link with a
-> single command. No signup, no configuration. Viewers watch read-only in
-> their browser. Free and open source (Apache-2.0).
+> Live, read-only terminal broadcasting via a web link. One command, no signup.
 
-Canonical site: https://shellshare.net
-Source code: https://github.com/vitorbaptista/shellshare
+Site: https://shellshare.net
 
-## Quick start
+## Install
 
-Run one of these in a terminal:
+`npx -y shellshare` (needs Node.js), or download the static binary then run
+`chmod +x shellshare && ./shellshare`:
+https://get.shellshare.net/?os=linux  (also: mac, mac-arm, windows; auto-detected from the User-Agent if omitted)
 
-    npx -y shellshare
-    curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare && ./shellshare
+## Broadcast your terminal
 
-It prints `Sharing terminal in https://shellshare.net/r/<room>` — anyone who
-opens that link watches the terminal live. Exit the shell (Ctrl+D) to stop.
-Binaries: Linux x64, macOS x64/arm64, Windows x64, via
-https://get.shellshare.net/?os=linux|mac|mac-arm|windows (auto-detected
-without the parameter).
+`shellshare exec --json -- <cmd>` runs one command in a PTY, broadcasts it,
+and exits with the command's exit code. With `--json`, stdout is
+newline-delimited JSON:
 
-## For scripts and AI agents
+- First line: `{"event":"sharing","room":"<room>","server":"https://shellshare.net","url":"https://shellshare.net/r/<room>"}` — parse `url` to get the share link.
+- Last line: `{"event":"end","exit_code":N}`.
+- Errors: `ERROR: ...` on stderr, non-zero exit.
 
-Add `--json` for a machine-readable contract on stdout (newline-delimited
-JSON events):
+    shellshare exec --json -- npm test       # share one command
+    tail -f build.log | shellshare --json    # stream a pipe (non-TTY stdin auto-detected, reads to EOF)
 
-- First line, before any terminal output:
-  {"event":"sharing","room":"<room>","server":"https://shellshare.net","url":"https://shellshare.net/r/<room>"}
-- Last line: {"event":"end","exit_code":0}
-- Errors: `ERROR: ...` on stderr, non-zero exit code.
+Output is end-to-end encrypted by default; the key is the 64 hex chars after
+`#` in the `url` (a URL fragment the server never sees).
 
-Recipes:
+## Read someone's broadcast (no CLI needed)
 
-    # Share one command live; exits with the command's exit code
-    # (signal-killed commands report exit code 1)
-    shellshare exec --json -- npm test
+Given a link `.../r/<room>#<key>`:
 
-    # Stream a log or any pipe (a non-TTY stdin auto-detects this, reads until EOF)
-    tail -f build.log | shellshare --json
+- Snapshot (history): `GET /r/<room>.bin` → ciphertext bytes.
+- Live: WebSocket `/ws/v/r/<room>` → binary frames are ciphertext records;
+  text frames are control JSON (ignore them).
 
-    # Stable room name + password (same link every run)
-    shellshare exec --json -r my-room -W my-password -- make deploy
+Both are a stream of self-delimiting records:
+`[u32 BE N][12-byte nonce][ciphertext || 16-byte GCM tag]`, where
+`N = 12 + len(ciphertext || tag)`, AES-256-GCM, key = the 64 hex chars after `#`.
+(A link with no `#key` was sent with `--disable-encryption`: the bytes are then
+raw terminal output with no record framing — emit them directly, skip the decoder.)
 
-## Key facts
+Inline decoder (Node, no install, nothing to download):
 
-- One-way: viewers can never send input to the broadcasting terminal.
-- Share links are unguessable (18 random alphanumerics) but public: anyone
-  with the link can watch. Don't broadcast secrets.
-- Live-only: broadcasts are not recorded. Rooms are deleted when the
-  broadcast ends or after a period of inactivity.
-- Late joiners see recent history, not a blank page.
-- `shellshare status`, run from inside a live session, re-prints that
-  session's link and QR code (read from the `SHELLSHARE_URL` env var the
-  broadcaster exports into the spawned shell; nothing is written to disk).
-  With `--json` it prints `{"url":"...","room":"..."}`; outside a session it
-  errors on stderr and exits non-zero.
-- Network drops are handled: output is buffered and replayed on reconnect.
-- `--theme` sets viewer colors (asciinema themes: dracula, gruvbox-dark,
-  monokai, nord, seti, solarized-dark, solarized-light, tango, asciinema).
-- Self-hosting: the same binary contains the server. `shellshare server`
-  hosts it; `shellshare serve` shares through an embedded local server so
-  nothing leaves the machine; `shellshare serve --tunnel` adds a public
-  https://*.trycloudflare.com link via cloudflared.
+```js
+import crypto from 'node:crypto';
 
-## Docs
+// Decode whole records to text; return how many bytes were consumed so a
+// live follower can keep a partial trailing record and resume.
+function decodeRecords(keyHex, buf) {
+  const key = Buffer.from(keyHex, 'hex');
+  let text = '', o = 0;
+  while (o + 4 <= buf.length) {
+    const n = buf.readUInt32BE(o);                // 12 (nonce) + ciphertext + 16 (tag)
+    if (o + 4 + n > buf.length) break;            // wait for the rest of this record
+    const iv = buf.subarray(o + 4, o + 16);
+    const body = buf.subarray(o + 16, o + 4 + n); // ciphertext || tag
+    o += 4 + n;
+    const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    d.setAuthTag(body.subarray(-16));
+    text += Buffer.concat([d.update(body.subarray(0, -16)), d.final()]).toString('utf8');
+  }
+  const clean = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, ''); // strip ANSI
+  return { text: clean, consumed: o };
+}
 
-- Agent/scripting guide: https://github.com/vitorbaptista/shellshare/blob/main/AGENTS.md
-- README: https://github.com/vitorbaptista/shellshare/blob/main/README.md
-- npm package: https://www.npmjs.com/package/shellshare
+async function snapshot(url) {
+  const u = new URL(url);
+  const room = u.pathname.replace(/^\/r\//, '');
+  const buf = Buffer.from(await (await fetch(`${u.origin}/r/${room}.bin`)).arrayBuffer());
+  process.stdout.write(decodeRecords(u.hash.slice(1), buf).text);
+}
+
+// Live (Node >=22). seconds=0 -> until the socket closes.
+function follow(url, seconds = 0) {
+  const u = new URL(url);
+  const room = u.pathname.replace(/^\/r\//, '');
+  const ws = new WebSocket(`${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/ws/v/r/${room}`);
+  ws.binaryType = 'arraybuffer';
+  let buf = Buffer.alloc(0);
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') return;        // control JSON: ignore
+    buf = Buffer.concat([buf, Buffer.from(e.data)]);
+    const { text, consumed } = decodeRecords(u.hash.slice(1), buf);
+    process.stdout.write(text);
+    buf = buf.subarray(consumed);
+  };
+  if (seconds) setTimeout(() => ws.close(), seconds * 1000);
+}
+
+// node decode.mjs '<share-url-with-#key>'   (snapshot; call follow(url) for live)
+snapshot(process.argv[2]);
+```
+
+Source: https://github.com/vitorbaptista/shellshare

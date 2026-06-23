@@ -83,6 +83,32 @@ object `{"url":"...","room":"..."}`; outside a live session it prints
 `SHELLSHARE_URL` environment variable the broadcaster exports into the shell
 it spawns, so it only works from within that shell.
 
+## Reading a broadcast (read-only consumer)
+
+The inverse of broadcasting: an agent can *watch* a shellshare broadcast
+read-only — e.g. tail a build or dev server you started, or watch a
+human's terminal — without the shellshare CLI. Given a share link
+`https://shellshare.net/r/<room>#<key>`, the key after `#` is a URL
+fragment the server never sees, so you decrypt locally (Node's built-in
+`crypto`/`WebSocket`, no install):
+
+- **Snapshot** (current state): `GET /r/<room>.bin` returns the room's
+  accumulated history as raw bytes — opaque ciphertext, since the server
+  is an end-to-end-encryption-blind relay. Decrypt with the `#` key.
+- **Follow** (live): open a WebSocket to `/ws/v/r/<room>`. On connect the
+  server sends the catch-up snapshot, then live frames. Binary frames are
+  ciphertext records; text frames are control JSON you can ignore.
+
+Both are a sequence of self-delimiting records:
+`[u32 BE N][12-byte nonce][ciphertext || 16-byte GCM tag]`, where
+`N = 12 + len(ciphertext || tag)`, AES-256-GCM, key = the 64 hex chars
+after `#`. Concatenate the decrypted plaintexts to rebuild the terminal
+stream; strip ANSI escapes for a clean log.
+
+Ready-to-run reference decoders (Node, zero install) are in
+[`agent/`](agent/): `decrypt.mjs` (snapshot) and `follow.mjs` (live, with
+`--seconds`/`--idle`/`--until` bounds and a background-tail mode).
+
 ## Behavior worth knowing
 
 - One-way only: viewers cannot send input to the terminal.
