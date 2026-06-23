@@ -56,8 +56,63 @@ install):
 
 Records: [u32 BE N][12-byte nonce][ciphertext || 16-byte tag], where
 N = 12 + len(ciphertext || tag), AES-256-GCM, key = the 64 hex chars
-after `#`. Reference decoders (Node, no install):
-https://github.com/vitorbaptista/shellshare/tree/main/agent
+after `#`. Drop-in decoder (Node, no install, nothing to download):
+
+```js
+import crypto from 'node:crypto';
+
+// Decrypt a run of records (starting at a 4-byte length prefix) to text.
+// Returns the decoded text and how many whole-record bytes were consumed,
+// so a live follower can keep the partial trailing record and resume.
+function decodeRecords(keyHex, buf) {
+  const key = Buffer.from(keyHex, 'hex');
+  let text = '', o = 0;
+  while (o + 4 <= buf.length) {
+    const n = buf.readUInt32BE(o);                // = 12 (nonce) + ciphertext + 16 (tag)
+    if (o + 4 + n > buf.length) break;            // wait for the rest of this record
+    const iv = buf.subarray(o + 4, o + 16);
+    const body = buf.subarray(o + 16, o + 4 + n); // ciphertext || tag
+    o += 4 + n;
+    const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    d.setAuthTag(body.subarray(-16));
+    text += Buffer.concat([d.update(body.subarray(0, -16)), d.final()]).toString('utf8');
+  }
+  // ANSI-stripped (CSI + OSC) for a clean text view
+  const clean = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  return { text: clean, consumed: o };
+}
+
+// SNAPSHOT: print the current screen/history and exit.
+async function snapshot(url) {
+  const u = new URL(url);
+  const room = u.pathname.replace(/^\/r\//, '');
+  const buf = Buffer.from(await (await fetch(`${u.origin}/r/${room}.bin`)).arrayBuffer());
+  process.stdout.write(decodeRecords(u.hash.slice(1), buf).text);
+}
+
+// LIVE (Node >=22): stream until the socket closes (or Ctrl+C). seconds=0 -> forever.
+function follow(url, seconds = 0) {
+  const u = new URL(url);
+  const room = u.pathname.replace(/^\/r\//, '');
+  const ws = new WebSocket(`${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/ws/v/r/${room}`);
+  ws.binaryType = 'arraybuffer';
+  let buf = Buffer.alloc(0);
+  ws.onmessage = (e) => {                          // text frames are control JSON: ignore
+    if (typeof e.data === 'string') return;
+    buf = Buffer.concat([buf, Buffer.from(e.data)]);
+    const { text, consumed } = decodeRecords(u.hash.slice(1), buf);
+    process.stdout.write(text);
+    buf = buf.subarray(consumed);
+  };
+  if (seconds) setTimeout(() => ws.close(), seconds * 1000);
+}
+
+// Usage: node decode.mjs '<share-url-with-#key>'   (snapshot; call follow(url) for live)
+snapshot(process.argv[2]);
+```
+
+A fuller live client with --seconds/--idle/--until stop conditions:
+https://github.com/vitorbaptista/shellshare/blob/main/agent/follow.mjs
 
 ## Key facts
 
