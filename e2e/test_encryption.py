@@ -51,7 +51,7 @@ def run_cli(message, room, password, timeout=30, encrypt=True):
     runner the CLI's bounded shutdown sleeps and thread scheduling stretch
     to several seconds. The slack absorbs that without hiding a real hang.
     """
-    args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room, "-W", password]
+    args = CLI_COMMAND + ["-s", SERVER_URL, "-r", room, "-W", password]
     if not encrypt:
         args.append("--disable-encryption")
     proc = subprocess.Popen(
@@ -72,7 +72,7 @@ def start_broadcaster(room, password, first_message, encrypt=True):
     its history) is deleted when the CLI exits. Returns (proc,
     share_url); callers must finish_broadcaster() it.
     """
-    args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", room, "-W", password]
+    args = CLI_COMMAND + ["-s", SERVER_URL, "-r", room, "-W", password]
     if not encrypt:
         args.append("--disable-encryption")
     proc = subprocess.Popen(

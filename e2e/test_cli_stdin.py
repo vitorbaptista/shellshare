@@ -1,8 +1,10 @@
 """
-E2E Tests for Shellshare CLI - Stdin Mode
+E2E Tests for Shellshare CLI - Stream Mode
 
-These tests verify the CLI's --stdin mode, which reads from stdin and streams
-to the server. This is the primary testing interface for the CLI.
+These tests verify the CLI's stream mode: when stdin is a pipe or redirect
+(not a TTY), bare `shellshare` auto-detects it, reads stdin, and streams to
+the server with no inner shell. This is the primary testing interface for
+the CLI.
 
 Test categories:
 - Basic functionality
@@ -43,7 +45,7 @@ def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, t
     scheduling pressure without masking a genuine hang (which never
     returns at all).
     """
-    args = CLI_COMMAND + ["--stdin", "-s", server, "-r", room, "-W", password]
+    args = CLI_COMMAND + ["-s", server, "-r", room, "-W", password]
     if extra_args:
         args.extend(extra_args)
 
@@ -75,6 +77,36 @@ class TestBasicFunctionality:
         received = socket_listener.wait_for_message(timeout=5, containing=test_message)
         assert received is not None, "Message not received by the viewer"
         assert test_message in received
+
+    def test_piped_input_is_streamed_not_executed(
+        self, unique_room, unique_password, socket_listener
+    ):
+        """A pipe is relayed verbatim - it must NOT be run by a shell.
+
+        This is the heart of the auto-detection: a non-TTY stdin streams
+        instead of spawning a shell. A plain `marker in received` check can't
+        prove that - a PTY shell echoes its input line back, so the literal
+        would show up either way. So pipe an arithmetic expansion and assert
+        the viewer sees the LITERAL `$((...))` but never its product: the
+        product appears only if a shell evaluated it.
+        """
+        tag = random_id(6)
+        literal = f"echo {tag}=$((1000003 * 7))"
+        product = f"{tag}=7000021"  # only ever emitted by a shell
+
+        returncode, _, stderr = run_cli_stdin(
+            literal + "\n", unique_room, unique_password
+        )
+        assert returncode == 0, f"CLI failed: {stderr}"
+
+        socket_listener.set_key(parse_share_key(stderr))
+        received = socket_listener.wait_for_message(timeout=5, containing=literal)
+        assert received is not None, "piped input never reached the viewer"
+        assert literal in received  # bytes arrived verbatim...
+        # ...and the expansion was never evaluated (the whole session has
+        # already been broadcast by the time run_cli_stdin returned).
+        assert socket_listener.wait_for_message(timeout=2, containing=product) is None, \
+            "the arithmetic expansion was evaluated - a shell ran instead of streaming"
 
     def test_prints_room_url_to_stderr(self, unique_room, unique_password):
         """CLI should print 'Sharing terminal in {url}' to stderr."""
@@ -247,7 +279,6 @@ class TestServerCommunication:
 
         # Use explicit short flags via extra_args
         args = CLI_COMMAND + [
-            "--stdin",
             "-s", SERVER_URL,
             "-r", custom_room,
             "-W", unique_password,
@@ -272,7 +303,7 @@ class TestServerCommunication:
     def test_default_room_is_random(self):
         """Default room should be an 18-character alphanumeric string."""
         # Run CLI without -r flag to get default room
-        args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL]
+        args = CLI_COMMAND + ["-s", SERVER_URL]
 
         proc = subprocess.Popen(
             args,
@@ -322,7 +353,7 @@ class TestAuthorization:
         listener.connect()
 
         # Start first writer - keep it running
-        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room, "-W", "original-password"]
+        args1 = CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", "original-password"]
         proc1 = subprocess.Popen(
             args1,
             stdin=subprocess.PIPE,
@@ -371,7 +402,7 @@ class TestAuthorization:
         password2 = f"second-{random_id()}"
 
         # Start first writer and keep it running
-        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room, "-W", password1]
+        args1 = CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room, "-W", password1]
         proc1 = subprocess.Popen(
             args1,
             stdin=subprocess.PIPE,
@@ -479,7 +510,6 @@ class TestArgumentParsing:
         assert "--server" in output or "-s" in output
         assert "--room" in output or "-r" in output
         assert "--password" in output or "-W" in output
-        assert "--stdin" in output
         # ... and document the default server users will share through
         assert "shellshare.net" in output, "Default server URL should be in help"
 
@@ -524,7 +554,7 @@ class TestDefaultPassword:
     def test_cli_works_without_password_flag(self, unique_room, socket_listener):
         """CLI should work without -p flag (uses MAC address)."""
         # Run without -p flag
-        args = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
+        args = CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room]
 
         proc = subprocess.Popen(
             args,
@@ -555,7 +585,7 @@ class TestDefaultPassword:
         msg2 = f"SECOND-{random_id(6)}"
 
         # First write without -W
-        args1 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
+        args1 = CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room]
         proc1 = subprocess.Popen(
             args1,
             stdin=subprocess.PIPE,
@@ -571,7 +601,7 @@ class TestDefaultPassword:
         assert first is not None and msg1 in first, "First message not received"
 
         # Second write without -W (same machine = same MAC = same password)
-        args2 = CLI_COMMAND + ["--stdin", "-s", SERVER_URL, "-r", unique_room]
+        args2 = CLI_COMMAND + ["-s", SERVER_URL, "-r", unique_room]
         proc2 = subprocess.Popen(
             args2,
             stdin=subprocess.PIPE,

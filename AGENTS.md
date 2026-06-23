@@ -41,13 +41,13 @@ shellshare exec --json -- npm test
 
 `exec` runs the command in a PTY, streams it live, and exits with the
 command's exit code (a signal-killed command reports exit code 1). Note
-the `--` separator before the command. `exec` cannot be combined with
-`--stdin`.
+the `--` separator before the command.
 
-**Stream a log or pipe** (no PTY, reads stdin until EOF):
+**Stream a log or pipe** (no PTY; a non-TTY stdin auto-detects this and reads
+stdin until EOF):
 
 ```bash
-tail -f build.log | shellshare --stdin --json
+tail -f build.log | shellshare --json
 ```
 
 **Background it and capture the URL while you keep working:**

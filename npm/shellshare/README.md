@@ -26,8 +26,8 @@ broadcast finishes. Errors go to stderr as `ERROR: ...` with a non-zero exit.
 # Share a single command live; exits with the command's exit code
 npx -y shellshare exec --json -- npm test
 
-# Stream a log or any pipe (reads stdin until EOF)
-tail -f build.log | npx -y shellshare --stdin --json
+# Stream a log or any pipe (a non-TTY stdin auto-detects this, reads until EOF)
+tail -f build.log | npx -y shellshare --json
 ```
 
 Full agent-facing docs: [AGENTS.md](https://github.com/vitorbaptista/shellshare/blob/main/AGENTS.md) · [shellshare.net/llms.txt](https://shellshare.net/llms.txt)

@@ -37,7 +37,6 @@ pub struct ClientArgs {
     pub display_server: Option<String>,
     pub room: Option<String>,
     pub password: Option<String>,
-    pub stdin: bool,
     /// Print machine-readable JSON events to stdout instead of prose
     pub json: bool,
     /// Command to run instead of an interactive shell (`shellshare exec`);
@@ -273,8 +272,12 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
         }));
     }
 
-    let exit_code = if args.stdin {
-        // Stdin mode - prose goes to stderr (stdout may be piped onward)
+    // Pipe/redirect into bare shellshare -> relay stdin verbatim; a TTY
+    // (a human) or `exec` (an explicit command) spawns a PTY instead.
+    let stream_mode = args.exec.is_none() && !io::stdin().is_terminal();
+
+    let exit_code = if stream_mode {
+        // Stream mode - prose goes to stderr (stdout may be piped onward)
         if !args.json {
             let mut stderr = io::stderr();
             let show_qr = stderr.is_terminal();
@@ -321,7 +324,7 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     if args.json {
         // PTY output is raw bytes and may leave stdout mid-line; start
         // the event on a fresh line so it stays parseable as a whole line
-        if !args.stdin {
+        if !stream_mode {
             println!();
         }
         emit_json(&serde_json::json!({
@@ -333,7 +336,7 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     Ok(exit_code)
 }
 
-/// Stream stdin to the server (for testing)
+/// Stream stdin to the server: relay raw bytes until EOF.
 fn stream_stdin(
     mut transport: ws::Transport,
     running: &Arc<AtomicBool>,

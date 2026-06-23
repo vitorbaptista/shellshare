@@ -36,8 +36,8 @@ Recipes:
     # (signal-killed commands report exit code 1)
     shellshare exec --json -- npm test
 
-    # Stream a log or any pipe (reads stdin until EOF)
-    tail -f build.log | shellshare --stdin --json
+    # Stream a log or any pipe (a non-TTY stdin auto-detects this, reads until EOF)
+    tail -f build.log | shellshare --json
 
     # Stable room name + password (same link every run)
     shellshare exec --json -r my-room -W my-password -- make deploy

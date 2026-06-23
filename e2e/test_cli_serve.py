@@ -47,8 +47,7 @@ def read_share_key(proc, timeout=10):
 
 def serve_args(port, room, password, host=None):
     """Build the argv for `shellshare serve` in stdin mode."""
-    args = [str(CLI_PATH), "serve", "--port", str(port), "--stdin",
-            "-r", room, "-W", password]
+    args = [str(CLI_PATH), "serve", "--port", str(port), "-r", room, "-W", password]
     if host is not None:
         args.extend(["--host", host])
     return args
@@ -182,7 +181,7 @@ class TestConfiguration:
         if port_open(3000):
             pytest.skip("port 3000 already in use on this machine")
         proc = subprocess.Popen(
-            [str(CLI_PATH), "serve", "--stdin", "-r", "default-port", "-W", "pw"],
+            [str(CLI_PATH), "serve", "-r", "default-port", "-W", "pw"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
