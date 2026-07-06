@@ -53,7 +53,9 @@ const timeBound = has('seconds') ? Number(val('seconds', 0)) : has('idle') || ha
 const idleSecs = has('idle') ? Number(val('idle', 0)) : 0;
 const until = has('until') ? new RegExp(val('until', '')) : null;
 
-const stripAnsi = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+// Clean the terminal stream for a log: strip ANSI escapes and fold the
+// terminal's CRLF line endings to plain LF.
+const cleanLog = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\r\n/g, '\n');
 
 let done = false;
 const finish = (why, code = 0) => {
@@ -102,7 +104,7 @@ ws.onmessage = (ev) => {
       finish('decryption failed - wrong key?', 1);
       return;
     }
-    const clean = stripAnsi(txt);
+    const clean = cleanLog(txt);
     process.stdout.write(clean);
     acc += clean;
     if (until && until.test(acc)) {

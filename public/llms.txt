@@ -60,7 +60,7 @@ function decodeRecords(keyHex, buf) {
     d.setAuthTag(body.subarray(-16));
     text += Buffer.concat([d.update(body.subarray(0, -16)), d.final()]).toString('utf8');
   }
-  const clean = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, ''); // strip ANSI
+  const clean = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\r\n/g, '\n'); // strip ANSI + fold CRLF to LF
   return { text: clean, consumed: o };
 }
 

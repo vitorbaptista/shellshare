@@ -61,5 +61,6 @@ while (o + 4 <= buf.length) {
 const plain = Buffer.concat(parts)
   .toString('utf8')
   .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // strip CSI escapes
-  .replace(/\x1b\][^\x07]*\x07/g, ''); // strip OSC escapes
+  .replace(/\x1b\][^\x07]*\x07/g, '') // strip OSC escapes
+  .replace(/\r\n/g, '\n'); // fold terminal CRLF to LF for a clean log
 process.stdout.write(plain);
