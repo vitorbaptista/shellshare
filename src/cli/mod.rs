@@ -284,8 +284,9 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
             emit_human_sharing_message(&mut stderr, &share_url, show_qr);
         }
 
-        // Read from stdin and stream to server
-        stream_stdin(transport, &running)?;
+        // Read from stdin, tee to stdout, and stream to server. `--json`
+        // owns stdout for the event protocol, so it opts out of the tee.
+        stream_stdin(transport, &running, !args.json)?;
 
         if !args.json {
             eprintln!("End of transmission.");
@@ -336,12 +337,19 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     Ok(exit_code)
 }
 
-/// Stream stdin to the server: relay raw bytes until EOF.
+/// Stream stdin to the server: relay raw bytes until EOF. When `echo_stdout`
+/// is set, also tee each chunk to stdout (plaintext) so the local pipeline
+/// keeps working - `journalctl --follow | shellshare` still shows and forwards
+/// its output. `--json` clears the flag because that mode reserves stdout for
+/// the event protocol. A broken downstream pipe (e.g. `| head`) must not abort
+/// the broadcast, so stdout write errors are ignored - the broadcast is the job.
 fn stream_stdin(
     mut transport: ws::Transport,
     running: &Arc<AtomicBool>,
+    echo_stdout: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = [0u8; 4096];
+    let mut stdout = io::stdout();
 
     loop {
         if !running.load(Ordering::SeqCst) {
@@ -353,10 +361,18 @@ fn stream_stdin(
             // EOF
             break;
         }
+        let chunk = &buffer[..bytes_read];
+
+        if echo_stdout {
+            // Fire-and-forget: flush so `--follow` streams live; a dead
+            // downstream just means the local echo stops, not the broadcast.
+            let _ = stdout.write_all(chunk);
+            let _ = stdout.flush();
+        }
 
         let size = get_terminal_size();
 
-        if let Err(e) = transport.send(&buffer[..bytes_read], size) {
+        if let Err(e) = transport.send(chunk, size) {
             eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
             // The room belongs to someone else now; it is not ours to

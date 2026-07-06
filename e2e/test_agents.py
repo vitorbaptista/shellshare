@@ -64,18 +64,27 @@ class TestJsonContract:
     """--json: newline-delimited JSON events on stdout."""
 
     def test_stdin_mode_emits_sharing_and_end_events(self, unique_room, unique_password):
+        # A distinctive marker lets us prove stdin is NOT teed to stdout in
+        # --json mode: that mode owns stdout for the event protocol, so the
+        # relayed bytes must never leak there and corrupt the JSON stream.
+        marker = "hello-agents-marker"
         proc = subprocess.run(
             CLI_COMMAND
             + ["--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
-            input="hello agents\n",
+            input=marker + "\n",
             capture_output=True,
             text=True,
             timeout=CLI_SESSION_TIMEOUT,
         )
         assert proc.returncode == 0
 
+        # The fed input must not appear on stdout, and every non-empty stdout
+        # line must be parseable JSON (no teed log bytes interleaved).
+        assert marker not in proc.stdout, f"stdin leaked to --json stdout: {proc.stdout!r}"
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
-        first = json.loads(lines[0])
+        events = [json.loads(line) for line in lines]
+
+        first = events[0]
         assert first["event"] == "sharing"
         # The share URL carries the decryption key in its #fragment, so
         # an agent that relays it gives the viewer everything to decrypt
@@ -84,8 +93,7 @@ class TestJsonContract:
         assert first["room"] == unique_room
         assert first["server"] == SERVER_URL
 
-        last = json.loads(lines[-1])
-        assert last == {"event": "end", "exit_code": 0}
+        assert events[-1] == {"event": "end", "exit_code": 0}
 
     def test_json_mode_suppresses_prose(self, unique_room, unique_password):
         proc = subprocess.run(
