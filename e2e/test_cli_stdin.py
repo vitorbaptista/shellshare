@@ -108,6 +108,25 @@ class TestBasicFunctionality:
         assert socket_listener.wait_for_message(timeout=2, containing=product) is None, \
             "the arithmetic expansion was evaluated - a shell ran instead of streaming"
 
+    def test_stdin_is_teed_to_stdout(self, unique_room, unique_password, socket_listener):
+        """Stream mode echoes stdin to stdout (tee), so the local pipeline
+        keeps seeing output while it is broadcast. Prose lives on stderr, so
+        stdout carries only the relayed bytes."""
+        marker = f"TEE-{random_id(6)}"
+
+        returncode, stdout, stderr = run_cli_stdin(
+            marker + "\n", unique_room, unique_password
+        )
+        assert returncode == 0, f"CLI failed: {stderr}"
+
+        # Echoed locally...
+        assert marker in stdout, f"stdin was not teed to stdout; stdout={stdout!r}"
+
+        # ...and still broadcast to the viewer.
+        socket_listener.set_key(parse_share_key(stderr))
+        received = socket_listener.wait_for_message(timeout=5, containing=marker)
+        assert received is not None and marker in received
+
     def test_prints_room_url_to_stderr(self, unique_room, unique_password):
         """CLI should print 'Sharing terminal in {url}' to stderr."""
         returncode, stdout, stderr = run_cli_stdin(

@@ -284,8 +284,9 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
             emit_human_sharing_message(&mut stderr, &share_url, show_qr);
         }
 
-        // Read from stdin and stream to server
-        stream_stdin(transport, &running)?;
+        // Read from stdin, tee to stdout, and stream to server. `--json`
+        // owns stdout for the event protocol, so it opts out of the tee.
+        stream_stdin(transport, &running, !args.json)?;
 
         if !args.json {
             eprintln!("End of transmission.");
@@ -336,12 +337,45 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     Ok(exit_code)
 }
 
-/// Stream stdin to the server: relay raw bytes until EOF.
+/// Translate lone LF into CRLF, writing the result into `out`.
+///
+/// A raw pipe delivers a log's Unix `\n` line endings, but the viewer is a
+/// terminal emulator (xterm.js) where `\n` is a line feed - cursor down, same
+/// column - and only `\r` returns to column 0. So bare LFs render as a
+/// staircase. A shell session gets `\n` -> `\r\n` for free from the PTY's
+/// ONLCR; stream mode has no PTY, so we replicate it here. `prev_was_cr`
+/// carries the "last byte was CR" state across chunk boundaries so an existing
+/// CRLF (or a CR split across two reads) is never doubled into CR-CR-LF.
+fn lf_to_crlf(input: &[u8], prev_was_cr: &mut bool, out: &mut Vec<u8>) {
+    out.clear();
+    for &byte in input {
+        if byte == b'\n' && !*prev_was_cr {
+            out.push(b'\r');
+        }
+        out.push(byte);
+        *prev_was_cr = byte == b'\r';
+    }
+}
+
+/// Stream stdin to the server: relay bytes until EOF. When `echo_stdout` is
+/// set, also tee each chunk to stdout (verbatim) so the local pipeline keeps
+/// working - `journalctl --follow | shellshare` still shows and forwards its
+/// output. `--json` clears the flag because that mode reserves stdout for the
+/// event protocol. A broken downstream pipe (e.g. `| head`) must not abort the
+/// broadcast, so stdout write errors are ignored - the broadcast is the job.
+///
+/// Only the broadcast is normalized to CRLF (see `lf_to_crlf`); the tee stays
+/// verbatim so a downstream command sees exactly what was piped in and the
+/// local terminal applies its own ONLCR.
 fn stream_stdin(
     mut transport: ws::Transport,
     running: &Arc<AtomicBool>,
+    echo_stdout: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = [0u8; 4096];
+    let mut stdout = io::stdout();
+    let mut broadcast = Vec::with_capacity(buffer.len() + buffer.len() / 8);
+    let mut prev_was_cr = false;
 
     loop {
         if !running.load(Ordering::SeqCst) {
@@ -353,10 +387,20 @@ fn stream_stdin(
             // EOF
             break;
         }
+        let chunk = &buffer[..bytes_read];
+
+        if echo_stdout {
+            // Fire-and-forget: flush so `--follow` streams live; a dead
+            // downstream just means the local echo stops, not the broadcast.
+            let _ = stdout.write_all(chunk);
+            let _ = stdout.flush();
+        }
+
+        lf_to_crlf(chunk, &mut prev_was_cr, &mut broadcast);
 
         let size = get_terminal_size();
 
-        if let Err(e) = transport.send(&buffer[..bytes_read], size) {
+        if let Err(e) = transport.send(&broadcast, size) {
             eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
             // The room belongs to someone else now; it is not ours to

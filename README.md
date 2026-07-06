@@ -42,6 +42,15 @@ run `shellshare status` to re-print the link and its QR code. It reads the
 link from the environment of the session you're in, so it only works from
 within a live broadcast — and nothing is written to disk.
 
+You can also pipe a command or log straight into shellshare instead of
+sharing a shell — a non-TTY stdin auto-detects this and reads until EOF. It
+behaves like `tee`: the stream is broadcast *and* echoed to your own stdout,
+so you still see it locally (or pass it on to the next command in the pipe).
+
+```bash
+journalctl --follow | shellshare
+```
+
 ### Scripting & AI agents
 
 shellshare is built to be driven by scripts and AI agents — for example, an
