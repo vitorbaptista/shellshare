@@ -103,7 +103,9 @@ Both are a sequence of self-delimiting records:
 `[u32 BE N][12-byte nonce][ciphertext || 16-byte GCM tag]`, where
 `N = 12 + len(ciphertext || tag)`, AES-256-GCM, key = the 64 hex chars
 after `#`. Concatenate the decrypted plaintexts to rebuild the terminal
-stream; strip ANSI escapes for a clean log.
+stream; strip ANSI escapes and fold CRLF line endings to LF for a clean
+log (the stream is terminal output, so lines end in CRLF - as a PTY
+produces - regardless of how the broadcast was fed).
 
 Ready-to-run reference decoders (Node, zero install) are in
 [`agent/`](agent/): `decrypt.mjs` (snapshot) and `follow.mjs` (live, with
