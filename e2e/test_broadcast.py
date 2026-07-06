@@ -206,6 +206,64 @@ def test_terminal_size_updates_in_browser():
         browser.close()
 
 
+def test_piped_stdin_renders_left_aligned_not_staircased():
+    """Regression: stream mode (piped, non-TTY stdin) must broadcast
+    terminal-correct line endings.
+
+    A log source emits Unix '\\n'. xterm.js is a terminal emulator, where
+    '\\n' is a line feed (cursor down, SAME column) and only '\\r' returns
+    to column 0. Without ONLCR translation ('\\n' -> '\\r\\n') the viewer
+    renders a staircase - each line indented under the end of the previous
+    one. Shell mode gets this for free from the PTY; stream mode must do it
+    itself. This drives the real CLI through a pipe and asserts each line
+    renders at column 0.
+    """
+    room_id = f"stair-{random_id()}"
+    lines = ["alpha", "bravo", "charlie"]
+    payload = "".join(line + "\n" for line in lines)  # bare LFs, like a log
+
+    wait_for_server(SERVER_URL)
+
+    # Keep the broadcaster connected (stdin open) so the room stays live
+    # while the viewer attaches. --disable-encryption lets the viewer render
+    # plaintext with no key handling; the staircase bug is orthogonal to E2EE.
+    proc = subprocess.Popen(
+        CLI_COMMAND + ["-s", SERVER_URL, "-r", room_id, "--disable-encryption"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        proc.stdin.write(payload)
+        proc.stdin.flush()
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"{SERVER_URL}/r/{room_id}")
+            page.wait_for_selector("#terminal", timeout=10000)
+            wait_for_terminal_text(page, "charlie")
+            content = terminal_text(page)
+            browser.close()
+    finally:
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    # translateToString(true) trims only TRAILING whitespace, so a staircased
+    # line keeps its leading indentation ("     bravo"). An exact line match
+    # therefore holds iff the line starts at column 0.
+    rendered = content.split("\n")
+    for marker in lines:
+        assert marker in rendered, (
+            f"{marker!r} did not render at column 0 (staircase). "
+            f"Rendered buffer:\n{content!r}"
+        )
+
+
 def test_multiple_broadcasts_no_duplication():
     """
     Test that multiple broadcasts don't cause message duplication.
