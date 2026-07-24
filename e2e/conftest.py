@@ -44,6 +44,18 @@ else:
 
 CLI_COMMAND = [str(CLI_PATH)]
 
+# Spawning the CLI and waiting for it to broadcast, then drain and shut
+# down its session, is normally ~60ms. But these subprocess timeouts are
+# WALL-CLOCK, and the suite runs `-n 10` on shared CI runners: under heavy
+# CPU oversubscription every thread-scheduling point and bounded sleep in
+# the CLI's shutdown path stretches out. Measured serial worst cases under
+# ~5x CPU oversubscription reached ~8s, with a tail that grows with load,
+# and the Python test process itself can be descheduled against its own
+# timeout. A generous wall-clock budget keeps these green under that
+# scheduling pressure without masking a genuine hang (a real hang never
+# returns at all). The median run is unaffected.
+CLI_SESSION_TIMEOUT = 60
+
 
 def _free_port():
     """Ask the OS for a free TCP port."""

@@ -97,7 +97,7 @@ def test_full_lifecycle_emits_the_three_events(dedicated_server, mock_posthog):
     password = "secret-password"
 
     # Broadcast: claim the room, send output, have a viewer join, exit
-    # cleanly (the delete control message, as the CLI sends on exit)
+    # cleanly (the delete control message, as older clients send on exit)
     ws = ws_connect_room(server.url, room, password)
     try:
         ws.send_binary(b"hello viewers")
@@ -236,15 +236,25 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
     assert second["distinct_id"] == first["distinct_id"]
 
 
-def test_clean_exit_emits_exactly_one_broadcast_ended(dedicated_server, mock_posthog):
+@pytest.mark.parametrize("exit_path", ["close", "delete"])
+def test_clean_exit_emits_exactly_one_broadcast_ended(
+    dedicated_server, mock_posthog, exit_path
+):
+    """Both exit paths report the segment exactly once.
+
+    Current clients just close the socket - the room outlives them, so
+    there is nothing to delete - and the loop's own detach reports the
+    duration. Older binaries send `delete` first, which reports from the
+    delete branch because the room is gone before the detach runs. Either
+    way, never twice.
+    """
     server = analytics_server(dedicated_server, mock_posthog)
     room = random_id()
 
-    # Delete (the CLI's exit path) followed by the close must not report
-    # the broadcast twice
     ws = ws_connect_room(server.url, room, "pw")
     try:
-        ws.send(json.dumps({"delete": True}))
+        if exit_path == "delete":
+            ws.send(json.dumps({"delete": True}))
     finally:
         ws.close()
 

@@ -8,7 +8,7 @@ user-facing behaviors testable that pipes structurally cannot reach:
 - raw-mode local echo through the CLI's inner PTY
 - terminal resize (TIOCSWINSZ -> SIGWINCH -> size broadcast)
 - Ctrl+C handling (SIGINT cleanup, double-Ctrl+C force quit)
-- room deletion on clean exit
+- room survival on clean exit
 """
 
 import sys
@@ -28,6 +28,8 @@ import struct
 import termios
 import threading
 import time
+
+import requests
 
 # pty.fork() in a multi-threaded process warns about fork safety; the child
 # execs the CLI immediately, so the risky window is negligible here.
@@ -211,7 +213,7 @@ class TestTtyBroadcast:
             f"Missing end-of-transmission message. Screen: {cli.screen!r}"
         )
 
-    def test_room_is_deleted_on_clean_exit(
+    def test_room_survives_clean_exit(
         self, unique_room, unique_password, tty_cli
     ):
         cli = tty_cli(unique_room, unique_password)
@@ -220,23 +222,24 @@ class TestTtyBroadcast:
         cli.send("exit\n")
         assert cli.wait_exit()
 
-        # The room was deleted: a different password can claim it again
+        # The room keeps its claim: another password cannot take the name
         status = broadcast_message(
             SERVER_URL, unique_room, f"other-{unique_password}", "claimed"
         )
-        assert status == 200, (
-            "Room password was not released on exit; "
-            f"reclaim attempt returned {status}"
+        assert status == 401, (
+            f"Room name was released on exit; reclaim returned {status}"
         )
 
-        # And a late joiner sees none of the old session's history
-        listener = SocketListener(unique_room)
-        listener.connect()
-        try:
-            time.sleep(1)  # give history (if any) time to arrive
-            assert "populating-history" not in listener.get_accumulated_messages()
-        finally:
-            listener.disconnect()
+        # ...and the link the user already shared still shows the session.
+        # Polled: shutdown's ack drain gives up after 1s, so on a loaded
+        # runner the last frame can still be in flight when the process
+        # is reaped
+        assert poll_until(
+            lambda: len(
+                requests.get(f"{SERVER_URL}/r/{unique_room}.bin").content
+            ) > 0,
+            timeout=5,
+        ), "the room did not outlive the CLI with its history"
 
     def test_oversized_terminal_warns_user(
         self, unique_room, unique_password, tty_cli
@@ -348,14 +351,11 @@ class TestTtySignals:
         os.kill(cli.pid, signal.SIGINT)
 
         assert cli.wait_exit(), "CLI did not exit on SIGINT"
-        # The Ctrl+C handler deletes the room: it can be claimed anew
-        assert poll_until(
-            lambda: broadcast_message(
-                SERVER_URL, unique_room, f"other-{unique_password}", "x"
-            )
-            == 200,
-            timeout=5,
-        ), "Room was not cleaned up on SIGINT"
+        # Ctrl+C ends the transmission but leaves the room: the link the
+        # user already shared keeps working, and the name stays claimed
+        assert broadcast_message(
+            SERVER_URL, unique_room, f"other-{unique_password}", "x"
+        ) == 401, "Room name was released on SIGINT"
 
     def test_double_ctrlc_force_quits(
         self, unique_room, unique_password, tty_cli

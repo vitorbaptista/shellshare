@@ -351,8 +351,8 @@ def test_late_joiner_sees_history_in_browser():
 
     wait_for_server(SERVER_URL)
 
-    # Start a broadcaster that STAYS alive (the CLI deletes the room when
-    # it exits, so history only exists while the broadcaster is live)
+    # Start a broadcaster that STAYS alive: this test needs output
+    # delivered to a viewer that joins mid-session
     proc = subprocess.Popen(
         CLI_COMMAND + ["-s", SERVER_URL, "-r", room_id, "-W", password],
         stdin=subprocess.PIPE,

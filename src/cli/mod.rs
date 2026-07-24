@@ -403,12 +403,13 @@ fn stream_stdin(
         if let Err(e) = transport.send(&broadcast, size) {
             eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
-            // The room belongs to someone else now; it is not ours to
-            // delete, so skip the shutdown cleanup
+            // The room belongs to someone else now: draining our buffer
+            // into it would be someone else's output, so skip the
+            // shutdown flush entirely
             return Ok(());
         }
     }
 
-    transport.shutdown_and_delete();
+    transport.shutdown();
     Ok(())
 }
