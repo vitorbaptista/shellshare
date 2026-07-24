@@ -85,6 +85,35 @@ def test_stream_mode_room_outlives_the_process(unique_room, unique_password):
     assert marker.encode() in open_records(key, body)
 
 
+def test_rerunning_a_room_starts_fresh(unique_room, unique_password):
+    """A reused room name shows the current run, not the previous one.
+
+    Rooms now outlive their broadcaster, so without this the second run's
+    output would stack under the first run's scrollback.
+    """
+    first = f"RUN1-{random_id()}"
+    second = f"RUN2-{random_id()}"
+    key = None
+    for marker in (first, second):
+        proc = subprocess.run(
+            CLI_COMMAND
+            + ["--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
+            input=marker + "\n",
+            capture_output=True,
+            text=True,
+            timeout=CLI_SESSION_TIMEOUT,
+        )
+        assert proc.returncode == 0
+        # Same room name and password -> same derived key both times
+        key = parse_share_key(json.loads(proc.stdout.splitlines()[0])["url"])
+
+    status, body = _get_bin(unique_room)
+    assert status == 200
+    plaintext = open_records(key, body)
+    assert second.encode() in plaintext, "the second run's output is missing"
+    assert first.encode() not in plaintext, "the first run's history was not cleared"
+
+
 def test_bin_unknown_room_is_404():
     status, _ = _get_bin(f"no-such-room-{random_id()}")
     assert status == 404

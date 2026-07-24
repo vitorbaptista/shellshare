@@ -179,6 +179,40 @@ impl Rooms {
         })
     }
 
+    /// Clear a room's history while keeping its claim.
+    ///
+    /// Unlike [`Rooms::delete`], the room, its password, its size, and
+    /// its live segment survive: the caller is a broadcaster starting a
+    /// fresh session on a name it already owns. A room that does not
+    /// exist is already clear, so that succeeds; a password mismatch is
+    /// [`Unauthorized`].
+    ///
+    /// Only the room's SOLE broadcaster may clear it. The frame carries
+    /// no ordering guarantee across connections, and both ways that can
+    /// go wrong need a second one attached: a previous session's ingest
+    /// task still draining its last frames would append them after the
+    /// clear, and a stalled first connection's late reset would wipe
+    /// what its own reconnect already stored. Skipping the clear
+    /// degrades to appending; the alternative destroys history.
+    ///
+    /// The size is deliberately kept: another connection sharing this
+    /// room re-sends its size only on ITS next reconnect, and the size
+    /// message is what tells viewers the stream is encrypted.
+    pub fn reset(&self, room: &RoomId, secret: &str) -> Result<(), Unauthorized> {
+        let Some(mut entry) = self.inner.get_mut(room) else {
+            return Ok(());
+        };
+        if entry.password != secret {
+            return Err(Unauthorized);
+        }
+        if entry.broadcasters > 1 {
+            return Ok(());
+        }
+        entry.messages = MessageHistory::new(MAX_HISTORY_MESSAGES);
+        entry.last_activity = Instant::now();
+        Ok(())
+    }
+
     /// Record that a broadcaster's ingest connection attached to the
     /// room. Returns the new connection count (0 when the room vanished
     /// between the handshake and the upgrade, or was re-claimed by

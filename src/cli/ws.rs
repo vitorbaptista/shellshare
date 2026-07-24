@@ -1,7 +1,7 @@
 //! WebSocket transport for the broadcasting client.
 //!
 //! Terminal output travels as binary frames of raw bytes; control
-//! messages (`size`) travel as JSON text frames. A session ends
+//! messages (`size`, `reset`) travel as JSON text frames. A session ends
 //! by flushing and closing, not by deleting: the room and its history
 //! stay on the server until it goes idle, so a short command still
 //! leaves a working link. (The server still honors the `delete` frame
@@ -151,6 +151,14 @@ impl Transport {
             last_ping: Instant::now(),
         };
         transport.socket = Some(transport.handshake()?);
+        // A room outlives its broadcaster, and the default password is
+        // this machine's id, so rerunning a named room re-claims one
+        // that still holds the previous session. Clear it here - on the
+        // FIRST connection only, never in `handshake`'s reconnect path,
+        // where wiping history would destroy exactly what replay is
+        // rebuilding. Best effort: a failed write means the connection
+        // died, and the reconnect carries on without the reset.
+        let _ = transport.write(Message::text(json!({"reset": true}).to_string()));
         Ok(transport)
     }
 

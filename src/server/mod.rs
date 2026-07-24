@@ -632,7 +632,9 @@ fn total_viewers(state: &AppState, room: &str) -> usize {
 ///
 /// The fast path: binary frames carry raw terminal bytes; text frames
 /// carry JSON control messages (`{"size": {...}}` to resize,
-/// `{"delete": true}` to delete the room on exit). The room is claimed -
+/// `{"reset": true}` to clear a reused room's history at the start of a
+/// new session, `{"delete": true}` to delete the room - the retired exit
+/// path older clients still send). The room is claimed -
 /// or the password verified - at upgrade time, so an unauthorized client
 /// is rejected with 401 before the connection is established.
 async fn ws_ingest_handler(
@@ -732,12 +734,20 @@ async fn ws_ingest_loop(
                     }
                     break;
                 }
-                let size = body
-                    .get("size")
-                    .filter(|s| protocol::size_has_dimensions(s));
-                size.map_or((Ok(()), false), |size| {
-                    (ingest(&state, &room_id, &secret, Some(size), None), true)
-                })
+                if body.get("reset").and_then(serde_json::Value::as_bool) == Some(true) {
+                    // A returning broadcaster's first connection on a room
+                    // it still owns: drop the previous session's history so
+                    // the reused name starts clean instead of stacking this
+                    // run under the last one's scrollback
+                    (state.rooms.reset(&room_id, &secret), false)
+                } else {
+                    let size = body
+                        .get("size")
+                        .filter(|s| protocol::size_has_dimensions(s));
+                    size.map_or((Ok(()), false), |size| {
+                        (ingest(&state, &room_id, &secret, Some(size), None), true)
+                    })
+                }
             }
             // axum answers pings itself; a ping still refreshes the room
             // so an idle-but-connected broadcast isn't evicted
