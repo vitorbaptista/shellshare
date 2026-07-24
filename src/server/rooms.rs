@@ -95,7 +95,10 @@ struct Room {
     /// broadcast time instead of overlapping spans measured from the
     /// claim. `None` while no broadcaster is attached.
     live_since: Option<Instant>,
-    /// Last activity (broadcast or viewer join), drives eviction
+    /// Last activity, which drives eviction. Only the broadcaster
+    /// refreshes it (its frames and keepalive pings, via
+    /// [`Rooms::append`]) - reads deliberately do not, so a room cannot
+    /// be pinned alive by being watched or polled
     last_activity: Instant,
     /// Ingest connections currently attached. More than one is possible
     /// around a client reconnect (the stale loop briefly overlaps the
@@ -167,12 +170,19 @@ impl Rooms {
         Ok(appended)
     }
 
-    /// Catch-up data for a joining viewer; refreshes the room's activity.
-    /// Returns `None` (and creates nothing) when the room does not exist.
+    /// Catch-up data for a joining viewer or a one-shot `/r/:room.bin`
+    /// read. Returns `None` (and creates nothing) when the room does not
+    /// exist.
+    ///
+    /// Reading deliberately does NOT refresh the room's activity. A room
+    /// outlives its broadcaster, so TTL eviction is the only teardown
+    /// left, and only the broadcaster may postpone it: otherwise a
+    /// forgotten browser tab reconnecting, or an agent polling the
+    /// snapshot, would pin a finished broadcast forever. A room whose
+    /// broadcast is still live is kept alive by that broadcaster's own
+    /// frames and 30s keepalive pings.
     pub fn snapshot(&self, room: &RoomId) -> Option<RoomSnapshot> {
-        let mut entry = self.inner.get_mut(room)?;
-        entry.last_activity = Instant::now();
-        Some(RoomSnapshot {
+        self.inner.get(room).map(|entry| RoomSnapshot {
             size: entry.size.clone(),
             history: entry.messages.accumulated(),
             broadcasting: entry.broadcasters > 0,

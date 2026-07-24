@@ -7,6 +7,8 @@ dedicated_server fixture instead of using the shared one.
 
 import time
 
+import requests
+
 from conftest import SocketListener, broadcast_message, poll_until, random_id
 
 
@@ -42,12 +44,41 @@ class TestRoomTtlCleanup:
 
         assert broadcast_message(server.url, room, "pass-a", "ephemeral-data") == 200
         assert _room_has_history(server.url, room, "ephemeral-data")
-        # NOTE: checking history joins the room, which itself refreshes
-        # last_activity - so wait passively and check exactly once.
         time.sleep(5)  # > TTL (2s) + checking join + cleanup interval (1s)
         assert not _room_has_history(
             server.url, room, "ephemeral-data", settle=0.5
         ), "Room history was not evicted after TTL"
+
+    def test_only_the_broadcaster_refreshes_the_ttl(self, dedicated_server):
+        """Watching a dead broadcast does not keep its room alive.
+
+        Rooms outlive their broadcaster now, so TTL eviction is the only
+        teardown left. Neither an attached viewer nor a polled
+        /r/:room.bin read counts as activity - otherwise a forgotten
+        browser tab or a polling agent would pin a finished broadcast
+        forever. Only the broadcaster's own frames (and its 30s
+        keepalive pings) refresh the room.
+        """
+        server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
+        room = f"ttl-{random_id()}"
+
+        assert broadcast_message(server.url, room, "pass-a", "polled-data") == 200
+
+        def watched_and_polled_but_gone():
+            # A fresh join every round, because a join is the only viewer
+            # event that ever touched the room - one join could not keep
+            # a room alive past its TTL on its own
+            listener = SocketListener(room, server_url=server.url)
+            listener.connect()
+            try:
+                return requests.get(f"{server.url}/r/{room}.bin").status_code == 404
+            finally:
+                listener.disconnect()
+
+        # Join and poll faster than the TTL, for longer than the TTL
+        assert poll_until(
+            watched_and_polled_but_gone, timeout=10, interval=0.5
+        ), "room outlived its TTL while only being watched and polled"
 
     def test_evicted_room_password_is_released(self, dedicated_server):
         server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
