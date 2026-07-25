@@ -149,18 +149,19 @@ class TestWsIngest:
         keeper = f"KEEPER-{random_id()}"
         ws = ws_connect_room(SERVER_URL, unique_room, unique_password)
         try:
-            # 64KB is what the CLI actually coalesces up to (MAX_BATCH), and
-            # 160 of them stay under the 200-message cap, so only the byte
-            # budget can be what trims this
-            for _ in range(160):
-                ws.send_binary(b"x" * (64 * 1024))
+            # 69,631 bytes is the CLI's real maximum frame: MAX_BATCH is
+            # checked before a 4096-byte read extends the batch. 180 of
+            # them stay under the 200-message cap, so only the byte budget
+            # can be what trims this
+            for _ in range(180):
+                ws.send_binary(b"x" * 69_631)
                 ws.recv()  # ack
             # Comfortably inside the budget, so it must still be there:
             # without this a "keep only the newest chunk" implementation
             # would satisfy the size assertion below
             ws.send_binary(keeper.encode())
             ws.recv()
-            ws.send_binary(b"y" * (64 * 1024))
+            ws.send_binary(b"y" * 69_631)
             ws.recv()
             ws.send_binary(newest.encode())
             ws.recv()
@@ -174,9 +175,41 @@ class TestWsIngest:
             "history kept only the tail; earlier in-budget output was dropped"
         )
         # The guarantee is the budget plus at most one final frame
-        assert len(resp.content) <= 4 * 1024 * 1024 + 128 * 1024, (
-            f"history kept {len(resp.content)} bytes of a 10MB broadcast; "
+        assert len(resp.content) <= 8 * 1024 * 1024 + 69_631, (
+            f"history kept {len(resp.content)} bytes of a 12MB broadcast; "
             "the byte budget is not bounding it"
+        )
+
+    def test_oversized_frame_is_not_stored(self, unique_room, unique_password):
+        """The server caps ingest frames, so one cannot blow the budget.
+
+        The history budget can be overshot by one frame - the newest
+        chunk always survives whatever its size - so the frame cap is
+        what actually closes the ceiling. It must stay at or above the
+        client's own replay-buffer cap: a chunk the client keeps but the
+        server refuses would sit at the head of its buffer, be rewritten
+        on every reconnect, and block everything behind it forever.
+        """
+        marker = f"BEFORE-{random_id()}"
+        ws = ws_connect_room(SERVER_URL, unique_room, unique_password)
+        try:
+            ws.send_binary(marker.encode())
+            ws.recv()  # ack
+            # One byte over the cap. Asserting on what the ROOM holds, not
+            # on which exception the socket raises: a timeout would
+            # satisfy `raises(Exception)` whether or not the cap exists
+            ws.send_binary(b"z" * (1024 * 1024 + 1))
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+        resp = requests.get(f"{SERVER_URL}/r/{unique_room}.bin")
+        assert resp.status_code == 200
+        assert marker.encode() in resp.content, "the room lost what it had"
+        assert b"zzzz" not in resp.content, (
+            f"an over-cap frame was stored ({len(resp.content)} bytes of history)"
         )
 
     def test_utf8_sequence_split_across_frames(self, unique_room, unique_password, socket_listener):
