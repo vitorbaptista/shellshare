@@ -4,8 +4,8 @@
 //!
 //! - **First-caller-wins claiming**: the first broadcast to a room name
 //!   claims it with that request's password; later requests must match.
-//! - **Bounded history**: at most [`MAX_HISTORY_MESSAGES`] messages are
-//!   kept per room for late joiners.
+//! - **Bounded history**: a room keeps at most [`MAX_HISTORY_MESSAGES`]
+//!   messages and [`MAX_HISTORY_BYTES`] bytes for late joiners.
 //! - **Canonical names**: a [`RoomId`] is normalized at construction, so
 //!   no caller can accidentally address a phantom room.
 //! - **Rooms outlive their broadcaster**: a session ends by closing, not
@@ -33,6 +33,37 @@ use std::time::{Duration, Instant};
 /// This prevents unbounded memory growth while keeping enough history
 /// for a good late-joiner experience.
 const MAX_HISTORY_MESSAGES: usize = 200;
+
+/// Memory budget for one room's history. Rooms outlive their broadcaster
+/// now, so the server holds every room broadcast within the TTL rather
+/// than just the live ones - and a message is a coalesced batch of up to
+/// 64KB, which left the per-room ceiling at 200 x 64KB ~ 12MB.
+///
+/// The floor is set by keyframes, not by taste: the client emits a
+/// full-screen redraw every 60 broadcast frames (`FRAMES_PER_KEYFRAME`,
+/// `src/cli/screen.rs`) so a late joiner can reconstruct a long-running
+/// TUI, and that only works while the newest keyframe is still inside
+/// the replayed window. The 59 frames that can follow it are up to
+/// 69,631 bytes of terminal output each (`MAX_BATCH` is checked before a
+/// read of up to 4096 extends the batch, so the cap is exceeded by
+/// design), plus a 32-byte record header when encrypted - ~4.1MB before
+/// the keyframe itself is counted.
+///
+/// 8MB therefore leaves ~4.2MB of headroom, and no keyframe can exceed
+/// 1MB: the client drops any chunk over its own replay-buffer cap before
+/// sending, and the ingest handler would refuse it anyway. So the
+/// guarantee holds with room to spare (a text TUI's keyframe measures
+/// ~47KB). Frame count, batch size, and keyframe cadence all feed this
+/// number - if any of them moves, redo the arithmetic.
+const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
+
+/// Minimum lifetime for a room with a broadcaster attached, used only
+/// when it exceeds the configured TTL - which in practice means a TTL
+/// shorter than the client's 30s keepalive, since a quiet broadcast
+/// refreshes its room no more often than that. On the 6h default this
+/// never binds. Comfortably above the server's 90s ingest idle timeout,
+/// which detaches genuinely dead connections. See [`Rooms::evict_stale`].
+const BROADCASTER_GRACE: Duration = Duration::from_secs(300);
 
 /// A canonical room identifier.
 ///
@@ -92,7 +123,8 @@ pub struct RoomSnapshot {
 struct Room {
     /// The password that claimed this room
     password: String,
-    /// Message history, capped at [`MAX_HISTORY_MESSAGES`]
+    /// Message history, capped by [`MAX_HISTORY_MESSAGES`] and
+    /// [`MAX_HISTORY_BYTES`]
     messages: MessageHistory,
     /// Terminal size, forwarded verbatim to viewers
     size: Option<serde_json::Value>,
@@ -115,7 +147,7 @@ impl Room {
     fn new(password: &str) -> Self {
         Self {
             password: password.to_string(),
-            messages: MessageHistory::new(MAX_HISTORY_MESSAGES),
+            messages: MessageHistory::new(MAX_HISTORY_MESSAGES, MAX_HISTORY_BYTES),
             size: None,
             live_since: None,
             last_activity: Instant::now(),
@@ -190,7 +222,13 @@ impl Rooms {
         self.inner.get(room).map(|entry| RoomSnapshot {
             size: entry.size.clone(),
             history: entry.messages.accumulated(),
-            broadcasting: entry.broadcasters > 0,
+            // Freshness, not just the count: an ingest task that died
+            // without running its detach leaves the count above zero, and
+            // without this the viewer's online dot would stay lit on a
+            // broadcast that ended. A live broadcaster pings every 30s,
+            // so it is always well inside the window.
+            broadcasting: entry.broadcasters > 0
+                && entry.last_activity.elapsed() <= BROADCASTER_GRACE,
         })
     }
 
@@ -225,7 +263,7 @@ impl Rooms {
         if entry.broadcasters > 1 {
             return Ok(());
         }
-        entry.messages = MessageHistory::new(MAX_HISTORY_MESSAGES);
+        entry.messages = MessageHistory::new(MAX_HISTORY_MESSAGES, MAX_HISTORY_BYTES);
         entry.last_activity = Instant::now();
         Ok(())
     }
@@ -307,12 +345,20 @@ impl Rooms {
         // make it underflow
         let mut evicted = 0;
         self.inner.retain(|_, room| {
-            // An attached broadcaster IS the room's liveness: a quiet
-            // producer refreshes activity only via 30s keepalive pings,
-            // which any shorter TTL outruns. A dead connection is
-            // detached by the ingest idle timeout first, and only then
-            // does its room start aging.
-            let keep = room.broadcasters > 0 || now.duration_since(room.last_activity) <= ttl;
+            // A quiet producer refreshes its room only through 30s
+            // keepalive pings, so a TTL shorter than that would evict a
+            // live broadcast; an attached broadcaster therefore gets at
+            // least BROADCASTER_GRACE. It is a floor, not an exemption:
+            // the attach count is decremented only when `ws_ingest_loop`
+            // returns normally (there is no Drop guard), so an absolute
+            // exemption would let a leaked count pin a room for the life
+            // of the process. Every room still ages out.
+            let deadline = if room.broadcasters > 0 {
+                ttl.max(BROADCASTER_GRACE)
+            } else {
+                ttl
+            };
+            let keep = now.duration_since(room.last_activity) <= deadline;
             if !keep {
                 evicted += 1;
             }

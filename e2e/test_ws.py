@@ -21,6 +21,8 @@ from playwright.sync_api import sync_playwright
 
 import os
 
+import requests
+
 from conftest import (
     CLI_COMMAND,
     SERVER_URL,
@@ -31,7 +33,9 @@ from conftest import (
     parse_share_key,
     random_id,
     wait_for_content,
+    poll_until,
     wait_for_server,
+    ws_connect_room,
 )
 
 
@@ -130,6 +134,90 @@ class TestWsIngest:
         finally:
             late.disconnect()
         assert broadcast_message(SERVER_URL, unique_room, "another-password", "x") == 200
+
+    def test_history_is_bounded_by_bytes_not_just_frames(
+        self, unique_room, unique_password
+    ):
+        """A room's stored history has a memory ceiling.
+
+        Rooms outlive their broadcaster, so the server holds every room
+        broadcast within the TTL. Capping frames alone left the ceiling at
+        frames x 64KB; a byte budget bounds it regardless of how big each
+        frame is. The newest output must survive the trimming - that is
+        what a late joiner is there to see.
+        """
+        newest = f"NEWEST-{random_id()}"
+        keeper = f"KEEPER-{random_id()}"
+        ws = ws_connect_room(SERVER_URL, unique_room, unique_password)
+        try:
+            # 69,631 bytes is the CLI's real maximum of terminal output
+            # per frame: MAX_BATCH is checked before a 4096-byte read
+            # extends the batch. 180 of
+            # them stay under the 200-message cap, so only the byte budget
+            # can be what trims this
+            for _ in range(180):
+                ws.send_binary(b"x" * 69_631)
+                ws.recv()  # ack
+            # Comfortably inside the budget, so it must still be there:
+            # without this a "keep only the newest chunk" implementation
+            # would satisfy the size assertion below
+            ws.send_binary(keeper.encode())
+            ws.recv()
+            ws.send_binary(b"y" * 69_631)
+            ws.recv()
+            ws.send_binary(newest.encode())
+            ws.recv()
+        finally:
+            ws.close()
+
+        resp = requests.get(f"{SERVER_URL}/r/{unique_room}.bin")
+        assert resp.status_code == 200
+        assert newest.encode() in resp.content, "the newest output was trimmed away"
+        assert keeper.encode() in resp.content, (
+            "history kept only the tail; earlier in-budget output was dropped"
+        )
+        # The guarantee is the budget plus at most one final frame
+        assert len(resp.content) <= 8 * 1024 * 1024 + 69_631, (
+            f"history kept {len(resp.content)} bytes of a 12MB broadcast; "
+            "the byte budget is not bounding it"
+        )
+
+    def test_oversized_frame_is_not_stored(self, unique_room, unique_password):
+        """The server caps ingest frames, so one cannot blow the budget.
+
+        The history budget can be overshot by one frame - the newest
+        chunk always survives whatever its size - so the frame cap is
+        what actually closes the ceiling. It must stay at or above the
+        client's own replay-buffer cap: a chunk the client keeps but the
+        server refuses would sit at the head of its buffer, be rewritten
+        on every reconnect, and block everything behind it forever.
+        """
+        marker = f"BEFORE-{random_id()}"
+        ws = ws_connect_room(SERVER_URL, unique_room, unique_password)
+        try:
+            ws.send_binary(marker.encode())
+            ws.recv()  # ack
+            # One byte over the cap. Asserting on what the ROOM holds, not
+            # on which exception the socket raises: a timeout would
+            # satisfy `raises(Exception)` whether or not the cap exists
+            ws.send_binary(b"z" * (1024 * 1024 + 1))
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+        # Polled rather than read once: the only thing ordering the
+        # server's handling of that frame before this read is the close
+        # handshake, and a close that times out would silently turn this
+        # into a race the unfixed server could win
+        assert poll_until(
+            lambda: b"zzzz" in requests.get(f"{SERVER_URL}/r/{unique_room}.bin").content,
+            timeout=2,
+        ) is False, "an over-cap frame was stored"
+        resp = requests.get(f"{SERVER_URL}/r/{unique_room}.bin")
+        assert resp.status_code == 200
+        assert marker.encode() in resp.content, "the room lost what it had"
 
     def test_utf8_sequence_split_across_frames(self, unique_room, unique_password, socket_listener):
         # 'é' is two bytes; send one per frame. Viewers decode the stream,

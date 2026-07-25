@@ -19,30 +19,66 @@ use std::collections::VecDeque;
 /// Chunks are raw terminal bytes, so a joiner's catch-up message is a
 /// single concatenation. Eviction is O(1). `Bytes` chunks share their
 /// buffers with the live broadcast path instead of copying.
+///
+/// Two independent bounds, because they guard different things. The byte
+/// budget is the memory bound: a chunk is a coalesced frame of up to
+/// 64KB (plus periodic full-screen keyframes), so counting frames alone
+/// left a room's ceiling at frames x 64KB. The frame count bounds
+/// per-chunk overhead instead - every chunk costs a `Bytes` in the deque
+/// and a step in `accumulated`'s walk, so without it a producer writing
+/// a byte at a time could sit inside the byte budget while holding
+/// millions of slivers. Which bound binds depends on frame size: below
+/// the budget-over-count average the frame cap wins (interactive typing
+/// keeps its full 200 frames), while any fast output - a build log, a
+/// `cat` - coalesces into large frames and is bounded by bytes instead.
 pub struct MessageHistory {
     chunks: VecDeque<Bytes>,
     max_messages: usize,
+    max_bytes: usize,
+    /// Sum of `chunks`' lengths, maintained on every push and eviction
+    bytes: usize,
 }
 
 impl MessageHistory {
-    /// An empty history holding at most `max_messages` messages.
-    pub const fn new(max_messages: usize) -> Self {
+    /// An empty history holding at most `max_messages` messages and
+    /// `max_bytes` bytes, whichever binds first.
+    pub const fn new(max_messages: usize, max_bytes: usize) -> Self {
         Self {
             chunks: VecDeque::new(),
             max_messages,
+            max_bytes,
+            bytes: 0,
         }
     }
 
-    /// Append a message, evicting the oldest when full. Empty messages
-    /// are dropped rather than allowed to evict real history.
+    /// Append a message, evicting the oldest until both bounds hold.
+    /// Empty messages are dropped rather than allowed to evict real
+    /// history.
+    ///
+    /// The newest chunk always survives, even when it alone exceeds the
+    /// byte budget: dropping it would silently discard the very output
+    /// being broadcast, and a viewer showing one oversized frame beats a
+    /// viewer showing nothing. (The ingest handler caps frame size, so
+    /// that overshoot is bounded.)
+    ///
+    /// Trimming drops WHOLE chunks and never truncates one. It must stay
+    /// that way: one chunk is one sealed encryption record, so a
+    /// truncated chunk would hand the viewer a record it cannot open and
+    /// desynchronize its decoder for everything after it.
     pub fn push(&mut self, message: Bytes) {
         if message.is_empty() {
             return;
         }
-        if self.chunks.len() == self.max_messages {
-            self.chunks.pop_front();
-        }
+        self.bytes += message.len();
         self.chunks.push_back(message);
+        while self.chunks.len() > self.max_messages
+            || (self.bytes > self.max_bytes && self.chunks.len() > 1)
+        {
+            let Some(dropped) = self.chunks.pop_front() else {
+                break;
+            };
+            self.bytes -= dropped.len();
+        }
     }
 
     /// The whole history as one contiguous message, or `None` when
@@ -51,8 +87,7 @@ impl MessageHistory {
         if self.chunks.is_empty() {
             return None;
         }
-        let total: usize = self.chunks.iter().map(Bytes::len).sum();
-        let mut all = Vec::with_capacity(total);
+        let mut all = Vec::with_capacity(self.bytes);
         for chunk in &self.chunks {
             all.extend_from_slice(chunk);
         }

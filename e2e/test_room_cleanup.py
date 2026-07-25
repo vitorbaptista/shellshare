@@ -86,14 +86,16 @@ class TestRoomTtlCleanup:
             watched_and_polled_but_gone, timeout=10, interval=0.5
         ), "room outlived its TTL while only being watched and polled"
 
-    def test_an_attached_broadcaster_is_never_evicted(self, dedicated_server):
-        """A live broadcast keeps its room, however quiet it goes.
+    def test_an_attached_broadcaster_outlives_a_short_ttl(self, dedicated_server):
+        """A live broadcast is not evicted by a TTL shorter than its pings.
 
         Eviction goes by activity, which a live broadcast does not
         necessarily produce - a quiet producer says nothing for long
         stretches, and the keepalive pings that refresh a room only fire
-        every 30s, so a shorter TTL outruns them. An attached connection
-        is the room's liveness, so it is never swept.
+        every 30s. An attached broadcaster therefore gets a floor on its
+        room's lifetime. It is a floor, not an exemption: the room still
+        ages out, which is what keeps a leaked attach count from pinning
+        it forever.
         """
         server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
         room = f"ttl-{random_id()}"

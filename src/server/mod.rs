@@ -655,8 +655,32 @@ async fn ws_ingest_handler(
     };
 
     info!("WS ingest connected for room {:?}", room_id);
-    ws.on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret, claimed))
+    // The history's byte budget can still be overshot by one frame - the
+    // newest chunk always survives, whatever its size - so the frame size
+    // is what actually closes the ceiling. Without this a single frame
+    // could be tungstenite's 64MiB default and sit in the room for the
+    // whole TTL. The client coalesces to 64KB (`MAX_BATCH`), so this is
+    // ample headroom for anything a real broadcaster sends.
+    ws.max_message_size(MAX_INGEST_FRAME)
+        .on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret, claimed))
 }
+
+/// Largest ingest frame accepted. Must stay >= the client's
+/// `MAX_BUFFERED_BYTES` (`src/cli/ws.rs`), which is the largest chunk it
+/// will ever hold: a chunk the client keeps but the server refuses sits
+/// at the head of its replay buffer and is rewritten on every reconnect,
+/// so nothing behind it is ever delivered. They are equal today; lower
+/// this, or raise that, and the two must move together.
+const MAX_INGEST_FRAME: usize = 1024 * 1024;
+
+/// Largest control (text) frame accepted. Control messages are a few
+/// hundred bytes; the cap exists because the `size` value is stored
+/// verbatim for the room's whole life and re-sent to every viewer on
+/// connect - outside the history budget. Without a bound, one bloated
+/// `size` (the protocol only requires that `cols` and `rows` be present)
+/// pins megabytes per room, far more than the history it sits beside,
+/// since a parsed `serde_json::Value` costs several times its wire size.
+const MAX_CONTROL_FRAME: usize = 4 * 1024;
 
 /// How long the ingest loop waits for ANY frame before declaring the
 /// broadcaster dead. The client pings every 30s even when idle, so only
@@ -719,8 +743,26 @@ async fn ws_ingest_loop(
                 }
                 (result, true)
             }
+            WsMessage::Text(text) if text.len() > MAX_CONTROL_FRAME => {
+                warn!(
+                    "WS ingest for room {:?}: {} byte control frame over the {} cap; ignoring",
+                    room_id,
+                    text.len(),
+                    MAX_CONTROL_FRAME
+                );
+                // Still proof the peer is alive, so the room stays fresh
+                (state.rooms.append(&room_id, &secret, None, None).map(|_| ()), false)
+            }
             WsMessage::Text(text) => {
                 let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    // Unparseable, but it still proves the peer is alive:
+                    // refresh the room, or a client sending only these
+                    // would hold the connection open while its room aged
+                    // out underneath it
+                    let result = state.rooms.append(&room_id, &secret, None, None);
+                    if result.is_err() {
+                        break;
+                    }
                     continue;
                 };
                 if body.get("delete").and_then(serde_json::Value::as_bool) == Some(true) {
@@ -751,9 +793,12 @@ async fn ws_ingest_loop(
                 let size = body
                     .get("size")
                     .filter(|s| protocol::size_has_dimensions(s));
-                size.map_or((Ok(()), false), |size| {
-                    (ingest(&state, &room_id, &secret, Some(size), None), true)
-                })
+                size.map_or_else(
+                    // Some other control message, or a size with no
+                    // dimensions: nothing to store, but the peer is alive
+                    || (state.rooms.append(&room_id, &secret, None, None).map(|_| ()), false),
+                    |size| (ingest(&state, &room_id, &secret, Some(size), None), true),
+                )
             }
             // axum answers pings itself; a ping still refreshes the room
             // so an idle-but-connected broadcast isn't evicted
