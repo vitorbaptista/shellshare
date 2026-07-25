@@ -21,7 +21,9 @@ newline-delimited JSON:
 - Errors: `ERROR: ...` on stderr, non-zero exit.
 - The link outlives the command: the room and its recent history stay on the
   server until it goes idle (6h), so a short command still leaves a viewable
-  link. Rerunning the same room name clears the previous run.
+  link, and the room name stays claimed by you for that window. Rerunning the
+  same room name normally clears the previous run. (`shellshare serve` hosts
+  the server in-process, so its link does die with the command.)
 
     shellshare exec --json -- npm test       # share one command
     tail -f build.log | shellshare --json    # stream a pipe (non-TTY stdin auto-detected, reads to EOF)

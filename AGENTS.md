@@ -123,8 +123,17 @@ Ready-to-run reference decoders (Node, zero install) are in
 - The link outlives the command. When shellshare exits, the room and its
   recent history stay on the server until it goes idle (6 hours on
   shellshare.net), so a command that finishes in a second still leaves a
-  link the user can open. Rerunning the same room name starts a fresh
-  session — the previous run's output is cleared, not appended to.
+  link the user can open. Rerunning the same room name normally starts a
+  fresh session — the previous run's output is cleared rather than
+  appended to — though a run that was killed abruptly can leave its
+  connection lingering for up to 90s, and a rerun inside that window
+  appends instead.
+- The room name stays claimed until the room goes idle, so a name you
+  used is yours (and only yours) for that whole window. Another machine
+  asking for it gets an authorization error, not a shared room.
+- `shellshare serve` and `serve --tunnel` are the exception: they host
+  the server inside the same process, so their links do die when the
+  command finishes.
 - Late joiners see recent history, so the page is not blank if the user
   opens the link mid-run.
 - Transient network failures are handled: output is buffered and replayed
