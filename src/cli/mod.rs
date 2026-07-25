@@ -288,7 +288,7 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
         // Read from stdin, tee to stdout, and stream to server. `--json`
         // owns stdout for the event protocol, so it opts out of the tee.
-        stream_stdin(transport, &running, !args.json)?;
+        stream_stdin(transport, &running, !args.json);
 
         if !args.json {
             eprintln!("End of transmission.");
@@ -381,7 +381,7 @@ fn stream_stdin(
     mut transport: ws::Transport,
     running: &Arc<AtomicBool>,
     echo_stdout: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) {
     /// How long to wait for input before letting the transport breathe.
     const IDLE_TICK: Duration = Duration::from_millis(50);
 
@@ -393,12 +393,9 @@ fn stream_stdin(
     thread::spawn(move || {
         let mut buffer = [0u8; 4096];
         let mut stdout = io::stdout();
-        loop {
-            // A read error ends the stream, same as EOF: the sender sees
-            // the dropped channel and shuts down cleanly
-            let Ok(bytes_read) = io::stdin().read(&mut buffer) else {
-                break;
-            };
+        // A read error ends the stream, same as EOF: the sender sees the
+        // dropped channel and shuts down cleanly
+        while let Ok(bytes_read) = io::stdin().read(&mut buffer) {
             if bytes_read == 0 {
                 break; // EOF
             }
@@ -444,10 +441,9 @@ fn stream_stdin(
             // The room belongs to someone else now: draining our buffer
             // into it would be someone else's output, so skip the
             // shutdown flush entirely
-            return Ok(());
+            return;
         }
     }
 
     transport.shutdown();
-    Ok(())
 }
