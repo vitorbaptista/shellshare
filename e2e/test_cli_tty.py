@@ -40,7 +40,6 @@ pytestmark = pytest.mark.filterwarnings(
 from conftest import (
     CLI_PATH,
     SERVER_URL,
-    SocketListener,
     broadcast_message,
     parse_share_key,
     poll_until,

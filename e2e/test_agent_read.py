@@ -25,6 +25,7 @@ from conftest import (
     broadcast_message,
     open_records,
     parse_share_key,
+    poll_until,
     random_id,
 )
 
@@ -79,10 +80,13 @@ def test_stream_mode_room_outlives_the_process(unique_room, unique_password):
     assert proc.returncode == 0
     key = parse_share_key(json.loads(proc.stdout.splitlines()[0])["url"])
 
-    # The process is gone; the link still resolves to the output
-    status, body = _get_bin(unique_room)
-    assert status == 200, "the room died with the broadcaster"
-    assert marker.encode() in open_records(key, body)
+    # The process is gone; the link still resolves to the output.
+    # Polled: shutdown's ack drain gives up after 1s, so on a loaded
+    # runner the last frame can still be in flight when the process exits
+    assert poll_until(
+        lambda: marker.encode() in open_records(key, _get_bin(unique_room)[1]),
+        timeout=5,
+    ), f"the room did not outlive the broadcaster with its output: {_get_bin(unique_room)[0]}"
 
 
 def test_rerunning_a_room_starts_fresh(unique_room, unique_password):
@@ -107,10 +111,11 @@ def test_rerunning_a_room_starts_fresh(unique_room, unique_password):
         # Same room name and password -> same derived key both times
         key = parse_share_key(json.loads(proc.stdout.splitlines()[0])["url"])
 
-    status, body = _get_bin(unique_room)
-    assert status == 200
-    plaintext = open_records(key, body)
-    assert second.encode() in plaintext, "the second run's output is missing"
+    assert poll_until(
+        lambda: second.encode() in open_records(key, _get_bin(unique_room)[1]),
+        timeout=5,
+    ), "the second run's output never reached the room"
+    plaintext = open_records(key, _get_bin(unique_room)[1])
     assert first.encode() not in plaintext, "the first run's history was not cleared"
 
 
