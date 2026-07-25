@@ -48,6 +48,14 @@ const MAX_HISTORY_MESSAGES: usize = 200;
 /// stay above 60 x 64KB. Keep the two in lockstep if either moves.
 const MAX_HISTORY_BYTES: usize = 4 * 1024 * 1024;
 
+/// Minimum lifetime for a room with a broadcaster attached, used only
+/// when it exceeds the configured TTL - which in practice means a TTL
+/// shorter than the client's 30s keepalive, since a quiet broadcast
+/// refreshes its room no more often than that. On the 6h default this
+/// never binds. Comfortably above the server's 90s ingest idle timeout,
+/// which detaches genuinely dead connections. See [`Rooms::evict_stale`].
+const BROADCASTER_GRACE: Duration = Duration::from_secs(300);
+
 /// A canonical room identifier.
 ///
 /// Construction is the only place normalization happens: the `/r/` route
@@ -205,7 +213,13 @@ impl Rooms {
         self.inner.get(room).map(|entry| RoomSnapshot {
             size: entry.size.clone(),
             history: entry.messages.accumulated(),
-            broadcasting: entry.broadcasters > 0,
+            // Freshness, not just the count: an ingest task that died
+            // without running its detach leaves the count above zero, and
+            // without this the viewer's online dot would stay lit on a
+            // broadcast that ended. A live broadcaster pings every 30s,
+            // so it is always well inside the window.
+            broadcasting: entry.broadcasters > 0
+                && entry.last_activity.elapsed() <= BROADCASTER_GRACE,
         })
     }
 
@@ -322,12 +336,20 @@ impl Rooms {
         // make it underflow
         let mut evicted = 0;
         self.inner.retain(|_, room| {
-            // An attached broadcaster IS the room's liveness: a quiet
-            // producer refreshes activity only via 30s keepalive pings,
-            // which any shorter TTL outruns. A dead connection is
-            // detached by the ingest idle timeout first, and only then
-            // does its room start aging.
-            let keep = room.broadcasters > 0 || now.duration_since(room.last_activity) <= ttl;
+            // A quiet producer refreshes its room only through 30s
+            // keepalive pings, so a TTL shorter than that would evict a
+            // live broadcast; an attached broadcaster therefore gets at
+            // least BROADCASTER_GRACE. It is a floor, not an exemption:
+            // the attach count is decremented only when `ws_ingest_loop`
+            // returns normally (there is no Drop guard), so an absolute
+            // exemption would let a leaked count pin a room for the life
+            // of the process. Every room still ages out.
+            let deadline = if room.broadcasters > 0 {
+                ttl.max(BROADCASTER_GRACE)
+            } else {
+                ttl
+            };
+            let keep = now.duration_since(room.last_activity) <= deadline;
             if !keep {
                 evicted += 1;
             }
