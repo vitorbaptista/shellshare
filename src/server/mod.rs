@@ -634,9 +634,9 @@ fn total_viewers(state: &AppState, room: &str) -> usize {
 /// carry JSON control messages (`{"size": {...}}` to resize,
 /// `{"reset": true}` to clear a reused room's history at the start of a
 /// new session, `{"delete": true}` to delete the room - the retired exit
-/// path older clients still send). The room is claimed -
-/// or the password verified - at upgrade time, so an unauthorized client
-/// is rejected with 401 before the connection is established.
+/// path older clients still send). The room is claimed - or the password
+/// verified - at upgrade time, so an unauthorized client is rejected
+/// with 401 before the connection is established.
 async fn ws_ingest_handler(
     Path(room_path): Path<String>,
     headers: HeaderMap,
@@ -739,7 +739,17 @@ async fn ws_ingest_loop(
                     // it still owns: drop the previous session's history so
                     // the reused name starts clean instead of stacking this
                     // run under the last one's scrollback
-                    (state.rooms.reset(&room_id, &secret), false)
+                    let outcome = state.rooms.reset(&room_id, &secret);
+                    if outcome.is_ok() {
+                        // Tabs already open are mid-render of the old
+                        // session; clearing only the stored history would
+                        // leave them stacking the new run under it. They
+                        // reuse the same clear the reconnect path runs
+                        state
+                            .viewers
+                            .send_control(room_id.as_str(), "{\"reset\":true}");
+                    }
+                    (outcome, false)
                 } else {
                     let size = body
                         .get("size")

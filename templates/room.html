@@ -413,6 +413,31 @@
       var RECONNECT_MAX_MS = 10000;
       var reconnectDelayMs = RECONNECT_MIN_MS;
 
+      // Wipe the screen and everything still in flight toward it. Used
+      // when the bytes that follow replace what came before rather than
+      // continuing it: a reconnect (the server replays the history) and
+      // a `reset` control event (the broadcaster started a new session
+      // on a room that still held the previous one).
+      //
+      // RIS through the write queue, not term.reset(): writes are
+      // asynchronous, so an out-of-band reset could run before leftover
+      // chunks parse; queued RIS is ordered after them and also resets
+      // the VT parser and UTF-8 decoder state they may have left
+      // mid-sequence.
+      //
+      // Encrypted rooms additionally discard in-flight decryptions:
+      // their plaintext would otherwise resolve after this reset and
+      // replay superseded output on top of the fresh screen. A fresh
+      // chain also keeps it from deepening across rejoins.
+      function clearScreen() {
+        decryptEpoch++;
+        decryptChain = Promise.resolve();
+        pendingWrites = [];
+        if (term) {
+          term.write('\x1bc');
+        }
+      }
+
       function connect() {
         var ws = new WebSocket(WS_URL);
         ws.binaryType = 'arraybuffer';
@@ -421,24 +446,8 @@
             // The server replays the room history on connect; start
             // from a clean screen instead of appending a duplicate.
             // The size is kept: the server re-sends it (before the
-            // history) whenever the room has one. RIS through the
-            // write queue, not term.reset(): writes are asynchronous,
-            // so an out-of-band reset could run before leftover
-            // pre-disconnect chunks parse; queued RIS is ordered after
-            // them and also resets the VT parser and UTF-8 decoder
-            // state they may have left mid-sequence.
-            //
-            // Encrypted rooms additionally discard in-flight
-            // decryptions: their plaintext would otherwise resolve
-            // after this reset, replaying pre-disconnect output on top
-            // of the fresh history (which re-delivers it anyway). A
-            // fresh chain also keeps it from deepening across rejoins.
-            decryptEpoch++;
-            decryptChain = Promise.resolve();
-            pendingWrites = [];
-            if (term) {
-              term.write('\x1bc');
-            }
+            // history) whenever the room has one.
+            clearScreen();
           }
           joinedBefore = true;
         };
@@ -463,6 +472,14 @@
             }
             if (typeof control.broadcasting === 'boolean') {
               onBroadcasting(control.broadcasting);
+            }
+            // A new session claimed a room that still held the previous
+            // one, and the server dropped that history. Without this a
+            // tab left open across the rerun would stack the new
+            // session under the old scrollback - exactly what clearing
+            // the history is meant to prevent.
+            if (control.reset === true) {
+              clearScreen();
             }
             return;
           }
