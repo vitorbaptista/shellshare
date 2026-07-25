@@ -144,3 +144,32 @@ E2E only, in the existing files. Three additions:
 
 The existing room-TTL eviction test already covers the other half: rooms do
 eventually go away.
+
+## As built
+
+Review changed four decisions. Recorded here so this document is not read
+as a description of the shipped code.
+
+- **Viewers are not disconnected on reset.** The design called for dropping
+  attached viewers so their pages would reconnect and resync. That breaks the
+  e2e harness, whose `SocketListener` never reconnects (unlike
+  `templates/room.html`), and it is a heavier hammer than needed. Instead the
+  reset fans out as a `{"reset": true}` control event and the page runs the
+  same screen clear it already runs on reconnect.
+- **`reset` is fenced to the room's sole broadcaster.** The frame carries no
+  ordering guarantee across connections. A previous session's still-draining
+  ingest task could append its tail after the clear, and a stalled first
+  connection's late reset could wipe what its own reconnect had stored. Both
+  need a second attached connection, so `Rooms::reset` skips when one exists -
+  degrading to appending rather than destroying history.
+- **`reset` keeps the room's size.** Clearing it would open a window where a
+  joining viewer gets no size, and the `encrypted` flag rides inside the size
+  message - such a viewer would render raw ciphertext instead of reporting a
+  missing key.
+- **Only the broadcaster postpones eviction, and an attached broadcaster is
+  never evicted at all.** Reads (viewer joins, `/r/:room.bin`) no longer refresh
+  activity, or a polling agent would pin a finished broadcast forever. The
+  converse also had to be fixed: keepalive pings fire every 30s, so any shorter
+  TTL outran them and evicted a live-but-quiet broadcast. Two bugs surfaced
+  along the way and are fixed here - stream mode never pinged at all, and
+  eviction ignored whether anyone was still broadcasting.
