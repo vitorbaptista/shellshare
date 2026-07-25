@@ -58,7 +58,13 @@ impl MessageHistory {
     /// The newest chunk always survives, even when it alone exceeds the
     /// byte budget: dropping it would silently discard the very output
     /// being broadcast, and a viewer showing one oversized frame beats a
-    /// viewer showing nothing.
+    /// viewer showing nothing. (The ingest handler caps frame size, so
+    /// that overshoot is bounded.)
+    ///
+    /// Trimming drops WHOLE chunks and never truncates one. It must stay
+    /// that way: one chunk is one sealed encryption record, so a
+    /// truncated chunk would hand the viewer a record it cannot open and
+    /// desynchronize its decoder for everything after it.
     pub fn push(&mut self, message: Bytes) {
         if message.is_empty() {
             return;

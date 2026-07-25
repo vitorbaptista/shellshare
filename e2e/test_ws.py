@@ -146,6 +146,7 @@ class TestWsIngest:
         what a late joiner is there to see.
         """
         newest = f"NEWEST-{random_id()}"
+        keeper = f"KEEPER-{random_id()}"
         ws = ws_connect_room(SERVER_URL, unique_room, unique_password)
         try:
             # 64KB is what the CLI actually coalesces up to (MAX_BATCH), and
@@ -154,6 +155,13 @@ class TestWsIngest:
             for _ in range(160):
                 ws.send_binary(b"x" * (64 * 1024))
                 ws.recv()  # ack
+            # Comfortably inside the budget, so it must still be there:
+            # without this a "keep only the newest chunk" implementation
+            # would satisfy the size assertion below
+            ws.send_binary(keeper.encode())
+            ws.recv()
+            ws.send_binary(b"y" * (64 * 1024))
+            ws.recv()
             ws.send_binary(newest.encode())
             ws.recv()
         finally:
@@ -162,6 +170,9 @@ class TestWsIngest:
         resp = requests.get(f"{SERVER_URL}/r/{unique_room}.bin")
         assert resp.status_code == 200
         assert newest.encode() in resp.content, "the newest output was trimmed away"
+        assert keeper.encode() in resp.content, (
+            "history kept only the tail; earlier in-budget output was dropped"
+        )
         # The guarantee is the budget plus at most one final frame
         assert len(resp.content) <= 4 * 1024 * 1024 + 128 * 1024, (
             f"history kept {len(resp.content)} bytes of a 10MB broadcast; "
