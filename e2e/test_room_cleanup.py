@@ -5,17 +5,16 @@ These need a server with a short TTL, so each test spawns its own via the
 dedicated_server fixture instead of using the shared one.
 """
 
-import subprocess
 import time
 
 import requests
 
 from conftest import (
-    CLI_COMMAND,
     SocketListener,
     broadcast_message,
     poll_until,
     random_id,
+    ws_connect_room,
 )
 
 
@@ -87,42 +86,28 @@ class TestRoomTtlCleanup:
             watched_and_polled_but_gone, timeout=10, interval=0.5
         ), "room outlived its TTL while only being watched and polled"
 
-    def test_an_attached_but_silent_broadcaster_keeps_its_room(
-        self, dedicated_server
-    ):
-        """A quiet producer must not lose the room out from under itself.
+    def test_an_attached_broadcaster_is_never_evicted(self, dedicated_server):
+        """A live broadcast keeps its room, however quiet it goes.
 
-        `journalctl -f` on an idle unit sends nothing for long stretches,
-        and reads no longer refresh anything, so the room survives only
-        because the client keeps pinging. Without those pings the room is
-        evicted mid-broadcast and the next line of output fails fatally
-        with an authorization error.
+        Eviction goes by activity, which a live broadcast does not
+        necessarily produce - a quiet producer says nothing for long
+        stretches, and the keepalive pings that refresh a room only fire
+        every 30s, so a shorter TTL outruns them. An attached connection
+        is the room's liveness, so it is never swept.
         """
         server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)
         room = f"ttl-{random_id()}"
 
-        proc = subprocess.Popen(
-            CLI_COMMAND + ["--json", "-s", server.url, "-r", room, "-W", "pw"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        ws = ws_connect_room(server.url, room, "pass-a")
         try:
-            proc.stdin.write("hello\n")
-            proc.stdin.flush()
-            # Silent for well past the TTL, stdin still open
-            time.sleep(6)
+            ws.send_binary(b"one line, then silence")
+            ws.recv()  # ack: the room exists and holds history
+            time.sleep(5)  # well past the TTL, still attached
             assert (
                 requests.get(f"{server.url}/r/{room}.bin").status_code == 200
             ), "room was evicted while its broadcaster was still attached"
         finally:
-            proc.stdin.close()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+            ws.close()
 
     def test_evicted_room_password_is_released(self, dedicated_server):
         server = dedicated_server("--cleanup-interval", 1, "--room-ttl", 2)

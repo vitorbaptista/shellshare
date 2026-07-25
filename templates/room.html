@@ -473,11 +473,7 @@
             if (typeof control.broadcasting === 'boolean') {
               onBroadcasting(control.broadcasting);
             }
-            // A new session claimed a room that still held the previous
-            // one, and the server dropped that history. Without this a
-            // tab left open across the rerun would stack the new
-            // session under the old scrollback - exactly what clearing
-            // the history is meant to prevent.
+            // A new session replaced whatever this room held
             if (control.reset === true) {
               clearScreen();
             }

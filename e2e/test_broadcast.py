@@ -790,3 +790,49 @@ if __name__ == "__main__":
     test_touch_portrait_fits_terminal_to_width()
     test_touch_landscape_fits_whole_grid_and_overlay()
     test_immersive_overlay_hidden_on_desktop()
+
+
+def test_open_tab_clears_when_a_rerun_resets_the_room():
+    """A tab left open across a rerun shows only the new session.
+
+    Rooms outlive their broadcaster, so rerunning a named room re-claims
+    one that still holds the previous run. The server drops that history
+    for anyone joining later, but a tab already open is mid-render: it
+    only learns via the `reset` control event, which makes it clear its
+    screen the way a reconnect does. Without that the new run stacks
+    under the old scrollback - the exact thing clearing exists to stop.
+    """
+    room = f"reset-{random_id()}"
+    password = f"secret-{random_id()}"
+    first = f"RUNONE{random_id(6)}"
+    second = f"RUNTWO{random_id(6)}"
+
+    wait_for_server(SERVER_URL)
+
+    def run(marker):
+        proc = subprocess.run(
+            CLI_COMMAND + ["--json", "-s", SERVER_URL, "-r", room, "-W", password],
+            input=f"{marker}\n",
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc.returncode == 0
+        return parse_share_key(proc.stdout.splitlines()[0])
+
+    key = run(first)
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        try:
+            page.goto(f"{SERVER_URL}/r/{room}#{key}")
+            wait_for_terminal_text(page, first)
+
+            # Same tab stays open across the rerun
+            run(second)
+            wait_for_terminal_text(page, second)
+            assert first not in terminal_text(page), (
+                "the open tab stacked the new run under the previous one"
+            )
+        finally:
+            browser.close()

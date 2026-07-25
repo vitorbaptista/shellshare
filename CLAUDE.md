@@ -81,7 +81,7 @@ lives here too. Must stay in lockstep with `templates/room.html` and
 
 E2E tests are the single source of truth - there are no Rust unit tests by design. The implementation is free to change as long as the e2e suite stays green.
 
-The suite in `e2e/` uses Python pytest + Playwright and manages its own servers: a shared one started automatically on a free port (pin it with `SHELLSHARE_E2E_PORT` to reuse a pre-started server) plus per-test dedicated servers with custom flags (e.g. short `--room-ttl` for eviction tests). Coverage spans the HTTP API, the viewer WebSocket protocol, full CLI-to-browser integration, real-TTY CLI sessions (`test_cli_tty.py`: resize/SIGWINCH, Ctrl+C handling, cleanup on exit), room TTL eviction, and binary downloads.
+The suite in `e2e/` uses Python pytest + Playwright and manages its own servers: a shared one started automatically on a free port (pin it with `SHELLSHARE_E2E_PORT` to reuse a pre-started server) plus per-test dedicated servers with custom flags (e.g. short `--room-ttl` for eviction tests). Coverage spans the HTTP API, the viewer WebSocket protocol, full CLI-to-browser integration, real-TTY CLI sessions (`test_cli_tty.py`: resize/SIGWINCH, Ctrl+C handling, room survival on exit), room TTL eviction, and binary downloads.
 
 ### What to test (and what not to)
 

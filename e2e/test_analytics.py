@@ -191,8 +191,9 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
     ws = ws_connect_room(server.url, room, "pw")
     ws.send_binary(b"output")
     ws.recv()  # ack
-    # Drop the connection without the delete control message, like a
-    # crashed client or a dead network
+    # Close without the delete control message: what current clients do
+    # on a clean exit (the room outlives them), and also what a crashed
+    # client or a dead network looks like
     ws.close()
 
     assert poll_until(
@@ -236,25 +237,22 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
     assert second["distinct_id"] == first["distinct_id"]
 
 
-@pytest.mark.parametrize("exit_path", ["close", "delete"])
-def test_clean_exit_emits_exactly_one_broadcast_ended(
-    dedicated_server, mock_posthog, exit_path
+def test_delete_then_close_emits_exactly_one_broadcast_ended(
+    dedicated_server, mock_posthog
 ):
-    """Both exit paths report the segment exactly once.
+    """`delete` reports from its own branch; the close must not repeat it.
 
-    Current clients just close the socket - the room outlives them, so
-    there is nothing to delete - and the loop's own detach reports the
-    duration. Older binaries send `delete` first, which reports from the
-    delete branch because the room is gone before the detach runs. Either
-    way, never twice.
+    Only older binaries still send `delete` - current clients leave the
+    room up and just close, which test_abrupt_disconnect covers - but the
+    server still honors it, and it is the one path where two places could
+    report the same segment.
     """
     server = analytics_server(dedicated_server, mock_posthog)
     room = random_id()
 
     ws = ws_connect_room(server.url, room, "pw")
     try:
-        if exit_path == "delete":
-            ws.send(json.dumps({"delete": True}))
+        ws.send(json.dumps({"delete": True}))
     finally:
         ws.close()
 

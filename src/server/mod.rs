@@ -737,27 +737,23 @@ async fn ws_ingest_loop(
                 if body.get("reset").and_then(serde_json::Value::as_bool) == Some(true) {
                     // A returning broadcaster's first connection on a room
                     // it still owns: drop the previous session's history so
-                    // the reused name starts clean instead of stacking this
-                    // run under the last one's scrollback
-                    let outcome = state.rooms.reset(&room_id, &secret);
-                    if outcome.is_ok() {
-                        // Tabs already open are mid-render of the old
-                        // session; clearing only the stored history would
-                        // leave them stacking the new run under it. They
-                        // reuse the same clear the reconnect path runs
-                        state
-                            .viewers
-                            .send_control(room_id.as_str(), "{\"reset\":true}");
+                    // the reused name starts clean. Tabs already open are
+                    // mid-render of the old session, so they get the same
+                    // clear the reconnect path runs
+                    if state.rooms.reset(&room_id, &secret).is_err() {
+                        break;
                     }
-                    (outcome, false)
-                } else {
-                    let size = body
-                        .get("size")
-                        .filter(|s| protocol::size_has_dimensions(s));
-                    size.map_or((Ok(()), false), |size| {
-                        (ingest(&state, &room_id, &secret, Some(size), None), true)
-                    })
+                    state
+                        .viewers
+                        .send_control(room_id.as_str(), "{\"reset\":true}");
+                    continue;
                 }
+                let size = body
+                    .get("size")
+                    .filter(|s| protocol::size_has_dimensions(s));
+                size.map_or((Ok(()), false), |size| {
+                    (ingest(&state, &room_id, &secret, Some(size), None), true)
+                })
             }
             // axum answers pings itself; a ping still refreshes the room
             // so an idle-but-connected broadcast isn't evicted

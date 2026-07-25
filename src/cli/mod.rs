@@ -372,12 +372,11 @@ fn lf_to_crlf(input: &[u8], prev_was_cr: &mut bool, out: &mut Vec<u8>) {
 ///
 /// stdin is read on its own thread so this loop can wake on a timer instead of
 /// parking inside a blocking read. A quiet producer (`journalctl -f` on an idle
-/// unit) would otherwise emit nothing for hours, and the transport only pings -
-/// and only retries buffered data - from `tick`. Without those pings the server
-/// declares the broadcaster dead after 90s, and nothing refreshes the room's
-/// activity, so a live-but-quiet broadcast is eventually TTL-evicted out from
-/// under itself. It also makes Ctrl+C land promptly rather than waiting for the
-/// producer's next line.
+/// unit) emits nothing for long stretches, and the transport only pings - and
+/// only retries buffered data - from `tick`. Without those pings the server
+/// declares the broadcaster dead after 90s and flips every viewer's indicator
+/// offline on a broadcast that is still perfectly live. It also makes Ctrl+C
+/// land promptly rather than waiting for the producer's next line.
 fn stream_stdin(
     mut transport: ws::Transport,
     running: &Arc<AtomicBool>,
@@ -386,7 +385,10 @@ fn stream_stdin(
     /// How long to wait for input before letting the transport breathe.
     const IDLE_TICK: Duration = Duration::from_millis(50);
 
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    // Bounded, so a fast producer on a slow uplink still blocks in its own
+    // write to our pipe rather than piling the whole stream into memory -
+    // the backpressure the blocking read used to provide for free.
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
     let reader_running = running.clone();
     thread::spawn(move || {
         let mut buffer = [0u8; 4096];
