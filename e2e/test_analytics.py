@@ -97,7 +97,7 @@ def test_full_lifecycle_emits_the_three_events(dedicated_server, mock_posthog):
     password = "secret-password"
 
     # Broadcast: claim the room, send output, have a viewer join, exit
-    # cleanly (the delete control message, as the CLI sends on exit)
+    # cleanly (the delete control message, as older clients send on exit)
     ws = ws_connect_room(server.url, room, password)
     try:
         ws.send_binary(b"hello viewers")
@@ -191,8 +191,9 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
     ws = ws_connect_room(server.url, room, "pw")
     ws.send_binary(b"output")
     ws.recv()  # ack
-    # Drop the connection without the delete control message, like a
-    # crashed client or a dead network
+    # Close without the delete control message: what current clients do
+    # on a clean exit (the room outlives them), and also what a crashed
+    # client or a dead network looks like
     ws.close()
 
     assert poll_until(
@@ -236,12 +237,19 @@ def test_abrupt_disconnect_emits_one_broadcast_ended(dedicated_server, mock_post
     assert second["distinct_id"] == first["distinct_id"]
 
 
-def test_clean_exit_emits_exactly_one_broadcast_ended(dedicated_server, mock_posthog):
+def test_delete_then_close_emits_exactly_one_broadcast_ended(
+    dedicated_server, mock_posthog
+):
+    """`delete` reports from its own branch; the close must not repeat it.
+
+    Only older binaries still send `delete` - current clients leave the
+    room up and just close, which test_abrupt_disconnect covers - but the
+    server still honors it, and it is the one path where two places could
+    report the same segment.
+    """
     server = analytics_server(dedicated_server, mock_posthog)
     room = random_id()
 
-    # Delete (the CLI's exit path) followed by the close must not report
-    # the broadcast twice
     ws = ws_connect_room(server.url, room, "pw")
     try:
         ws.send(json.dumps({"delete": True}))

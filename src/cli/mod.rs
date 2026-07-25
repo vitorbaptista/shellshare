@@ -10,7 +10,9 @@ mod ws;
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use crate::protocol::TermSize;
 use qrcode::{render::unicode, QrCode};
@@ -286,7 +288,7 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
         // Read from stdin, tee to stdout, and stream to server. `--json`
         // owns stdout for the event protocol, so it opts out of the tee.
-        stream_stdin(transport, &running, !args.json)?;
+        stream_stdin(transport, &running, !args.json);
 
         if !args.json {
             eprintln!("End of transmission.");
@@ -367,14 +369,52 @@ fn lf_to_crlf(input: &[u8], prev_was_cr: &mut bool, out: &mut Vec<u8>) {
 /// Only the broadcast is normalized to CRLF (see `lf_to_crlf`); the tee stays
 /// verbatim so a downstream command sees exactly what was piped in and the
 /// local terminal applies its own ONLCR.
+///
+/// stdin is read on its own thread so this loop can wake on a timer instead of
+/// parking inside a blocking read. A quiet producer (`journalctl -f` on an idle
+/// unit) emits nothing for long stretches, and the transport only pings - and
+/// only retries buffered data - from `tick`. Without those pings the server
+/// declares the broadcaster dead after 90s and flips every viewer's indicator
+/// offline on a broadcast that is still perfectly live. It also makes Ctrl+C
+/// land promptly rather than waiting for the producer's next line.
 fn stream_stdin(
     mut transport: ws::Transport,
     running: &Arc<AtomicBool>,
     echo_stdout: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buffer = [0u8; 4096];
-    let mut stdout = io::stdout();
-    let mut broadcast = Vec::with_capacity(buffer.len() + buffer.len() / 8);
+) {
+    /// How long to wait for input before letting the transport breathe.
+    const IDLE_TICK: Duration = Duration::from_millis(50);
+
+    // Bounded, so a fast producer on a slow uplink still blocks in its own
+    // write to our pipe rather than piling the whole stream into memory -
+    // the backpressure the blocking read used to provide for free.
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
+    let reader_running = running.clone();
+    thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        let mut stdout = io::stdout();
+        // A read error ends the stream, same as EOF: the sender sees the
+        // dropped channel and shuts down cleanly
+        while let Ok(bytes_read) = io::stdin().read(&mut buffer) {
+            if bytes_read == 0 {
+                break; // EOF
+            }
+            let chunk = &buffer[..bytes_read];
+
+            if echo_stdout {
+                // Fire-and-forget: flush so `--follow` streams live; a dead
+                // downstream just means the local echo stops, not the broadcast.
+                let _ = stdout.write_all(chunk);
+                let _ = stdout.flush();
+            }
+
+            if tx.send(chunk.to_vec()).is_err() || !reader_running.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+    });
+
+    let mut broadcast = Vec::new();
     let mut prev_was_cr = false;
 
     loop {
@@ -382,33 +422,28 @@ fn stream_stdin(
             break;
         }
 
-        let bytes_read = io::stdin().read(&mut buffer)?;
-        if bytes_read == 0 {
-            // EOF
-            break;
-        }
-        let chunk = &buffer[..bytes_read];
-
-        if echo_stdout {
-            // Fire-and-forget: flush so `--follow` streams live; a dead
-            // downstream just means the local echo stops, not the broadcast.
-            let _ = stdout.write_all(chunk);
-            let _ = stdout.flush();
-        }
-
-        lf_to_crlf(chunk, &mut prev_was_cr, &mut broadcast);
-
         let size = get_terminal_size();
+        let result = match rx.recv_timeout(IDLE_TICK) {
+            Ok(chunk) => {
+                lf_to_crlf(&chunk, &mut prev_was_cr, &mut broadcast);
+                transport.send(&broadcast, size)
+            }
+            // Idle: keep the connection (and so the room) alive, and let
+            // the transport retry anything still buffered
+            Err(mpsc::RecvTimeoutError::Timeout) => transport.tick(size),
+            // The reader hit EOF; everything it queued has been drained
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
 
-        if let Err(e) = transport.send(&broadcast, size) {
+        if let Err(e) = result {
             eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
-            // The room belongs to someone else now; it is not ours to
-            // delete, so skip the shutdown cleanup
-            return Ok(());
+            // The room belongs to someone else now: draining our buffer
+            // into it would be someone else's output, so skip the
+            // shutdown flush entirely
+            return;
         }
     }
 
-    transport.shutdown_and_delete();
-    Ok(())
+    transport.shutdown();
 }

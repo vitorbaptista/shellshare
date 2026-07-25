@@ -8,6 +8,13 @@
 //!   kept per room for late joiners.
 //! - **Canonical names**: a [`RoomId`] is normalized at construction, so
 //!   no caller can accidentally address a phantom room.
+//! - **Rooms outlive their broadcaster**: a session ends by closing, not
+//!   by deleting, so a shared link keeps working after the command that
+//!   made it exits. TTL eviction is the only teardown left.
+//! - **Only the broadcaster postpones eviction**: [`Rooms::append`]
+//!   (frames, sizes, keepalive pings) refreshes a room's activity;
+//!   reads never do, so no amount of watching or polling can pin a
+//!   finished broadcast alive.
 //! - **Atomicity**: password, history, size, and activity live in one
 //!   entry behind one per-room lock (a sharded [`DashMap`]), so
 //!   authorization and mutation cannot race - claims, appends, and
@@ -95,7 +102,8 @@ struct Room {
     /// broadcast time instead of overlapping spans measured from the
     /// claim. `None` while no broadcaster is attached.
     live_since: Option<Instant>,
-    /// Last activity (broadcast or viewer join), drives eviction
+    /// Last activity, which drives eviction. Only [`Rooms::append`]
+    /// refreshes it - see [`Rooms::snapshot`] for why reads must not
     last_activity: Instant,
     /// Ingest connections currently attached. More than one is possible
     /// around a client reconnect (the stale loop briefly overlaps the
@@ -167,16 +175,59 @@ impl Rooms {
         Ok(appended)
     }
 
-    /// Catch-up data for a joining viewer; refreshes the room's activity.
-    /// Returns `None` (and creates nothing) when the room does not exist.
+    /// Catch-up data for a joining viewer or a one-shot `/r/:room.bin`
+    /// read. Returns `None` (and creates nothing) when the room does not
+    /// exist.
+    ///
+    /// Reading deliberately does NOT refresh the room's activity. A room
+    /// outlives its broadcaster, so TTL eviction is the only teardown
+    /// left, and only the broadcaster may postpone it: otherwise a
+    /// forgotten browser tab reconnecting, or an agent polling the
+    /// snapshot, would pin a finished broadcast forever. A room whose
+    /// broadcast is still live is kept alive by that broadcaster's own
+    /// frames and 30s keepalive pings.
     pub fn snapshot(&self, room: &RoomId) -> Option<RoomSnapshot> {
-        let mut entry = self.inner.get_mut(room)?;
-        entry.last_activity = Instant::now();
-        Some(RoomSnapshot {
+        self.inner.get(room).map(|entry| RoomSnapshot {
             size: entry.size.clone(),
             history: entry.messages.accumulated(),
             broadcasting: entry.broadcasters > 0,
         })
+    }
+
+    /// Clear a room's history while keeping its claim.
+    ///
+    /// Unlike [`Rooms::delete`], the room, its password, its size, and
+    /// its live segment survive: the caller is a broadcaster starting a
+    /// fresh session on a name it already owns. A room that does not
+    /// exist is already clear, so that succeeds; a password mismatch is
+    /// [`Unauthorized`].
+    ///
+    /// Only the room's SOLE broadcaster may clear it. The frame carries
+    /// no ordering guarantee across connections, and both ways that can
+    /// go wrong need a second one attached: a previous session's ingest
+    /// task still draining its last frames would append them after the
+    /// clear, and a stalled first connection's late reset would wipe
+    /// what its own reconnect already stored. Skipping the clear
+    /// degrades to appending; the alternative destroys history.
+    ///
+    /// The size survives: the client re-sends its own on this fresh
+    /// connection anyway, and a viewer that joins with none never learns
+    /// the stream is encrypted (the flag rides inside the size message),
+    /// so it would render raw ciphertext instead of reporting the
+    /// missing key.
+    pub fn reset(&self, room: &RoomId, secret: &str) -> Result<(), Unauthorized> {
+        let Some(mut entry) = self.inner.get_mut(room) else {
+            return Ok(());
+        };
+        if entry.password != secret {
+            return Err(Unauthorized);
+        }
+        if entry.broadcasters > 1 {
+            return Ok(());
+        }
+        entry.messages = MessageHistory::new(MAX_HISTORY_MESSAGES);
+        entry.last_activity = Instant::now();
+        Ok(())
     }
 
     /// Record that a broadcaster's ingest connection attached to the
@@ -256,7 +307,12 @@ impl Rooms {
         // make it underflow
         let mut evicted = 0;
         self.inner.retain(|_, room| {
-            let keep = now.duration_since(room.last_activity) <= ttl;
+            // An attached broadcaster IS the room's liveness: a quiet
+            // producer refreshes activity only via 30s keepalive pings,
+            // which any shorter TTL outruns. A dead connection is
+            // detached by the ingest idle timeout first, and only then
+            // does its room start aging.
+            let keep = room.broadcasters > 0 || now.duration_since(room.last_activity) <= ttl;
             if !keep {
                 evicted += 1;
             }

@@ -632,9 +632,11 @@ fn total_viewers(state: &AppState, room: &str) -> usize {
 ///
 /// The fast path: binary frames carry raw terminal bytes; text frames
 /// carry JSON control messages (`{"size": {...}}` to resize,
-/// `{"delete": true}` to delete the room on exit). The room is claimed -
-/// or the password verified - at upgrade time, so an unauthorized client
-/// is rejected with 401 before the connection is established.
+/// `{"reset": true}` to clear a reused room's history at the start of a
+/// new session, `{"delete": true}` to delete the room - the retired exit
+/// path older clients still send). The room is claimed - or the password
+/// verified - at upgrade time, so an unauthorized client is rejected
+/// with 401 before the connection is established.
 async fn ws_ingest_handler(
     Path(room_path): Path<String>,
     headers: HeaderMap,
@@ -731,6 +733,20 @@ async fn ws_ingest_loop(
                             .broadcast_ended(&secret, room_id.as_str(), duration);
                     }
                     break;
+                }
+                if body.get("reset").and_then(serde_json::Value::as_bool) == Some(true) {
+                    // A returning broadcaster's first connection on a room
+                    // it still owns: drop the previous session's history so
+                    // the reused name starts clean. Tabs already open are
+                    // mid-render of the old session, so they get the same
+                    // clear the reconnect path runs
+                    if state.rooms.reset(&room_id, &secret).is_err() {
+                        break;
+                    }
+                    state
+                        .viewers
+                        .send_control(room_id.as_str(), "{\"reset\":true}");
+                    continue;
                 }
                 let size = body
                     .get("size")

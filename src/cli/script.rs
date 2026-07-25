@@ -254,8 +254,9 @@ pub fn run_script_mode(
             };
 
             if let Err(e) = result {
-                // The room belongs to someone else now; it is not ours
-                // to delete, so stop without the shutdown cleanup
+                // The room belongs to someone else now: our buffered
+                // output is not theirs to receive, so stop without the
+                // shutdown flush
                 eprintln!("\r\nERROR: {e}");
                 eprintln!("\rERROR: Exit shellshare and try again later.");
                 running_http.store(false, Ordering::SeqCst);
@@ -263,9 +264,9 @@ pub fn run_script_mode(
             }
         }
 
-        // Normal end (shell exit or Ctrl+C): flush pending output and
-        // delete the room
-        transport.shutdown_and_delete();
+        // Normal end (shell exit or Ctrl+C): flush pending output, then
+        // close - the room stays up so the link keeps working
+        transport.shutdown();
     });
 
     // Spawn PTY reader thread - reads from PTY, displays locally, sends to channel

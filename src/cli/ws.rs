@@ -1,7 +1,11 @@
 //! WebSocket transport for the broadcasting client.
 //!
 //! Terminal output travels as binary frames of raw bytes; control
-//! messages (`size`, `delete`) travel as JSON text frames.
+//! messages (`size`, `reset`) travel as JSON text frames. A session ends
+//! by flushing and closing, not by deleting: the room and its history
+//! stay on the server until it goes idle, so a short command still
+//! leaves a working link. (The server still honors the `delete` frame
+//! this client no longer sends - older binaries are still out there.)
 //!
 //! Reliability model: after the initial connect succeeds, `send` and
 //! `tick` never fail on network errors. Output is held in a bounded
@@ -147,6 +151,14 @@ impl Transport {
             last_ping: Instant::now(),
         };
         transport.socket = Some(transport.handshake()?);
+        // A room outlives its broadcaster, and the default password is
+        // this machine's id, so rerunning a named room re-claims one
+        // that still holds the previous session. Clear it here - on the
+        // FIRST connection only, never in `handshake`'s reconnect path,
+        // where wiping history would destroy exactly what replay is
+        // rebuilding. Best effort: a failed write means the connection
+        // died, and the reconnect carries on without the reset.
+        let _ = transport.write(Message::text(json!({"reset": true}).to_string()));
         Ok(transport)
     }
 
@@ -212,10 +224,13 @@ impl Transport {
         result
     }
 
-    /// Best-effort room deletion and close, for the end of a session.
-    /// Pending output is flushed - and its acknowledgments awaited,
-    /// briefly - so viewers see the final screen.
-    pub fn shutdown_and_delete(&mut self) {
+    /// Flush and close at the end of a session, leaving the room behind.
+    ///
+    /// Pending output is written and its acknowledgments awaited,
+    /// briefly, because nothing will retransmit it: the room outlives
+    /// this process (until the server's inactivity TTL evicts it), so
+    /// the tail of the output has to land before the socket closes.
+    pub fn shutdown(&mut self) {
         let _ = self.flush();
         let deadline = Instant::now() + SHUTDOWN_DRAIN;
         while self.socket.is_some() && !self.unacked.is_empty() && Instant::now() < deadline {
@@ -223,7 +238,6 @@ impl Transport {
             self.drain_acks();
         }
         if let Some(socket) = self.socket.as_mut() {
-            let _ = socket.send(Message::text(json!({"delete": true}).to_string()));
             let _ = socket.close(None);
         }
         self.socket = None;

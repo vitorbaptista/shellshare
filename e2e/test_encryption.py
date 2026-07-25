@@ -68,9 +68,9 @@ def run_cli(message, room, password, timeout=30, encrypt=True):
 def start_broadcaster(room, password, first_message, encrypt=True):
     """Start a long-lived broadcast and deliver one message.
 
-    The broadcaster must stay alive while viewers join: the room (and
-    its history) is deleted when the CLI exits. Returns (proc,
-    share_url); callers must finish_broadcaster() it.
+    The broadcaster stays alive so viewers join a live session rather
+    than reading history. Returns (proc, share_url); callers must
+    finish_broadcaster() it.
     """
     args = CLI_COMMAND + ["-s", SERVER_URL, "-r", room, "-W", password]
     if not encrypt:

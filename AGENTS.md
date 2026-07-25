@@ -43,6 +43,10 @@ shellshare exec --json -- npm test
 command's exit code (a signal-killed command reports exit code 1). Note
 the `--` separator before the command.
 
+This works for commands that finish immediately, too — `dmesg | shellshare
+--json` leaves a working link after `dmesg` exits. You do not need to hold
+the process open with a `sleep`.
+
 **Stream a log or pipe** (no PTY; a non-TTY stdin auto-detects this and reads
 stdin until EOF):
 
@@ -116,8 +120,17 @@ Ready-to-run reference decoders (Node, zero install) are in
 - One-way only: viewers cannot send input to the terminal.
 - The share link is unguessable (18 random alphanumerics) but public —
   anyone with the link can watch. Don't broadcast secrets.
-- Broadcasts are live-only and not recorded; rooms are deleted when the
-  broadcast ends (or after a period of inactivity).
+- The link outlives the command. When shellshare exits, the room and its
+  recent history stay on the server until it goes idle (6 hours on
+  shellshare.net), so a command that finishes in a second still leaves a
+  link the user can open. Rerunning the same room name starts a fresh
+  session — the previous run's output is cleared, not appended to.
+- The room name stays claimed until the room goes idle, so a name you
+  used is yours (and only yours) for that whole window. Another machine
+  asking for it gets an authorization error, not a shared room.
+- `shellshare serve` and `serve --tunnel` are the exception: they host
+  the server inside the same process, so their links do die when the
+  command finishes.
 - Late joiners see recent history, so the page is not blank if the user
   opens the link mid-run.
 - Transient network failures are handled: output is buffered and replayed
