@@ -10,7 +10,9 @@ mod ws;
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use crate::protocol::TermSize;
 use qrcode::{render::unicode, QrCode};
@@ -367,14 +369,53 @@ fn lf_to_crlf(input: &[u8], prev_was_cr: &mut bool, out: &mut Vec<u8>) {
 /// Only the broadcast is normalized to CRLF (see `lf_to_crlf`); the tee stays
 /// verbatim so a downstream command sees exactly what was piped in and the
 /// local terminal applies its own ONLCR.
+///
+/// stdin is read on its own thread so this loop can wake on a timer instead of
+/// parking inside a blocking read. A quiet producer (`journalctl -f` on an idle
+/// unit) would otherwise emit nothing for hours, and the transport only pings -
+/// and only retries buffered data - from `tick`. Without those pings the server
+/// declares the broadcaster dead after 90s, and nothing refreshes the room's
+/// activity, so a live-but-quiet broadcast is eventually TTL-evicted out from
+/// under itself. It also makes Ctrl+C land promptly rather than waiting for the
+/// producer's next line.
 fn stream_stdin(
     mut transport: ws::Transport,
     running: &Arc<AtomicBool>,
     echo_stdout: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buffer = [0u8; 4096];
-    let mut stdout = io::stdout();
-    let mut broadcast = Vec::with_capacity(buffer.len() + buffer.len() / 8);
+    /// How long to wait for input before letting the transport breathe.
+    const IDLE_TICK: Duration = Duration::from_millis(50);
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let reader_running = running.clone();
+    thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        let mut stdout = io::stdout();
+        loop {
+            // A read error ends the stream, same as EOF: the sender sees
+            // the dropped channel and shuts down cleanly
+            let Ok(bytes_read) = io::stdin().read(&mut buffer) else {
+                break;
+            };
+            if bytes_read == 0 {
+                break; // EOF
+            }
+            let chunk = &buffer[..bytes_read];
+
+            if echo_stdout {
+                // Fire-and-forget: flush so `--follow` streams live; a dead
+                // downstream just means the local echo stops, not the broadcast.
+                let _ = stdout.write_all(chunk);
+                let _ = stdout.flush();
+            }
+
+            if tx.send(chunk.to_vec()).is_err() || !reader_running.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+    });
+
+    let mut broadcast = Vec::new();
     let mut prev_was_cr = false;
 
     loop {
@@ -382,25 +423,20 @@ fn stream_stdin(
             break;
         }
 
-        let bytes_read = io::stdin().read(&mut buffer)?;
-        if bytes_read == 0 {
-            // EOF
-            break;
-        }
-        let chunk = &buffer[..bytes_read];
-
-        if echo_stdout {
-            // Fire-and-forget: flush so `--follow` streams live; a dead
-            // downstream just means the local echo stops, not the broadcast.
-            let _ = stdout.write_all(chunk);
-            let _ = stdout.flush();
-        }
-
-        lf_to_crlf(chunk, &mut prev_was_cr, &mut broadcast);
-
         let size = get_terminal_size();
+        let result = match rx.recv_timeout(IDLE_TICK) {
+            Ok(chunk) => {
+                lf_to_crlf(&chunk, &mut prev_was_cr, &mut broadcast);
+                transport.send(&broadcast, size)
+            }
+            // Idle: keep the connection (and so the room) alive, and let
+            // the transport retry anything still buffered
+            Err(mpsc::RecvTimeoutError::Timeout) => transport.tick(size),
+            // The reader hit EOF; everything it queued has been drained
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
 
-        if let Err(e) = transport.send(&broadcast, size) {
+        if let Err(e) = result {
             eprintln!("\r\nERROR: {e}");
             eprintln!("\rERROR: Exit shellshare and try again later.");
             // The room belongs to someone else now: draining our buffer
