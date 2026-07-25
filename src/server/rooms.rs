@@ -8,6 +8,13 @@
 //!   kept per room for late joiners.
 //! - **Canonical names**: a [`RoomId`] is normalized at construction, so
 //!   no caller can accidentally address a phantom room.
+//! - **Rooms outlive their broadcaster**: a session ends by closing, not
+//!   by deleting, so a shared link keeps working after the command that
+//!   made it exits. TTL eviction is the only teardown left.
+//! - **Only the broadcaster postpones eviction**: [`Rooms::append`]
+//!   (frames, sizes, keepalive pings) refreshes a room's activity;
+//!   reads never do, so no amount of watching or polling can pin a
+//!   finished broadcast alive.
 //! - **Atomicity**: password, history, size, and activity live in one
 //!   entry behind one per-room lock (a sharded [`DashMap`]), so
 //!   authorization and mutation cannot race - claims, appends, and
@@ -205,9 +212,12 @@ impl Rooms {
     /// what its own reconnect already stored. Skipping the clear
     /// degrades to appending; the alternative destroys history.
     ///
-    /// The size is deliberately kept: another connection sharing this
-    /// room re-sends its size only on ITS next reconnect, and the size
-    /// message is what tells viewers the stream is encrypted.
+    /// The size is deliberately kept: the resetting client re-sends its
+    /// own size on this fresh connection anyway, so clearing it would
+    /// only open a window where a joining viewer gets none - and a
+    /// viewer with no size never learns the stream is encrypted (the
+    /// flag rides inside the size message), so it would render raw
+    /// ciphertext instead of saying the key is missing.
     pub fn reset(&self, room: &RoomId, secret: &str) -> Result<(), Unauthorized> {
         let Some(mut entry) = self.inner.get_mut(room) else {
             return Ok(());
@@ -300,7 +310,16 @@ impl Rooms {
         // make it underflow
         let mut evicted = 0;
         self.inner.retain(|_, room| {
-            let keep = now.duration_since(room.last_activity) <= ttl;
+            // An attached broadcaster IS the room's liveness, so a live
+            // broadcast is never evicted however quiet it goes. Relying
+            // on activity alone would mean a producer that says nothing
+            // for longer than the TTL (`journalctl -f` on an idle unit)
+            // loses its room mid-broadcast - keepalive pings only refresh
+            // it every 30s, which a shorter TTL outruns. A connection
+            // that actually died is detached by the ingest idle timeout
+            // first, and only then does the room start aging.
+            let keep = room.broadcasters > 0
+                || now.duration_since(room.last_activity) <= ttl;
             if !keep {
                 evicted += 1;
             }
