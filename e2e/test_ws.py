@@ -21,6 +21,8 @@ from playwright.sync_api import sync_playwright
 
 import os
 
+import requests
+
 from conftest import (
     CLI_COMMAND,
     SERVER_URL,
@@ -32,6 +34,7 @@ from conftest import (
     random_id,
     wait_for_content,
     wait_for_server,
+    ws_connect_room,
 )
 
 
@@ -130,6 +133,40 @@ class TestWsIngest:
         finally:
             late.disconnect()
         assert broadcast_message(SERVER_URL, unique_room, "another-password", "x") == 200
+
+    def test_history_is_bounded_by_bytes_not_just_frames(
+        self, unique_room, unique_password
+    ):
+        """A room's stored history has a memory ceiling.
+
+        Rooms outlive their broadcaster, so the server holds every room
+        broadcast within the TTL. Capping frames alone left the ceiling at
+        frames x 64KB; a byte budget bounds it regardless of how big each
+        frame is. The newest output must survive the trimming - that is
+        what a late joiner is there to see.
+        """
+        newest = f"NEWEST-{random_id()}"
+        ws = ws_connect_room(SERVER_URL, unique_room, unique_password)
+        try:
+            # 64KB is what the CLI actually coalesces up to (MAX_BATCH), and
+            # 160 of them stay under the 200-message cap, so only the byte
+            # budget can be what trims this
+            for _ in range(160):
+                ws.send_binary(b"x" * (64 * 1024))
+                ws.recv()  # ack
+            ws.send_binary(newest.encode())
+            ws.recv()
+        finally:
+            ws.close()
+
+        resp = requests.get(f"{SERVER_URL}/r/{unique_room}.bin")
+        assert resp.status_code == 200
+        assert newest.encode() in resp.content, "the newest output was trimmed away"
+        # The guarantee is the budget plus at most one final frame
+        assert len(resp.content) <= 4 * 1024 * 1024 + 128 * 1024, (
+            f"history kept {len(resp.content)} bytes of a 10MB broadcast; "
+            "the byte budget is not bounding it"
+        )
 
     def test_utf8_sequence_split_across_frames(self, unique_room, unique_password, socket_listener):
         # 'é' is two bytes; send one per frame. Viewers decode the stream,

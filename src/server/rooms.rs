@@ -4,8 +4,8 @@
 //!
 //! - **First-caller-wins claiming**: the first broadcast to a room name
 //!   claims it with that request's password; later requests must match.
-//! - **Bounded history**: at most [`MAX_HISTORY_MESSAGES`] messages are
-//!   kept per room for late joiners.
+//! - **Bounded history**: a room keeps at most [`MAX_HISTORY_MESSAGES`]
+//!   messages and [`MAX_HISTORY_BYTES`] bytes for late joiners.
 //! - **Canonical names**: a [`RoomId`] is normalized at construction, so
 //!   no caller can accidentally address a phantom room.
 //! - **Rooms outlive their broadcaster**: a session ends by closing, not
@@ -33,6 +33,20 @@ use std::time::{Duration, Instant};
 /// This prevents unbounded memory growth while keeping enough history
 /// for a good late-joiner experience.
 const MAX_HISTORY_MESSAGES: usize = 200;
+
+/// Memory budget for one room's history. Rooms outlive their broadcaster
+/// now, so the server holds every room broadcast within the TTL rather
+/// than just the live ones - and a message is a coalesced batch of up to
+/// 64KB, which left the per-room ceiling at 200 x 64KB ~ 12MB.
+///
+/// The floor is set by keyframes, not by taste: the client emits a
+/// full-screen redraw every 60 broadcast frames (`FRAMES_PER_KEYFRAME`,
+/// `src/cli/screen.rs`) so a late joiner can reconstruct a long-running
+/// TUI, and that only works if the newest keyframe is still in the
+/// window being replayed. A budget below 60 max-size frames could evict
+/// one before the next arrives, regressing issue #164 - so this must
+/// stay above 60 x 64KB. Keep the two in lockstep if either moves.
+const MAX_HISTORY_BYTES: usize = 4 * 1024 * 1024;
 
 /// A canonical room identifier.
 ///
@@ -92,7 +106,8 @@ pub struct RoomSnapshot {
 struct Room {
     /// The password that claimed this room
     password: String,
-    /// Message history, capped at [`MAX_HISTORY_MESSAGES`]
+    /// Message history, capped by [`MAX_HISTORY_MESSAGES`] and
+    /// [`MAX_HISTORY_BYTES`]
     messages: MessageHistory,
     /// Terminal size, forwarded verbatim to viewers
     size: Option<serde_json::Value>,
@@ -115,7 +130,7 @@ impl Room {
     fn new(password: &str) -> Self {
         Self {
             password: password.to_string(),
-            messages: MessageHistory::new(MAX_HISTORY_MESSAGES),
+            messages: MessageHistory::new(MAX_HISTORY_MESSAGES, MAX_HISTORY_BYTES),
             size: None,
             live_since: None,
             last_activity: Instant::now(),
@@ -225,7 +240,7 @@ impl Rooms {
         if entry.broadcasters > 1 {
             return Ok(());
         }
-        entry.messages = MessageHistory::new(MAX_HISTORY_MESSAGES);
+        entry.messages = MessageHistory::new(MAX_HISTORY_MESSAGES, MAX_HISTORY_BYTES);
         entry.last_activity = Instant::now();
         Ok(())
     }
