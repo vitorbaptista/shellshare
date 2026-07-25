@@ -42,11 +42,18 @@ const MAX_HISTORY_MESSAGES: usize = 200;
 /// The floor is set by keyframes, not by taste: the client emits a
 /// full-screen redraw every 60 broadcast frames (`FRAMES_PER_KEYFRAME`,
 /// `src/cli/screen.rs`) so a late joiner can reconstruct a long-running
-/// TUI, and that only works if the newest keyframe is still in the
-/// window being replayed. A budget below 60 max-size frames could evict
-/// one before the next arrives, regressing issue #164 - so this must
-/// stay above 60 x 64KB. Keep the two in lockstep if either moves.
-const MAX_HISTORY_BYTES: usize = 4 * 1024 * 1024;
+/// TUI, and that only works while the newest keyframe is still inside
+/// the replayed window. The 59 frames that can follow it are up to
+/// 69,631 bytes each (`MAX_BATCH` is checked before a read of up to
+/// 4096 extends the batch, so the cap is exceeded by design), which is
+/// ~4.1MB before the keyframe itself is counted.
+///
+/// 8MB therefore leaves ~3.9MB of headroom for the keyframe: ample for a
+/// text TUI (btop at 400x100 truecolor dumps ~47KB) and enough for the
+/// per-cell truecolor extreme (a full-screen image render is ~1.4MB at
+/// that size). Frame count, batch size, and keyframe cadence all feed
+/// this number - if any of them moves, redo the arithmetic.
+const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Minimum lifetime for a room with a broadcaster attached, used only
 /// when it exceeds the configured TTL - which in practice means a TTL

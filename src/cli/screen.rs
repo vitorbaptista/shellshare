@@ -17,8 +17,8 @@ use crate::protocol::TermSize;
 /// Emit a keyframe at most once per this many broadcast frames. Kept well below
 /// the server's history bounds (`MAX_HISTORY_MESSAGES` and `MAX_HISTORY_BYTES`,
 /// `src/server/rooms.rs`) so a recent keyframe survives in the window a late
-/// joiner replays - the byte budget is sized from this number, so moving either
-/// means checking the other. Note this counts *fed frames*, not stored history
+/// joiner replays - the byte budget is derived from this number and the maximum
+/// frame size, so moving any of them means redoing that arithmetic. Note this counts *fed frames*, not stored history
 /// messages - the sender coalesces reads, so one fed frame need not be one
 /// history message; the wide margin absorbs that.
 const FRAMES_PER_KEYFRAME: u32 = 60;

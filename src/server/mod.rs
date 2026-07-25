@@ -665,8 +665,22 @@ async fn ws_ingest_handler(
         .on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret, claimed))
 }
 
-/// Largest ingest frame accepted, well above the client's 64KB batch.
+/// Largest ingest frame accepted. Must stay >= the client's
+/// `MAX_BUFFERED_BYTES` (`src/cli/ws.rs`), which is the largest chunk it
+/// will ever hold: a chunk the client keeps but the server refuses sits
+/// at the head of its replay buffer and is rewritten on every reconnect,
+/// so nothing behind it is ever delivered. They are equal today; lower
+/// this, or raise that, and the two must move together.
 const MAX_INGEST_FRAME: usize = 1024 * 1024;
+
+/// Largest control (text) frame accepted. Control messages are a few
+/// hundred bytes; the cap exists because the `size` value is stored
+/// verbatim for the room's whole life and re-sent to every viewer on
+/// connect - outside the history budget. Without a bound, one bloated
+/// `size` (the protocol only requires that `cols` and `rows` be present)
+/// pins megabytes per room, far more than the history it sits beside,
+/// since a parsed `serde_json::Value` costs several times its wire size.
+const MAX_CONTROL_FRAME: usize = 4 * 1024;
 
 /// How long the ingest loop waits for ANY frame before declaring the
 /// broadcaster dead. The client pings every 30s even when idle, so only
@@ -728,6 +742,16 @@ async fn ws_ingest_loop(
                     received_bytes += frame_len;
                 }
                 (result, true)
+            }
+            WsMessage::Text(text) if text.len() > MAX_CONTROL_FRAME => {
+                warn!(
+                    "WS ingest for room {:?}: {} byte control frame over the {} cap; ignoring",
+                    room_id,
+                    text.len(),
+                    MAX_CONTROL_FRAME
+                );
+                // Still proof the peer is alive, so the room stays fresh
+                (state.rooms.append(&room_id, &secret, None, None).map(|_| ()), false)
             }
             WsMessage::Text(text) => {
                 let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
