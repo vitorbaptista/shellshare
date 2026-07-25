@@ -44,15 +44,17 @@ const MAX_HISTORY_MESSAGES: usize = 200;
 /// `src/cli/screen.rs`) so a late joiner can reconstruct a long-running
 /// TUI, and that only works while the newest keyframe is still inside
 /// the replayed window. The 59 frames that can follow it are up to
-/// 69,631 bytes each (`MAX_BATCH` is checked before a read of up to
-/// 4096 extends the batch, so the cap is exceeded by design), which is
-/// ~4.1MB before the keyframe itself is counted.
+/// 69,631 bytes of terminal output each (`MAX_BATCH` is checked before a
+/// read of up to 4096 extends the batch, so the cap is exceeded by
+/// design), plus a 32-byte record header when encrypted - ~4.1MB before
+/// the keyframe itself is counted.
 ///
-/// 8MB therefore leaves ~3.9MB of headroom for the keyframe: ample for a
-/// text TUI (btop at 400x100 truecolor dumps ~47KB) and enough for the
-/// per-cell truecolor extreme (a full-screen image render is ~1.4MB at
-/// that size). Frame count, batch size, and keyframe cadence all feed
-/// this number - if any of them moves, redo the arithmetic.
+/// 8MB therefore leaves ~4.2MB of headroom, and no keyframe can exceed
+/// 1MB: the client drops any chunk over its own replay-buffer cap before
+/// sending, and the ingest handler would refuse it anyway. So the
+/// guarantee holds with room to spare (a text TUI's keyframe measures
+/// ~47KB). Frame count, batch size, and keyframe cadence all feed this
+/// number - if any of them moves, redo the arithmetic.
 const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Minimum lifetime for a room with a broadcaster attached, used only

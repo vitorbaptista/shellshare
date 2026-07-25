@@ -33,6 +33,7 @@ from conftest import (
     parse_share_key,
     random_id,
     wait_for_content,
+    poll_until,
     wait_for_server,
     ws_connect_room,
 )
@@ -149,8 +150,9 @@ class TestWsIngest:
         keeper = f"KEEPER-{random_id()}"
         ws = ws_connect_room(SERVER_URL, unique_room, unique_password)
         try:
-            # 69,631 bytes is the CLI's real maximum frame: MAX_BATCH is
-            # checked before a 4096-byte read extends the batch. 180 of
+            # 69,631 bytes is the CLI's real maximum of terminal output
+            # per frame: MAX_BATCH is checked before a 4096-byte read
+            # extends the batch. 180 of
             # them stay under the 200-message cap, so only the byte budget
             # can be what trims this
             for _ in range(180):
@@ -205,12 +207,17 @@ class TestWsIngest:
             except Exception:
                 pass
 
+        # Polled rather than read once: the only thing ordering the
+        # server's handling of that frame before this read is the close
+        # handshake, and a close that times out would silently turn this
+        # into a race the unfixed server could win
+        assert poll_until(
+            lambda: b"zzzz" in requests.get(f"{SERVER_URL}/r/{unique_room}.bin").content,
+            timeout=2,
+        ) is False, "an over-cap frame was stored"
         resp = requests.get(f"{SERVER_URL}/r/{unique_room}.bin")
         assert resp.status_code == 200
         assert marker.encode() in resp.content, "the room lost what it had"
-        assert b"zzzz" not in resp.content, (
-            f"an over-cap frame was stored ({len(resp.content)} bytes of history)"
-        )
 
     def test_utf8_sequence_split_across_frames(self, unique_room, unique_password, socket_listener):
         # 'é' is two bytes; send one per frame. Viewers decode the stream,
