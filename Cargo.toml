@@ -59,11 +59,12 @@ rand = "0.8"
 # PTY for script mode (CLI)
 portable-pty = "0.8"
 
-# Ctrl+C handling (CLI)
-ctrlc = { version = "3", features = ["termination"] }
+# Ctrl+C handling (CLI). Unix goes through signal-hook, which can tell SIGINT
+# apart from SIGTERM/SIGHUP - see `install_signal_handlers`. ctrlc is the
+# Windows-only fallback (below).
+signal-hook = "0.4.3"
 libc = "0.2.180"
 term_size = "0.3.2"
-signal-hook = "0.4.3"
 hex = "0.4.3"
 tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
 bytes = "1.11.1"
@@ -78,6 +79,10 @@ dashmap = "6.2.1"
 futures-util = { version = "0.3.32", default-features = false, features = ["std", "sink"] }
 qrcode = { version = "0.14.1", default-features = false }
 avt = "0.16.0"
+
+[target.'cfg(not(unix))'.dependencies]
+# Console Ctrl+C, where there are no POSIX signals to distinguish
+ctrlc = "3"
 
 [profile.release]
 lto = true

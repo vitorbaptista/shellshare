@@ -12,7 +12,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::protocol::TermSize;
 use qrcode::{render::unicode, QrCode};
@@ -256,13 +256,11 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     let transport =
         ws::Transport::connect(&server, &room_path, &password, size, args.theme, cipher)?;
 
-    // Ctrl+C only flips the flag; the sending thread owns the transport
-    // and performs cleanup (flush, room deletion) when it stops
+    // A termination signal only flips flags; the loops below own the
+    // transport and flush on their way out
     let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-    ctrlc::set_handler(move || {
-        running_clone.store(false, Ordering::SeqCst);
-    })?;
+    let forced = Arc::new(AtomicBool::new(false));
+    install_signal_handlers(&running, &forced)?;
 
     if args.json {
         emit_json(&serde_json::json!({
@@ -288,7 +286,7 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
         // Read from stdin, tee to stdout, and stream to server. `--json`
         // owns stdout for the event protocol, so it opts out of the tee.
-        stream_stdin(transport, &running, !args.json);
+        stream_stdin(transport, &running, &forced, !args.json);
 
         if !args.json {
             eprintln!("End of transmission.");
@@ -339,6 +337,62 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     Ok(exit_code)
 }
 
+/// Install the process-wide termination handlers.
+///
+/// Ctrl+C is the odd one out. The terminal delivers SIGINT to the whole
+/// foreground process group, so in a pipe the producer is dying of the same
+/// signal and its last bytes are still worth relaying - `stream_stdin` keeps
+/// draining and only a second press cuts that short. The other two stop at
+/// once, which is what all three did before the drain existed: SIGTERM
+/// arrives alone (a supervisor, `kill`), so there is nobody to wait for,
+/// and waiting would only lose the flush to the follow-up SIGKILL. SIGHUP
+/// *is* group-delivered like SIGINT, but it means the terminal is gone - so
+/// nobody is watching the link, and the second press that escapes a drain
+/// could never be typed.
+///
+/// Note that a second SIGINT only arms the force-quit if it is a distinct
+/// delivery: signals are not queued, so two arriving within the same
+/// microseconds collapse into one. A keyboard is milliseconds apart, but a
+/// programmatic sender should leave a gap.
+#[cfg(unix)]
+fn install_signal_handlers(
+    running: &Arc<AtomicBool>,
+    forced: &Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    use signal_hook::iterator::Signals;
+
+    let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP])?;
+    let running = running.clone();
+    let forced = forced.clone();
+    thread::spawn(move || {
+        for signal in signals.forever() {
+            let already_stopping = !running.swap(false, Ordering::SeqCst);
+            if already_stopping || signal != SIGINT {
+                forced.store(true, Ordering::SeqCst);
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Windows delivers Ctrl+C to every process attached to the console, so it
+/// gets the same drain-then-force treatment as SIGINT.
+#[cfg(not(unix))]
+fn install_signal_handlers(
+    running: &Arc<AtomicBool>,
+    forced: &Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let running = running.clone();
+    let forced = forced.clone();
+    ctrlc::set_handler(move || {
+        if !running.swap(false, Ordering::SeqCst) {
+            forced.store(true, Ordering::SeqCst);
+        }
+    })?;
+    Ok(())
+}
+
 /// Translate lone LF into CRLF, writing the result into `out`.
 ///
 /// A raw pipe delivers a log's Unix `\n` line endings, but the viewer is a
@@ -375,30 +429,44 @@ fn lf_to_crlf(input: &[u8], prev_was_cr: &mut bool, out: &mut Vec<u8>) {
 /// unit) emits nothing for long stretches, and the transport only pings - and
 /// only retries buffered data - from `tick`. Without those pings the server
 /// declares the broadcaster dead after 90s and flips every viewer's indicator
-/// offline on a broadcast that is still perfectly live. It also makes Ctrl+C
-/// land promptly rather than waiting for the producer's next line.
+/// offline on a broadcast that is still perfectly live. It also keeps a drain
+/// responsive: a second Ctrl+C lands within a tick instead of after the
+/// producer's next line.
 fn stream_stdin(
     mut transport: ws::Transport,
-    running: &Arc<AtomicBool>,
+    running: &AtomicBool,
+    forced: &AtomicBool,
     echo_stdout: bool,
 ) {
     /// How long to wait for input before letting the transport breathe.
     const IDLE_TICK: Duration = Duration::from_millis(50);
+    /// How long a drain runs before it explains the wait. A producer that
+    /// stops instantly stays silent; anything with children to reap (honcho
+    /// takes ~1.5s, compose longer) will trip it, which is fine - that is
+    /// exactly when a user starts wondering whether Ctrl+C did anything.
+    const DRAIN_HINT_DELAY: Duration = Duration::from_secs(1);
 
     // Bounded, so a fast producer on a slow uplink still blocks in its own
     // write to our pipe rather than piling the whole stream into memory -
     // the backpressure the blocking read used to provide for free.
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
-    let reader_running = running.clone();
     thread::spawn(move || {
         let mut buffer = [0u8; 4096];
         let mut stdout = io::stdout();
-        // A read error ends the stream, same as EOF: the sender sees the
-        // dropped channel and shuts down cleanly
-        while let Ok(bytes_read) = io::stdin().read(&mut buffer) {
-            if bytes_read == 0 {
-                break; // EOF
-            }
+        loop {
+            let bytes_read = match io::stdin().read(&mut buffer) {
+                Ok(0) => break, // EOF
+                Ok(bytes_read) => bytes_read,
+                // Defensive: signal-hook registers with SA_RESTART, so the
+                // kernel resumes this read and an interrupted one never
+                // surfaces here. If that ever changes, treating it as EOF
+                // would end the stream on the very signal that starts the
+                // drain, so say `continue` out loud
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                // Any other read error ends the stream, same as EOF: the
+                // sender sees the dropped channel and shuts down cleanly
+                Err(_) => break,
+            };
             let chunk = &buffer[..bytes_read];
 
             if echo_stdout {
@@ -408,7 +476,10 @@ fn stream_stdin(
                 let _ = stdout.flush();
             }
 
-            if tx.send(chunk.to_vec()).is_err() || !reader_running.load(Ordering::SeqCst) {
+            // Deliberately no `running` check: Ctrl+C starts a drain, and
+            // quitting here would discard the very bytes it waits for. A
+            // forced exit drops the receiver, which ends this thread.
+            if tx.send(chunk.to_vec()).is_err() {
                 break;
             }
         }
@@ -416,10 +487,30 @@ fn stream_stdin(
 
     let mut broadcast = Vec::new();
     let mut prev_was_cr = false;
+    let mut signalled_at: Option<Instant> = None;
+    let mut hinted = false;
 
     loop {
-        if !running.load(Ordering::SeqCst) {
+        // Only a forced exit leaves early - a second Ctrl+C, or a SIGTERM /
+        // SIGHUP, which never wait. A first Ctrl+C reached the whole
+        // pipeline, so the producer is on its way out and its last bytes are
+        // still worth relaying; EOF is the normal exit.
+        if forced.load(Ordering::SeqCst) {
             break;
+        }
+
+        // A drain with a silent producer is indistinguishable from a hang, so
+        // say what is happening - once, and only if the wait lasts long
+        // enough to be noticed.
+        if !hinted && !running.load(Ordering::SeqCst) {
+            let since = *signalled_at.get_or_insert_with(Instant::now);
+            if since.elapsed() >= DRAIN_HINT_DELAY {
+                hinted = true;
+                // Leading CR like the ERROR lines below: stream mode has no
+                // raw mode of its own, but it is routinely run inside a
+                // session that does
+                eprintln!("\rWaiting for input to finish. Press Ctrl+C again to quit now.");
+            }
         }
 
         let size = get_terminal_size();

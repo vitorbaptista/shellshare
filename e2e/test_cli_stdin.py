@@ -15,17 +15,23 @@ Test categories:
 - Argument parsing
 """
 
+import os
 import platform
 import re
+import signal
 import subprocess
+import sys
+import time
 
 import pytest
+import requests
 
 from conftest import (
     CLI_COMMAND,
     SERVER_URL,
     SocketListener,
     parse_share_key,
+    poll_until,
     random_id,
     wait_for_content,
 )
@@ -723,6 +729,225 @@ class TestEdgeCases:
                 f"Missing message: {marker}"
 
         listener.disconnect()
+
+
+# A producer that prints one line, then - on SIGINT - takes a moment to shut
+# down and prints a final line, exactly like honcho/foreman reporting
+# "process stopped (rc=)". The delay is the whole bug: an instant print lands
+# in the 64K pipe buffer before shellshare can close it, so even a CLI that
+# exits immediately would relay it and the test would prove nothing. 0.5s is
+# well above that exit (~50-100ms) and below the CLI's 1s drain hint, so this
+# test never sees the hint.
+DYING_PRODUCER = """
+import signal, sys, time
+
+def bye(_sig, _frame):
+    time.sleep(0.5)
+    print("SHUTDOWN-MARKER", flush=True)
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, bye)
+print("LIVE-MARKER", flush=True)
+while True:
+    time.sleep(0.05)
+"""
+
+# A producer that cannot be interrupted at all, so a drain would never end.
+STUCK_PRODUCER = """
+import signal, time
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+print("LIVE-MARKER", flush=True)
+while True:
+    time.sleep(0.05)
+"""
+
+
+def room_bytes(room):
+    """GET /r/<room>.bin -> raw history bytes (b'' when unreadable).
+
+    Degrades instead of raising: these helpers run inside `poll_until`, where
+    a transient error should retry rather than abort the test.
+    """
+    try:
+        resp = requests.get(f"{SERVER_URL}/r/{room}.bin", timeout=5)
+    except requests.RequestException:
+        return b""
+    return resp.content if resp.status_code == 200 else b""
+
+
+def start_pipeline(producer_src, room, password):
+    """Start `python -c <producer_src> | shellshare` in one process group.
+
+    A terminal delivers Ctrl+C to the whole foreground process group, so the
+    test must too: the producer opens a new group and the CLI joins it, which
+    makes `os.killpg` an exact stand-in for the keypress. It is a new group in
+    the *same session* - `start_new_session=True` would setsid(), and
+    setpgid(2) refuses to move the CLI into a group living in another session
+    (EPERM).
+
+    Encryption is off so the test can read the room over plain HTTP instead of
+    scraping the share key out of a stderr stream it only drains at the end;
+    the drain path is independent of the cipher.
+
+    Returns (producer, cli, pgid). The caller must kill the group.
+    """
+    producer = subprocess.Popen(
+        [sys.executable, "-u", "-c", producer_src],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        preexec_fn=lambda: os.setpgid(0, 0),
+    )
+    # setpgid(0, 0) runs before exec and Popen blocks until then, so the group
+    # already exists and its id is the leader's pid.
+    pgid = producer.pid
+    try:
+        cli = subprocess.Popen(
+            CLI_COMMAND
+            + ["-s", SERVER_URL, "-r", room, "-W", password, "--disable-encryption"],
+            stdin=producer.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=lambda: os.setpgid(0, pgid),
+        )
+    except BaseException:
+        producer.kill()
+        producer.wait()
+        raise
+    # The parent must drop the read end. While it holds it, the producer never
+    # sees EPIPE when the CLI exits - precisely the failure these tests exist
+    # to catch.
+    producer.stdout.close()
+    producer.stdout = None  # so producer.communicate() handles stderr only
+    return producer, cli, pgid
+
+
+def kill_group(pgid):
+    """Best-effort teardown - the group is already gone on a passing run."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+@pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason="process groups and SIGINT are POSIX-only",
+)
+class TestStreamSignals:
+    """Signals at the end of a pipe, exactly as a terminal delivers them."""
+
+    def test_sigint_drains_producer_shutdown_output(
+        self, unique_room, unique_password
+    ):
+        """Ctrl+C must not close the pipe under a producer that is still
+        writing: shellshare keeps reading until EOF, so the producer exits
+        cleanly and its dying words are broadcast."""
+        producer, cli, pgid = start_pipeline(
+            DYING_PRODUCER, unique_room, unique_password
+        )
+        try:
+            assert poll_until(
+                lambda: b"LIVE-MARKER" in room_bytes(unique_room), timeout=15
+            ), "the producer's first line never reached the room"
+
+            os.killpg(pgid, signal.SIGINT)
+
+            cli.communicate(timeout=15)
+            assert cli.returncode == 0, "CLI did not exit cleanly"
+            _, producer_err = producer.communicate(timeout=10)
+            assert producer.returncode == 0, (
+                f"producer exited {producer.returncode}; stderr={producer_err!r}"
+            )
+            assert "BrokenPipeError" not in producer_err, (
+                f"producer hit a broken pipe: {producer_err!r}"
+            )
+            # shutdown()'s ack drain gives up after 1s, so the last frame can
+            # still be in flight when the process is reaped.
+            assert poll_until(
+                lambda: b"SHUTDOWN-MARKER" in room_bytes(unique_room), timeout=5
+            ), "the producer's shutdown output was not broadcast"
+        finally:
+            kill_group(pgid)
+            producer.wait()
+            cli.wait()
+
+    def test_second_sigint_force_quits_a_stuck_producer(
+        self, unique_room, unique_password
+    ):
+        """A producer that ignores SIGINT must not pin shellshare forever: the
+        first press starts an open-ended drain (explained on stderr), the
+        second leaves anyway."""
+        producer, cli, pgid = start_pipeline(
+            STUCK_PRODUCER, unique_room, unique_password
+        )
+        try:
+            assert poll_until(
+                lambda: b"LIVE-MARKER" in room_bytes(unique_room), timeout=15
+            ), "the producer's first line never reached the room"
+
+            os.killpg(pgid, signal.SIGINT)
+
+            # The drain is deliberately unbounded, so wait out any plausible
+            # timeout: honcho gives its own children 5s, and an implementation
+            # that gave up first would truncate exactly the shutdown output
+            # this feature exists to capture. The wait doubles as the gap that
+            # keeps the two presses from being coalesced - signals are not
+            # queued, so back-to-back SIGINTs collapse into one and the
+            # force-quit would never arm.
+            assert not poll_until(lambda: cli.poll() is not None, timeout=6), (
+                "CLI stopped draining on its own instead of waiting for EOF"
+            )
+
+            os.killpg(pgid, signal.SIGINT)
+            _, cli_err = cli.communicate(timeout=10)
+            assert cli.returncode == 0, (
+                "a second Ctrl+C did not force-quit the CLI"
+            )
+            assert "Press Ctrl+C again to quit now." in cli_err, (
+                "the drain never explained itself on stderr"
+            )
+        finally:
+            kill_group(pgid)
+            producer.wait()
+            cli.wait()
+
+    @pytest.mark.parametrize(
+        "sig", [signal.SIGTERM, signal.SIGHUP], ids=["sigterm", "sighup"]
+    )
+    def test_only_sigint_waits_for_the_producer(
+        self, sig, unique_room, unique_password
+    ):
+        """Only Ctrl+C drains. SIGTERM arrives alone, so there is nobody to
+        wait for and a wait would just lose the flush to the supervisor's
+        follow-up SIGKILL; SIGHUP means the terminal is gone, so the second
+        press that escapes a drain could never be typed. Both must still stop
+        a CLI whose producer will never close the pipe."""
+        producer, cli, pgid = start_pipeline(
+            STUCK_PRODUCER, unique_room, unique_password
+        )
+        try:
+            assert poll_until(
+                lambda: b"LIVE-MARKER" in room_bytes(unique_room), timeout=15
+            ), "the producer's first line never reached the room"
+
+            started = time.monotonic()
+            cli.send_signal(sig)  # to the CLI only, not the group
+            cli.communicate(timeout=10)
+            elapsed = time.monotonic() - started
+
+            assert cli.returncode == 0, f"signal {sig} did not stop the CLI"
+            # "At once", not merely "eventually" - a drain here is the bug.
+            # Measured ~0.1s idle and ~0.3s under heavy load, so this is a
+            # wide margin that still fails any drain-with-a-timeout.
+            assert elapsed < 3, (
+                f"signal {sig} took {elapsed:.1f}s - it waited for the producer"
+            )
+        finally:
+            kill_group(pgid)
+            producer.wait()
+            cli.wait()
 
 
 if __name__ == "__main__":
