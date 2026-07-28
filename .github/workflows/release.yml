@@ -10,16 +10,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Run E2E tests before building
+  # Gate the build on E2E, but only for tags. A push to main already runs
+  # both suites through their own workflows (e2e.yml and e2e-windows.yml
+  # trigger on `push: main` themselves), so calling them here as well ran
+  # the whole suite twice for every push - twice the wall clock, and twice
+  # the exposure to a flake, which is how the same green commit produced one
+  # red run and one passing one. A tag has to run them inline, because
+  # neither workflow triggers on tags.
   e2e-linux:
+    if: github.ref_type == 'tag'
     uses: ./.github/workflows/e2e.yml
 
   e2e-windows:
+    if: github.ref_type == 'tag'
     uses: ./.github/workflows/e2e-windows.yml
 
-  # Pass 1: Build bare binaries (no embedding) for all platforms
+  # Pass 1: Build bare binaries (no embedding) for all platforms.
+  #
+  # On a branch this is the only thing that compiles musl and x86_64 macOS,
+  # runs the embedding pass, and builds the Docker image - the E2E workflows
+  # only ever build natively for their own runner - so it stays as a smoke
+  # test that catches a cross-compile break before a tag exists to waste.
   build-bare:
     needs: [e2e-linux, e2e-windows]
+    # A skipped `needs` would skip this job by default, so decide explicitly:
+    # run unless a gate actually failed. The last clause drops the branch half
+    # of a release push - release.sh pushes main and the tag atomically, which
+    # fires two runs of this workflow, and the tag one is the one that
+    # publishes.
+    if: >-
+      ${{ !cancelled()
+          && !contains(needs.*.result, 'failure')
+          && !(github.ref_type == 'branch'
+               && startsWith(github.event.head_commit.message, 'chore: release')) }}
     strategy:
       fail-fast: false
       matrix:
