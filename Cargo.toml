@@ -1,6 +1,6 @@
 [package]
 name = "shellshare"
-version = "3.10.1"
+version = "3.10.2"
 edition = "2021"
 description = "Live terminal broadcasting - server and client"
 license = "Apache-2.0"
