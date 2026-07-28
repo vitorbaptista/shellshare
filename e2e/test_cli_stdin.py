@@ -19,8 +19,10 @@ import os
 import platform
 import re
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -29,6 +31,7 @@ import requests
 from conftest import (
     CLI_COMMAND,
     SERVER_URL,
+    SHARED_PORT,
     SocketListener,
     parse_share_key,
     poll_until,
@@ -458,8 +461,232 @@ class TestAuthorization:
         # during concurrent access (depends on implementation)
 
 
+def _room_snapshot(room):
+    """True once the room holds broadcast bytes on the shared server."""
+    response = requests.get(f"{SERVER_URL}/r/{room}.bin", timeout=5)
+    return response.status_code == 200 and bool(response.content)
+
+
 class TestErrorHandling:
     """Tests for error handling."""
+
+    def test_silent_peer_fails_instead_of_hanging(self, unique_room, unique_password):
+        """A peer that accepts TCP and never answers must not wedge the CLI.
+
+        The WebSocket handshake writes the upgrade request and then reads
+        the `101 Switching Protocols` response. Without a read timeout on
+        that read, a peer that completes the TCP connection and then goes
+        silent (a wedged server, a load balancer fronting a dead backend,
+        a tarpitting firewall) parks the CLI in `recvfrom` forever, before
+        it ever prints the share URL (issue #173).
+
+        So the connect attempt has to give up on its own, and the two
+        elapsed-time bounds are what make this test mean something. The
+        lower one rejects a vacuous pass: a connect that fails for any
+        *other* reason - a refused port, an unresolvable host, a URL
+        rejected before dialling - exits non-zero with this same message
+        too, but instantly, having never reached the read under test.
+        The upper one holds the CLI to a budget rather than to merely
+        finishing, so a handshake bounded at, say, 55s would still fail
+        here. Both are anchored on `HANDSHAKE_TIMEOUT` in
+        `src/cli/ws.rs` (10s), with room for an oversubscribed runner.
+        """
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        port = listener.getsockname()[1]
+        accepted = []
+        stop = threading.Event()
+
+        def accept_loop():
+            listener.settimeout(0.2)
+            while not stop.is_set():
+                try:
+                    # Held open, never written to: the CLI's upgrade
+                    # request is read by nobody and answered by nobody.
+                    # (The kernel would complete the TCP handshake from
+                    # the backlog anyway; accepting explicitly is what
+                    # lets the assertion below prove the CLI got that
+                    # far, on every platform.)
+                    accepted.append(listener.accept()[0])
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+
+        thread = threading.Thread(target=accept_loop, daemon=True)
+        thread.start()
+        try:
+            args = CLI_COMMAND + [
+                "-s", f"http://127.0.0.1:{port}",
+                "-r", unique_room,
+                "-W", unique_password,
+            ]
+            proc = subprocess.Popen(
+                args,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            started = time.time()
+            try:
+                _, stderr = proc.communicate(input="hello\n", timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                pytest.fail(
+                    "CLI never gave up on a peer that accepted the connection "
+                    "and never answered the WebSocket handshake"
+                )
+            elapsed = time.time() - started
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+            for conn in accepted:
+                conn.close()
+            listener.close()
+
+        assert accepted, "CLI never connected; the handshake read was never reached"
+        assert 5 < elapsed < 40, (
+            f"CLI gave up after {elapsed:.2f}s, outside the budget a 10s "
+            f"handshake timeout implies: {stderr!r}"
+        )
+        assert proc.returncode != 0, (
+            f"CLI reported success against a silent peer: {stderr}"
+        )
+        assert "error connecting to the server" in stderr, (
+            f"Expected a connect error on stderr, got: {stderr!r}"
+        )
+
+    def test_silent_peer_on_reconnect_does_not_wedge_the_session(
+        self, unique_room, unique_password
+    ):
+        """A live session whose server goes silent must still be able to end.
+
+        This is the severe half of issue #173, and it is reached only
+        after a successful connect, so the test above cannot cover it: by
+        reconnect time the CLI's signal handlers are installed, and they
+        only set atomic flags that the top of the stream loop reads. A
+        handshake blocked forever in `recvfrom` never returns to that
+        loop, so SIGINT, SIGTERM and SIGHUP were all absorbed and the
+        process needed SIGKILL - and EOF on stdin, the ordinary way a
+        stream-mode session ends, was ignored just as thoroughly.
+
+        A TCP proxy in front of the shared server plays the peer that
+        wedges mid-session: it relays until the broadcast is live, then
+        cuts the connection and answers every later one with silence.
+        Closing stdin must still end the session. (Asserting on EOF
+        rather than on a signal keeps the test meaningful on Windows,
+        where `send_signal(SIGTERM)` is an unconditional TerminateProcess
+        and would pass against any implementation.)
+        """
+        proxy = socket.socket()
+        proxy.bind(("127.0.0.1", 0))
+        proxy.listen(8)
+        proxy_port = proxy.getsockname()[1]
+        silent = threading.Event()
+        stop = threading.Event()
+        relayed = []  # sockets of the live session, cut when the peer wedges
+        stalled = []  # connections accepted after that, never answered
+
+        def cut(sock):
+            # shutdown, not just close: a pump thread is parked in recv()
+            # on this socket, and that in-flight syscall keeps the kernel
+            # side alive past close() - the FIN would not reach the CLI
+            # until something else woke the reader (its 30s keepalive
+            # ping, in practice)
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+
+        def pump(src, dst):
+            try:
+                while True:
+                    data = src.recv(65536)
+                    if not data:
+                        break
+                    dst.sendall(data)
+            except OSError:
+                pass
+
+        def accept_loop():
+            proxy.settimeout(0.2)
+            while not stop.is_set():
+                try:
+                    client = proxy.accept()[0]
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                if silent.is_set():
+                    stalled.append(client)
+                    continue
+                try:
+                    upstream = socket.create_connection(("127.0.0.1", SHARED_PORT))
+                except OSError:
+                    client.close()
+                    continue
+                relayed.extend((client, upstream))
+                for src, dst in ((client, upstream), (upstream, client)):
+                    threading.Thread(
+                        target=pump, args=(src, dst), daemon=True
+                    ).start()
+
+        thread = threading.Thread(target=accept_loop, daemon=True)
+        thread.start()
+        proc = subprocess.Popen(
+            CLI_COMMAND + [
+                "-s", f"http://127.0.0.1:{proxy_port}",
+                "-r", unique_room,
+                "-W", unique_password,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            proc.stdin.write("before the outage\n")
+            proc.stdin.flush()
+            # 200 AND non-empty: a room that does not exist yet answers
+            # 404 with a body, which a length check alone would take for
+            # a live broadcast - and cutting the connection that early
+            # kills the session's FIRST handshake instead of a reconnect
+            assert poll_until(lambda: _room_snapshot(unique_room), timeout=30), (
+                "CLI never broadcast through the proxy"
+            )
+
+            # The peer wedges: the live connection is cut, and every
+            # reconnect from here on is accepted and left unanswered
+            silent.set()
+            for sock in relayed:
+                cut(sock)
+            relayed.clear()
+            assert poll_until(lambda: bool(stalled), timeout=30), (
+                "CLI never tried to reconnect"
+            )
+            assert proc.poll() is None, "CLI exited before its session was ended"
+
+            proc.stdin.close()  # EOF: end the session
+            try:
+                proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                pytest.fail(
+                    "CLI ignored EOF while a reconnect sat blocked on a silent "
+                    "peer - the state where every termination signal is absorbed"
+                )
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+            for sock in relayed + stalled:
+                cut(sock)
+            proxy.close()
+            proc.kill()
+            proc.communicate()
 
     def test_large_input_chunked_successfully(self, unique_room, unique_password, socket_listener):
         """
