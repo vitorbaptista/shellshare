@@ -95,6 +95,11 @@ jobs:
   # Pass 2: Build with embedded binaries from Pass 1
   build-embedded:
     needs: build-bare
+    # Skipping propagates down the whole chain, not just one level: with the
+    # e2e gate skipped on a branch, this was skipped too even though
+    # build-bare had succeeded, which quietly cost the branch smoke test its
+    # embedding and Docker coverage. Decide from this job's own needs.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     strategy:
       fail-fast: false
       matrix:
@@ -193,6 +198,8 @@ jobs:
   # Build and push Docker image to GHCR
   docker:
     needs: build-embedded
+    # Same reason as build-embedded: the skip would otherwise reach this far.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
