@@ -913,17 +913,19 @@ class TestStreamSignals:
             producer.wait()
             cli.wait()
 
-    @pytest.mark.parametrize(
-        "sig", [signal.SIGTERM, signal.SIGHUP], ids=["sigterm", "sighup"]
-    )
+    # Parametrized by NAME, not by value: the decorator is evaluated at
+    # collection time, before the class-level skipif applies, and Windows has
+    # no signal.SIGHUP to look up.
+    @pytest.mark.parametrize("sig_name", ["SIGTERM", "SIGHUP"])
     def test_only_sigint_waits_for_the_producer(
-        self, sig, unique_room, unique_password
+        self, sig_name, unique_room, unique_password
     ):
         """Only Ctrl+C drains. SIGTERM arrives alone, so there is nobody to
         wait for and a wait would just lose the flush to the supervisor's
         follow-up SIGKILL; SIGHUP means the terminal is gone, so the second
         press that escapes a drain could never be typed. Both must still stop
         a CLI whose producer will never close the pipe."""
+        sig = getattr(signal, sig_name)
         producer, cli, pgid = start_pipeline(
             STUCK_PRODUCER, unique_room, unique_password
         )
@@ -937,12 +939,12 @@ class TestStreamSignals:
             cli.communicate(timeout=10)
             elapsed = time.monotonic() - started
 
-            assert cli.returncode == 0, f"signal {sig} did not stop the CLI"
+            assert cli.returncode == 0, f"{sig_name} did not stop the CLI"
             # "At once", not merely "eventually" - a drain here is the bug.
             # Measured ~0.1s idle and ~0.3s under heavy load, so this is a
             # wide margin that still fails any drain-with-a-timeout.
             assert elapsed < 3, (
-                f"signal {sig} took {elapsed:.1f}s - it waited for the producer"
+                f"{sig_name} took {elapsed:.1f}s - it waited for the producer"
             )
         finally:
             kill_group(pgid)
