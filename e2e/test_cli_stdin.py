@@ -686,7 +686,15 @@ class TestErrorHandling:
                 cut(sock)
             proxy.close()
             proc.kill()
-            proc.communicate()
+            # Closed by hand rather than through communicate(): stdin is
+            # already closed by now, and before 3.13 communicate() tries
+            # to flush it and raises ValueError for its trouble
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+            proc.wait(timeout=30)  # reap; kill() alone leaves a zombie
 
     def test_large_input_chunked_successfully(self, unique_room, unique_password, socket_listener):
         """
