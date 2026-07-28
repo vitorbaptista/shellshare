@@ -22,11 +22,12 @@ use crate::protocol::TermSize;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::io::ErrorKind;
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
-use tungstenite::client::IntoClientRequest;
-use tungstenite::http::{header, HeaderValue, StatusCode};
-use tungstenite::stream::MaybeTlsStream;
+use tungstenite::client::{uri_mode, IntoClientRequest};
+use tungstenite::handshake::HandshakeError;
+use tungstenite::http::{header, HeaderValue, StatusCode, Uri};
+use tungstenite::stream::{MaybeTlsStream, Mode};
 use tungstenite::{Bytes, Error as WsError, Message, WebSocket};
 
 /// Cap on data held for (re)delivery. When exceeded, the oldest chunks
@@ -37,6 +38,25 @@ const INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// How long shutdown may wait for the final acknowledgments.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(1);
+/// Total budget for the TCP dial, shared across every address the
+/// server's hostname resolves to (see `dial`). Ten seconds is the same
+/// bound as the write timeout below: long enough for a slow link or a
+/// cold serverless backend, short enough that a black-holed address
+/// becomes a retry rather than a wait.
+const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Budget for the whole WebSocket upgrade once connected - TLS
+/// handshake, request write and `101 Switching Protocols` response.
+/// Also ten seconds: a server that has accepted the connection but
+/// cannot finish the upgrade within it is not one worth waiting on, and
+/// the reconnect backoff will try again anyway.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Ceiling on how often a stalled upgrade is retried while it waits.
+const HANDSHAKE_POLL: Duration = Duration::from_millis(5);
+/// Floor on what a single address gets out of `DIAL_TIMEOUT`, so a name
+/// with many addresses cannot leave the first one - usually the one
+/// that will answer - too little time to complete a TCP handshake over
+/// a high-latency link.
+const MIN_DIAL_ATTEMPT: Duration = Duration::from_secs(3);
 /// Keepalive cadence. Pings refresh the room's activity server-side (so
 /// an idle-but-attached broadcast isn't TTL-evicted), keep NAT mappings
 /// alive, and turn a dead idle connection into a prompt reconnect.
@@ -379,6 +399,23 @@ impl Transport {
     /// One connection attempt. A definitive 401 is fatal; anything else
     /// arms the backoff and lets the caller try again later. On success
     /// the per-connection state (backoff, acks, size) is reset.
+    ///
+    /// The dial is done here rather than by `tungstenite::connect`,
+    /// which offers no way to bound any part of it: it resolves,
+    /// connects, writes the upgrade request and then blocks reading the
+    /// response on a socket with no timeouts at all. A peer that accepts
+    /// the connection and then says nothing parked this thread in
+    /// `recvfrom` forever, and since every termination signal only sets
+    /// a flag that a blocked thread never reads, the process needed
+    /// SIGKILL (issue #173). Now the dial is bounded by `DIAL_TIMEOUT`
+    /// and the upgrade by `HANDSHAKE_TIMEOUT`, so an unresponsive peer
+    /// is just another `Connect` error feeding the reconnect backoff.
+    ///
+    /// One thing `tungstenite::connect` did that this does not: follow
+    /// redirects. Nothing needs it - the `Location` would have to name a
+    /// `ws://` or `wss://` URL to be usable at all, and an https
+    /// redirect (what a real server in front of shellshare sends) failed
+    /// on the old path too.
     fn handshake(&mut self) -> Result<WsSocket, TransportError> {
         let result = (|| {
             let mut request = self
@@ -390,13 +427,63 @@ impl Transport {
                 .map_err(|e| TransportError::Connect(format!("invalid password: {e}")))?;
             request.headers_mut().insert(header::AUTHORIZATION, auth);
 
-            match tungstenite::connect(request) {
-                Ok((socket, _response)) => Ok(socket),
-                Err(WsError::Http(response)) if response.status() == StatusCode::UNAUTHORIZED => {
-                    Err(TransportError::Unauthorized)
+            let stream = dial(request.uri())?;
+            // Non-blocking for the upgrade, so ONE deadline covers the
+            // whole exchange rather than one deadline per syscall. A
+            // socket read timeout would bound each read separately, and
+            // every read that returns a byte restarts it: a peer
+            // trickling header bytes just under that timeout would stay
+            // inside tungstenite's parse loop for as long as its
+            // anti-DoS limits allow (512 packets, i.e. over an hour).
+            // It also covers the write side, and the TLS handshake for
+            // wss, which happen through the same stream.
+            stream
+                .set_nonblocking(true)
+                .map_err(|e| TransportError::Connect(e.to_string()))?;
+            let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+
+            // `client_tls_with_config` handles both modes: with no
+            // connector given it wraps the stream in rustls for wss and
+            // passes it through for ws, building the connector from the
+            // same webpki root store `tungstenite::connect` used.
+            let mut attempt = tungstenite::client_tls_with_config(request, stream, None, None);
+            // Long enough that a stalled peer is not polled hot, short
+            // enough that it adds nothing measurable to a local connect
+            let mut idle = Duration::from_micros(200);
+            let socket = loop {
+                match attempt {
+                    Ok((socket, _response)) => break socket,
+                    Err(HandshakeError::Failure(WsError::Http(response)))
+                        if response.status() == StatusCode::UNAUTHORIZED =>
+                    {
+                        return Err(TransportError::Unauthorized)
+                    }
+                    Err(HandshakeError::Failure(e)) => {
+                        return Err(TransportError::Connect(e.to_string()))
+                    }
+                    // Nothing to read or write yet. Every platform
+                    // reports this the same way (WSAEWOULDBLOCK
+                    // included), and the mid-handshake state owns the
+                    // socket, so giving up here closes it.
+                    Err(HandshakeError::Interrupted(mid)) => {
+                        if Instant::now() >= deadline {
+                            return Err(TransportError::Connect(format!(
+                                "no handshake response after {}s",
+                                HANDSHAKE_TIMEOUT.as_secs()
+                            )));
+                        }
+                        std::thread::sleep(idle);
+                        idle = (idle * 2).min(HANDSHAKE_POLL);
+                        attempt = mid.handshake();
+                    }
                 }
-                Err(e) => Err(TransportError::Connect(e.to_string())),
-            }
+            };
+
+            // Back to blocking: `drain_acks` owns the non-blocking reads
+            // from here on, and `write` relies on blocking sends
+            set_nonblocking(socket.get_ref(), false)
+                .map_err(|()| TransportError::Connect("cannot restore socket".into()))?;
+            Ok(socket)
         })();
 
         match result {
@@ -423,9 +510,71 @@ impl Transport {
     }
 }
 
+/// Open the TCP connection for a `ws`/`wss` URL within `DIAL_TIMEOUT`.
+///
+/// A hostname routinely resolves to several addresses - shellshare.net
+/// alone answers with two IPv4 and two IPv6 - and `connect_timeout`
+/// takes exactly one, so every candidate is tried in the resolver's
+/// order (which already encodes the OS's source-address preference).
+/// The budget is *shared*: each attempt gets an equal slice of what is
+/// left, so a black-holed IPv6 address cannot spend the time its IPv4
+/// sibling needs, and the whole dial still ends within `DIAL_TIMEOUT`.
+///
+/// Name resolution itself stays blocking - `getaddrinfo` has no timeout
+/// to give it - but it is bounded by the resolver's own retry limits,
+/// unlike the silent-peer read this function exists to bound.
+fn dial(uri: &Uri) -> Result<TcpStream, TransportError> {
+    let mode = uri_mode(uri).map_err(|e| TransportError::Connect(e.to_string()))?;
+    let host = uri
+        .host()
+        .ok_or_else(|| TransportError::Connect(format!("no host in {uri}")))?;
+    // A literal IPv6 host is bracketed in a URL; the resolver wants it bare
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    let port = uri.port_u16().unwrap_or(match mode {
+        Mode::Plain => 80,
+        Mode::Tls => 443,
+    });
+
+    let addrs: Vec<SocketAddr> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| TransportError::Connect(format!("cannot resolve {host}: {e}")))?
+        .collect();
+    let deadline = Instant::now() + DIAL_TIMEOUT;
+    let mut left = addrs.len();
+    let mut last_error = None;
+    for addr in addrs {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let slice = (remaining / u32::try_from(left).unwrap_or(u32::MAX))
+            .max(MIN_DIAL_ATTEMPT)
+            .min(remaining);
+        left -= 1;
+        if slice.is_zero() {
+            break; // out of budget (and connect_timeout rejects zero)
+        }
+        match TcpStream::connect_timeout(&addr, slice) {
+            Ok(stream) => {
+                // Broadcasts are many small frames; Nagle would only add
+                // delay, and the handshake is the first thing to profit
+                let _ = stream.set_nodelay(true);
+                return Ok(stream);
+            }
+            Err(e) => last_error = Some(e),
+        }
+    }
+    Err(TransportError::Connect(last_error.map_or_else(
+        || format!("could not connect to {host}:{port}"),
+        |e| format!("could not connect to {host}:{port}: {e}"),
+    )))
+}
+
 /// Low-latency, bounded-blocking socket options. Broadcasts are many
 /// small frames, so Nagle's algorithm would only add delay; the write
 /// timeout turns a dead connection into a reconnect instead of a hang.
+/// Nothing to undo from the handshake: it bounds itself by polling a
+/// non-blocking socket rather than by arming a socket timeout.
 fn configure_tcp(stream: &MaybeTlsStream<TcpStream>) {
     if let Some(tcp) = tcp_stream(stream) {
         let _ = tcp.set_nodelay(true);
