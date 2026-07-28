@@ -257,9 +257,12 @@ class TestTtyBroadcast:
         assert cli.wait_for_screen("Scan this QR code with your phone:"), (
             f"No QR prompt on CLI screen. Screen: {cli.screen!r}"
         )
-        assert any(ch in cli.screen for ch in "▀▄█"), (
-            f"No terminal QR block characters on CLI screen. Screen: {cli.screen!r}"
-        )
+        # Keep scraping: stdout is line-buffered on a TTY, so the prompt line
+        # lands in the PTY before the QR rows underneath it are written. A
+        # bare assert here catches the gap between the two writes.
+        assert poll_until(
+            lambda: any(ch in cli.screen for ch in "▀▄█"), timeout=10
+        ), f"No terminal QR block characters on CLI screen. Screen: {cli.screen!r}"
         cli.send("exit\n")
         cli.wait_exit()
 
