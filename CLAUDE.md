@@ -104,6 +104,20 @@ The suite is the whole safety net, but every test also costs CI minutes and main
 
 When trimming, fold any unique assertion from the test being removed into the one being kept, then verify the keeper still covers it.
 
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked on GitHub Issues (`vitorbaptista/shellshare`) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage labels, used as-is: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 # Additional instructions
 
 - When adding new dependency, always use `cargo add`
