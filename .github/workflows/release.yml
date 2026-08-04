@@ -9,6 +9,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Default for the build and test jobs, which only compile this repo's source.
+# The three jobs that publish something (docker, release, publish-npm) each
+# override this with the narrower scope they actually need - a job-level block
+# replaces this one wholesale rather than adding to it.
+permissions:
+  contents: read
+
 jobs:
   # Gate the build on E2E, but only for tags. A push to main already runs
   # both suites through their own workflows (e2e.yml and e2e-windows.yml

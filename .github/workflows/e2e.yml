@@ -9,6 +9,12 @@ on:
       - main
   workflow_call:
 
+# The suite only builds and tests this repo's own source. Naming the scope
+# here keeps a compromised third-party action (or a build script from a PR)
+# from inheriting a write-capable token.
+permissions:
+  contents: read
+
 jobs:
   e2e:
     strategy:
