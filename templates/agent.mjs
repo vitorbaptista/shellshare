@@ -104,7 +104,16 @@ if (!args.includes('--follow')) {
   // The connect snapshot is size, history, broadcasting, usersCount in that
   // order, so usersCount marks where state-on-arrival ends and live begins.
   let live = false, ending = null;
-  const stop = (msg) => { clearTimeout(ending); if (msg) die(msg); try { ws.close(); } catch {} };
+  // Exits once stdout has flushed rather than waiting for the socket to
+  // let the loop drain: a close handshake the peer never answers would
+  // otherwise hold the process open with nothing left to read. The
+  // flush callback is what keeps this from truncating its own output.
+  const stop = (msg) => {
+    clearTimeout(ending);
+    if (msg) die(msg);
+    try { ws.close(); } catch {}
+    process.stdout.write('', () => process.exit(process.exitCode ?? 0));
+  };
   ws.onopen = () => { opened = true; };
   ws.onmessage = (e) => {
     if (typeof e.data === 'string') {
