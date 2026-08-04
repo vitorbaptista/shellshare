@@ -32,3 +32,6 @@ e2e/loadgen/target/
 
 # Visual companion (brainstorming) scratch
 /.superpowers/
+
+# Claude Code worktrees
+/.claude/worktrees/
