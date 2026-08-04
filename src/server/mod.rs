@@ -889,9 +889,14 @@ async fn room_get_handler(
     match state.rooms.snapshot(&room_id) {
         Some(snapshot) => {
             let body = snapshot.history.unwrap_or_default();
+            let (noindex, value) = pages::noindex_header();
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/octet-stream")
+                // Not HTML, so it cannot carry the page's `noindex`
+                // meta tag - and it is the response that would actually
+                // hold a broadcast's bytes
+                .header(noindex, value)
                 .body(Body::from(body))
                 .unwrap()
         }

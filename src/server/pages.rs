@@ -239,7 +239,25 @@ pub async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
 /// `room_get_handler` calls it directly (after branching to the `.bin`
 /// raw-history response), so it takes a plain borrow and no extractors.
 pub fn room_page_response(headers: &HeaderMap) -> Response {
-    serve_page(room_page(), headers)
+    let mut response = serve_page(room_page(), headers);
+    let (name, value) = noindex_header();
+    response.headers_mut().insert(name, value);
+    response
+}
+
+/// `X-Robots-Tag: noindex` - keep rooms out of search indexes.
+///
+/// The directive rather than a `robots.txt` `Disallow`, because only
+/// this one says what we actually want. `Disallow` says "do not fetch",
+/// which stops a crawler from ever reading the `noindex` and so leaves a
+/// leaked room URL listable by URL alone; and telling a search crawler
+/// apart from a human's assistant opening a pasted link means naming
+/// every agent, forever. This is about the resource, not who asked.
+pub const fn noindex_header() -> (header::HeaderName, header::HeaderValue) {
+    (
+        header::HeaderName::from_static("x-robots-tag"),
+        header::HeaderValue::from_static("noindex"),
+    )
 }
 
 fn serve_page(page: &Page, request_headers: &HeaderMap) -> Response {
