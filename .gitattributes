@@ -1,0 +1,4 @@
+# Templates are embedded in the binary and served verbatim: a Windows
+# checkout must not turn the reader we hand agents, or the pages, into
+# CRLF that a Linux-built server would never emit.
+templates/** text eol=lf

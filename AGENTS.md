@@ -111,9 +111,39 @@ stream; strip ANSI escapes and fold CRLF line endings to LF for a clean
 log (the stream is terminal output, so lines end in CRLF - as a PTY
 produces - regardless of how the broadcast was fed).
 
-Ready-to-run reference decoders (Node, zero install) are in
-[`agent/`](agent/): `decrypt.mjs` (snapshot) and `follow.mjs` (live, with
-`--seconds`/`--idle`/`--until` bounds and a background-tail mode).
+You do not have to implement any of that. One reader (Node, zero
+install) does it — [`templates/agent.mjs`](templates/agent.mjs), inlined
+into [`/llms.txt`](https://shellshare.net/llms.txt) and into every room
+page. Save it as `agent.mjs` and run it:
+
+```bash
+node agent.mjs '<url>'            # the history so far, then exit
+node agent.mjs '<url>' --follow   # history, then live until it ends
+                                  # (--follow needs Node >= 22)
+```
+
+It has two modes and no other flags on purpose: it writes plain text on
+stdout, and your shell composes the rest better than options would.
+
+```bash
+timeout 60 node agent.mjs '<url>' --follow          # bound the wait
+node agent.mjs '<url>' --follow | grep -m1 'DONE'   # wait for a marker
+node agent.mjs '<url>' | tail -40                   # just the tail
+```
+
+`--follow` ends by itself when the broadcaster leaves, which is usually
+the thing you were waiting for. One caveat worth knowing: it cannot
+notice a closed pipe until it next writes, so a `grep -m1` that matches
+just before output goes quiet will not return until the broadcast ends —
+pair it with `timeout` when that matters. Exit 0 on success, 1 on a
+usage error, an unreachable server, or a key that does not match.
+
+If you have a share link, fetching it is enough on its own — the room
+page carries the reader. It lives in a `<pre>`, so `&` and `<` are HTML
+entities in the markup; anything that parses the HTML (a fetch tool that
+returns text or markdown, a browser) hands you the code already decoded.
+Only if you are reading the raw bytes do you need to unescape them — or
+take `/llms.txt`, which carries the same file verbatim.
 
 ## Behavior worth knowing
 

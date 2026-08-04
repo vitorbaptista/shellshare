@@ -1,0 +1,72 @@
+# shellshare
+
+> Live, read-only terminal broadcasting via a web link. One command, no signup.
+
+Site: https://shellshare.net
+
+## Install
+
+`npx -y shellshare` (needs Node.js), or download the static binary then run
+`chmod +x shellshare && ./shellshare`:
+https://get.shellshare.net/?os=linux  (also: mac, mac-arm, windows; auto-detected from the User-Agent if omitted)
+
+## Broadcast your terminal
+
+`shellshare exec --json -- <cmd>` runs one command in a PTY, broadcasts it,
+and exits with the command's exit code. With `--json`, stdout is
+newline-delimited JSON:
+
+- First line: `{"event":"sharing","room":"<room>","server":"https://shellshare.net","url":"https://shellshare.net/r/<room>"}` — parse `url` to get the share link.
+- Last line: `{"event":"end","exit_code":N}`.
+- Errors: `ERROR: ...` on stderr, non-zero exit.
+- The link outlives the command: the room and its recent history stay on the
+  server until it goes idle (6h), so a short command still leaves a viewable
+  link, and the room name stays claimed by you for that window. Rerunning the
+  same room name clears the previous run. (`shellshare serve` hosts
+  the server in-process, so its link does die with the command.)
+
+    shellshare exec --json -- npm test       # share one command
+    tail -f build.log | shellshare --json    # stream a pipe (non-TTY stdin auto-detected, reads to EOF)
+
+Output is end-to-end encrypted by default; the key is the 64 hex chars after
+`#` in the `url` (a URL fragment the server never sees).
+
+## Read someone's broadcast (no CLI needed)
+
+Given a link `.../r/<room>#<key>`:
+
+- Snapshot (history): `GET /r/<room>.bin` → ciphertext bytes.
+- Live: WebSocket `/ws/v/r/<room>` → binary frames are ciphertext records;
+  text frames are control JSON (ignore them).
+
+Both are a stream of self-delimiting records:
+`[u32 BE N][12-byte nonce][ciphertext || 16-byte GCM tag]`, where
+`N = 12 + len(ciphertext || tag)`, AES-256-GCM, key = the 64 hex chars after `#`.
+(A link with no `#key` is probably a `--disable-encryption` broadcast — raw
+terminal output, no record framing — but it may equally be a link that lost its
+fragment in transit. The `size` control frame's `encrypted` flag tells them
+apart; do not assume ciphertext is terminal output.)
+
+The reader below does all of that. Save it as `agent.mjs` and run it:
+
+    node agent.mjs '<url>'            # the history so far, then exit
+    node agent.mjs '<url>' --follow   # history, then live until it ends
+                                      # (--follow needs Node >= 22)
+
+It writes plain text on stdout and leaves the rest to your shell:
+
+    timeout 60 node agent.mjs '<url>' --follow          # bound the wait
+    node agent.mjs '<url>' --follow | grep -m1 'DONE'   # wait for a marker
+    node agent.mjs '<url>' | tail -40                   # just the tail
+
+`--follow` ends by itself when the broadcaster leaves, which is usually
+what you were waiting for. It cannot notice a closed pipe until it next
+writes, so pair `grep` with `timeout` when output may stop first. Exit 0
+on success, 1 on a usage error, an unreachable server, or a key that
+does not match the room.
+
+```js
+{{AGENT_DECODER}}
+```
+
+Source: https://github.com/vitorbaptista/shellshare
