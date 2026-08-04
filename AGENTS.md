@@ -100,8 +100,20 @@ fragment the server never sees, so you decrypt locally (Node's built-in
   accumulated history as raw bytes — opaque ciphertext, since the server
   is an end-to-end-encryption-blind relay. Decrypt with the `#` key.
 - **Follow** (live): open a WebSocket to `/ws/v/r/<room>`. On connect the
-  server sends the catch-up snapshot, then live frames. Binary frames are
-  ciphertext records; text frames are control JSON you can ignore.
+  server sends the catch-up snapshot (the `size` control frame, the room's
+  history, then `broadcasting` and `usersCount`), and live frames after
+  that. Binary frames are ciphertext records; text frames are control JSON
+  you can ignore.
+
+Pick one; do not chain them. Following already begins with the history that
+`.bin` would have handed you, so snapshot-then-follow prints it twice. The
+same replay happens on every reconnect — deliberately, because it makes a
+dropped connection a clean resync rather than a gap, which is why the viewer
+page wipes its screen on rejoin — so a reconnect means "discard and start
+over", not "continue where I left off". `usersCount` is the last frame of
+the replay and marks where live output begins. Delivery is at-least-once,
+not exactly-once: a frame broadcast just as you connect can arrive both in
+the history and as a live frame.
 
 Both are a sequence of self-delimiting records:
 `[u32 BE N][12-byte nonce][ciphertext || 16-byte GCM tag]`, where
