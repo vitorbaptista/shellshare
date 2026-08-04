@@ -224,10 +224,10 @@ async fn broadcast_handler(Path(room_path): Path<String>, _body: Bytes) -> impl 
 /// message entirely. Size is queued FIRST, so the terminal is resized
 /// before content arrives.
 ///
-/// Forwarding goes through [`fanout_loop`] instead of emitting inline:
-/// emitting to N viewer sockets costs O(N), and paying it here would
-/// stall this broadcaster's ack turnaround - measurably collapsing
-/// ingest throughput as the audience grows.
+/// Forwarding goes through [`viewers::ViewerDelivery::publish_ingest`]
+/// instead of emitting inline: emitting to N viewer sockets costs O(N),
+/// and paying it here would stall this broadcaster's ack turnaround -
+/// measurably collapsing ingest throughput as the audience grows.
 fn ingest(
     state: &AppState,
     room_id: &RoomId,
