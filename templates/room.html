@@ -518,13 +518,13 @@ file verbatim.)
       }
       connect();
 
+      // textContent, not innerHTML: the count is always a number (the caller
+      // checks) so nothing here can render markup either way, but a text sink
+      // stays safe if that guard ever loosens - and it is what the assignment
+      // means.
       function onUsersCount(onlineUsers) {
-        onlineCounter.innerHTML = onlineUsers;
-        if (onlineUsers == 1) {
-          onlineCounterPlural.innerHTML = '';
-        } else {
-          onlineCounterPlural.innerHTML = 's';
-        }
+        onlineCounter.textContent = String(onlineUsers);
+        onlineCounterPlural.textContent = onlineUsers == 1 ? '' : 's';
       }
       // Whether the broadcaster's client is attached to the room right
       // now (it pings even when idle, so "live" means the session is

@@ -9,6 +9,10 @@ on:
       - main
   workflow_call:
 
+# See e2e.yml: build-and-test only, so read is all the token needs.
+permissions:
+  contents: read
+
 jobs:
   e2e-windows:
     runs-on: windows-latest
