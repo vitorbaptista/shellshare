@@ -201,6 +201,142 @@ class TestDiscoveryEndpoints:
         )
         assert requests.get(f"{SERVER_URL}/r/{room}.bin").headers.get("x-robots-tag") == "noindex"
 
+    def test_room_page_and_llms_txt_inline_the_same_reader(self):
+        """A pasted share link teaches an agent to read the stream.
+
+        The room page is a JavaScript app: fetched as text it would say
+        nothing about what it holds. templates/agent.mjs is the one
+        reader and both surfaces inline it, so neither costs a second
+        request - what this pins is that the two stay the same bytes.
+        Two things break that silently and neither fails the boot:
+        deleting a placeholder (nothing observes whether the
+        substitution matched) and losing the HTML escaping the page
+        needs to survive a parser.
+        """
+        wait_for_server(SERVER_URL)
+        page = requests.get(f"{SERVER_URL}/r/{random_id()}")
+        assert page.status_code == 200
+
+        # Newlines normalized on both sides: a Windows checkout serves
+        # CRLF, and what this pins is the code, not the line endings
+        embedded = page.text.replace("\r\n", "\n")
+        docs = requests.get(f"{SERVER_URL}/llms.txt").text.replace("\r\n", "\n")
+        code = docs.split("```js\n", 1)[1].split("\n```", 1)[0].strip()
+        assert "function decode(" in code, "llms.txt no longer inlines the reader"
+
+        # Compared escaped, not unescaped: the reader holds `<` that an
+        # HTML parser would eat as a tag, so unescaping the page first
+        # would erase the very property this pins
+        escaped = code.replace("&", "&amp;").replace("<", "&lt;")
+        assert escaped in embedded, "room page drifted from the llms.txt reader"
+
+        # Not served on its own: whoever is reading already has it
+        assert requests.get(f"{SERVER_URL}/agent.mjs").status_code == 404
+
+        # Inside <main>: a whole family of extractors (pandoc among
+        # them) keeps only <main> and discards the rest of the page
+        assert (
+            embedded.index('<main class="main">')
+            < embedded.index(escaped)
+            < embedded.index("</main>")
+        )
+        # ...and ahead of the terminal, so the agent meets it first
+        assert embedded.index(escaped) < embedded.index('<div id="terminal">')
+        # The prose must stay OUTSIDE the <details> holding the decoder.
+        # Collapsed details are absent from a browser's innerText, so an
+        # agent reading rendered text sees only what is outside it - the
+        # prose, which names /llms.txt and keeps that agent unstuck.
+        # Fold the two together and that reader silently gets nothing.
+        # (<summary> is a <details>'s first child, so prose ahead of it
+        # is prose outside it)
+        assert embedded.index("AI agent?") < embedded.index("<summary")
+
+    def test_inlined_reader_runs(self, tmp_path, unique_room, unique_password):
+        """The reader we hand agents actually reads a broadcast.
+
+        Everything above pins where the reader lands; this pins that it
+        works, running the copy taken verbatim from /llms.txt. Each
+        assertion is a way it once returned a wrong answer while
+        reporting success, which no amount of lint or page-shape testing
+        caught: output truncated at a pipe's 64KB buffer, an unreachable
+        server read as a finished broadcast, a link stripped of its
+        #fragment printing ciphertext as if it were the terminal, and a
+        hostile escape sequence reaching the reader's own terminal.
+        """
+        wait_for_server(SERVER_URL)
+        docs = requests.get(f"{SERVER_URL}/llms.txt").text.replace("\r\n", "\n")
+        code = docs.split("```js\n", 1)[1].split("\n```", 1)[0]
+        assert "function decode(" in code, "llms.txt no longer inlines the reader"
+        reader = tmp_path / "agent.mjs"
+        reader.write_text(code, encoding="utf-8", newline="\n")
+
+        # Comfortably past a pipe buffer, and marked so truncation shows.
+        # Then two OSC 52s, either of which would write the reader's
+        # clipboard: one terminated, which the shaped pattern matches,
+        # and one left open, which only the catch-all ESC drop can
+        # catch - and the catch-all is what covers a sequence split
+        # across two frames, where no shaped pattern ever matches.
+        lines = [f"LINE-{i:04d}-" + "x" * 40 for i in range(4000)]
+        proc = subprocess.run(
+            CLI_COMMAND + ["--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password],
+            input="\n".join(lines) + "\x1b]52;c;aGFjaw==\x07\x1b]52;c;dW50ZXJt\n",
+            capture_output=True,
+            text=True,
+            timeout=CLI_SESSION_TIMEOUT,
+        )
+        assert proc.returncode == 0
+        first = parse_json_events(proc.stdout)[0]
+        assert first["event"] == "sharing"
+        url = first["url"]
+
+        def run(*args):
+            return subprocess.run(
+                ["node", str(reader), *args],
+                capture_output=True,
+                text=True,
+                timeout=CLI_SESSION_TIMEOUT,
+            )
+
+        # capture_output pipes stdout, which is how an agent runs it -
+        # and `process.exit()` with anything still buffered in that pipe
+        # drops it and still reports success
+        got = run(url)
+        assert got.returncode == 0, got.stderr
+        assert lines[0] in got.stdout
+        assert lines[-1] in got.stdout, "reader truncated its own output"
+        assert "\x1b" not in got.stdout, "an escape sequence survived the strip"
+
+        # --follow reaches the same output over the WebSocket, and ends
+        # by itself once the broadcaster is gone. The server learns that
+        # when the ingest socket closes, which can lag the CLI's exit -
+        # and until it does there is nothing to end the follow, so wait
+        # for the event rather than racing it.
+        watcher = SocketListener(unique_room)
+        watcher.connect()
+        try:
+            assert watcher.wait_for_broadcasting(False, timeout=15), \
+                "server still thinks the broadcaster is attached"
+        finally:
+            watcher.disconnect()
+        live = run(url, "--follow")
+        assert live.returncode == 0, live.stderr
+        assert lines[0] in live.stdout
+        assert lines[-1] in live.stdout
+
+        # A link that lost its #fragment is not a plaintext broadcast:
+        # printing the ciphertext would look like a successful read
+        keyless = run(url.split("#", 1)[0])
+        assert keyless.returncode == 1
+        assert "#key" in keyless.stderr
+        assert not keyless.stdout
+
+        # ...and a server that was never there is not a broadcast that
+        # ended. --follow is the path that got this wrong: a socket that
+        # never opened closed like any other, and reported success.
+        dead = run("http://127.0.0.1:9/r/nope", "--follow")
+        assert dead.returncode == 1
+        assert "cannot reach" in dead.stderr
+
     def test_sitemap_served(self):
         wait_for_server(SERVER_URL)
         response = requests.get(f"{SERVER_URL}/sitemap.xml")

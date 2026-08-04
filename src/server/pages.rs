@@ -80,12 +80,56 @@ fn room_page() -> &'static Page {
     })
 }
 
+/// `/llms.txt`, with `agent.mjs` inlined into its fenced `js` block.
+///
+/// A template rather than a static file for that one reason: an agent
+/// reading the docs gets the reader in the same response, the way the
+/// room page does. Plain text, so the code goes in unescaped.
+fn llms_txt() -> &'static (String, String) {
+    static PAGE: OnceLock<(String, String)> = OnceLock::new();
+    PAGE.get_or_init(|| {
+        let file = Templates::get("llms.txt").expect("template llms.txt not embedded");
+        let text = String::from_utf8(file.data.into_owned()).expect("llms.txt is not UTF-8");
+        assert!(
+            text.contains("{{AGENT_DECODER}}"),
+            "template llms.txt lost its {{{{AGENT_DECODER}}}} placeholder"
+        );
+        // Same sweep the pages get: a misspelled placeholder would
+        // otherwise ship to every agent as literal text
+        assert!(
+            !text.replace("{{AGENT_DECODER}}", "").contains("{{"),
+            "template llms.txt: unknown placeholder (misspelled?)"
+        );
+        let text = text.replace("{{AGENT_DECODER}}", agent_source().trim_end());
+        let etag = format!("\"{}\"", hex::encode(Sha256::digest(text.as_bytes())));
+        (text, etag)
+    })
+}
+
+/// GET /llms.txt
+pub async fn llms_handler(headers: HeaderMap) -> Response {
+    let (text, etag) = llms_txt();
+    let response = Response::builder()
+        .header(header::CACHE_CONTROL, CACHE_ONE_DAY)
+        .header(header::ETAG, etag);
+    if none_match(&headers, etag) {
+        return response.status(StatusCode::NOT_MODIFIED).body(Body::empty()).unwrap();
+    }
+    response
+        .status(StatusCode::OK)
+        // Without the charset browsers decode UTF-8 as Latin-1
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from(text.clone()))
+        .unwrap()
+}
+
 /// Render both pages, panicking on any broken template or stylesheet
 /// reference. Called at server startup so mistakes fail the boot
 /// instead of the first request.
 pub fn warm() {
     index_page();
     room_page();
+    llms_txt();
 }
 
 fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
@@ -94,9 +138,26 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
     let html = String::from_utf8(template.data.into_owned())
         .unwrap_or_else(|_| panic!("template {name} is not UTF-8"));
 
+    // A misspelled placeholder would ship to every visitor as literal
+    // text, so require the template's to be ones we substitute below.
+    // Checked on the template rather than the rendered page: the page
+    // carries injected llms.txt prose, which would otherwise be able to
+    // fail this boot with a message blaming the template
+    assert!(
+        !html
+            .replace("{{THEMES_JSON}}", "")
+            .replace("{{AGENT_DECODER}}", "")
+            .contains("{{"),
+        "template {name}: unknown placeholder (misspelled?)"
+    );
+
     // Inline the theme definitions so the viewer can color the
     // terminal without an extra request
     let html = html.replace("{{THEMES_JSON}}", crate::themes::THEMES_JSON);
+    // Inline the reader an agent needs for this room, so a fetch of the
+    // share link alone is enough. Substituted before the asset rewrites
+    // below, which are harmless over it (see agent_decoder_escaped)
+    let html = html.replace("{{AGENT_DECODER}}", &agent_decoder_escaped());
     let html = inline_stylesheets(&html);
     let html = version_asset_urls(html);
 
@@ -133,6 +194,47 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
     });
 
     Page { html, etag, preload }
+}
+
+/// `templates/agent.mjs`: the reader an agent runs against a share link.
+///
+/// Inlined into both `llms.txt` and every room page, so neither costs a
+/// second request and the two cannot drift. Deliberately not in
+/// `public/`, which would serve it as a third copy at its own URL:
+/// whoever is reading already has it. Panics at boot (`bind()` warms
+/// the pages before taking a port) rather than serving an empty brief
+/// to every agent until someone notices.
+fn agent_source() -> String {
+    let file = Templates::get("agent.mjs").expect("agent.mjs not embedded");
+    let code = String::from_utf8(file.data.into_owned()).expect("agent.mjs is not UTF-8");
+    assert!(
+        code.contains("function decode("),
+        "agent.mjs no longer holds the decoder"
+    );
+    code
+}
+
+/// `agent_source()` escaped for the room page's `<pre>`.
+///
+/// The escaping is what lets the reader live in the DOM as text, and
+/// the DOM is the whole point: an HTML comment or a `<script>` would
+/// need no escaping, but both are raw-text containers, and raw-text
+/// containers are exactly what extractors strip - measured, and the
+/// comment would also break open on any `-->` in a file full of
+/// `--follow`. Nobody pays for this but a reader of the raw
+/// bytes: anything that parses the HTML decodes the entities back.
+///
+/// Escaping `<` is load-bearing beyond correctness: it is what keeps
+/// the snippet invisible to `inline_stylesheets` and to the `<link`
+/// assertion, both of which run over the page afterwards. For the same
+/// reason keep quoted `/javascript/...` and `/font/...` paths and the
+/// literal `@import` out of `agent.mjs` - `version_asset_urls` would
+/// rewrite the former, and the latter trips a boot assertion whose
+/// message blames the stylesheet inliner.
+fn agent_decoder_escaped() -> String {
+    // Only `&` and `<` can end text content; `>` is literal there, and
+    // `&` must go first or it would re-escape the escapes
+    agent_source().replace('&', "&amp;").replace('<', "&lt;")
 }
 
 /// Replace local `<link rel="stylesheet" href="/...">` tags with

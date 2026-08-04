@@ -92,6 +92,16 @@ const LEGACY_CLIENT_MESSAGE: &str = "This shellshare server no longer supports b
 /// `--port 0` the OS-picked port from the first bind is reused for the rest
 /// so all listeners share one port.
 pub async fn bind(host: &str, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    // Render the pages before taking a port: `serve` reports itself
+    // ready as soon as it has bound one, so a template that panics
+    // after that point would kill the server thread while the client
+    // goes on to print a share link for a listener that is already
+    // gone. Failing here fails the boot on every path a binary takes.
+    // `serve_on` warms again for its own sake: it is public and takes
+    // listeners, so a caller could reach it without coming through
+    // here. Warming twice is free - it is a `OnceLock`
+    pages::warm();
+
     // A literal IP (possibly bracketed, like `[::1]`) needs no resolver
     let bare_host = host
         .strip_prefix('[')
@@ -176,6 +186,8 @@ pub async fn serve_on(
     let app = Router::new()
         // API routes
         .route("/", get(pages::index_handler))
+        // Rendered, not static: it inlines templates/agent.mjs
+        .route("/llms.txt", get(pages::llms_handler))
         // GET serves the viewer page, or the raw history bytes with a
         // `.bin` suffix (the agent-friendly consumer door)
         .route("/r/{*room}", get(room_get_handler))
