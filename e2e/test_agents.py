@@ -172,12 +172,34 @@ class TestDiscoveryEndpoints:
         assert "--json" in response.text
         assert '"event":"sharing"' in response.text.replace(" ", "")
 
-    def test_robots_txt_allows_site_disallows_rooms(self):
+    def test_rooms_are_noindex_rather_than_disallowed(self):
+        """Rooms stay out of search indexes without an agent allowlist.
+
+        `noindex` needs the page to be fetchable to work at all, so a
+        `Disallow: /r/` would block the one directive that says what we
+        mean - and telling a crawler apart from a human's assistant
+        opening a pasted link would mean naming every assistant forever.
+        The header is about the resource instead of who asked.
+        """
         wait_for_server(SERVER_URL)
-        response = requests.get(f"{SERVER_URL}/robots.txt")
-        assert response.status_code == 200
-        assert "Disallow: /r/" in response.text
-        assert "Sitemap:" in response.text
+        robots = requests.get(f"{SERVER_URL}/robots.txt")
+        assert robots.status_code == 200
+        assert "Sitemap:" in robots.text
+        # Directives only, so a comment mentioning one cannot trip this
+        directives = [l.strip() for l in robots.text.splitlines() if not l.startswith("#")]
+        assert not [l for l in directives if l.startswith("Disallow")]
+
+        page = requests.get(f"{SERVER_URL}/r/{random_id()}")
+        assert page.headers.get("x-robots-tag") == "noindex"
+        # ...and on the bytes, which are not HTML and so cannot carry
+        # the page's noindex meta tag
+        assert requests.get(f"{SERVER_URL}/r/{random_id()}.bin").status_code == 404
+        room, password = random_id(), random_id()
+        subprocess.run(
+            CLI_COMMAND + ["--json", "-s", SERVER_URL, "-r", room, "-W", password],
+            input="indexed?\n", capture_output=True, text=True, timeout=CLI_SESSION_TIMEOUT,
+        )
+        assert requests.get(f"{SERVER_URL}/r/{room}.bin").headers.get("x-robots-tag") == "noindex"
 
     def test_sitemap_served(self):
         wait_for_server(SERVER_URL)
