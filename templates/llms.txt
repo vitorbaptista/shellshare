@@ -39,6 +39,14 @@ Given a link `.../r/<room>#<key>`:
 - Live: WebSocket `/ws/v/r/<room>` → binary frames are ciphertext records;
   text frames are control JSON (ignore them).
 
+Use one or the other, not both in sequence: a WebSocket connect replays the
+room's history before its live frames, so the socket alone gives you both —
+fetching `.bin` first and then following duplicates the history. Every
+reconnect replays from the start too (that is what makes a dropped
+connection a resync instead of a gap), so treat a reconnect as "discard what
+I have and start over", never as a continuation. The `usersCount` control
+frame is the last of the replay, so it marks where live output begins.
+
 Both are a stream of self-delimiting records:
 `[u32 BE N][12-byte nonce][ciphertext || 16-byte GCM tag]`, where
 `N = 12 + len(ciphertext || tag)`, AES-256-GCM, key = the 64 hex chars after `#`.
