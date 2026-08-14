@@ -72,6 +72,33 @@ xterm.js and its WebGL/Unicode11 addons are vendored under
 lives here too. Must stay in lockstep with `templates/room.html` and
 `e2e/conftest.py`.
 
+### Herdr plugin (`herdr-plugin.toml` + `herdr-plugin/`)
+
+The repo doubles as a [herdr](https://herdr.dev) plugin: actions that
+broadcast the focused pane or the whole herdr session via shellshare. The
+manifest sits at the repo ROOT (not in `herdr-plugin/`) so
+`herdr plugin install vitorbaptista/shellshare` works as typed - the
+marketplace card does not surface subdirectories. The manifest is pure
+routing into `herdr-plugin/share.sh` (bash 3.2-compatible; macOS ships
+3.2), which holds everything: actions (short-lived, logged by herdr) open
+plugin panes (placement `tab`, so opening one never resizes the pane being
+shared) that run the long-lived broadcasts. Pane share = poll
+`herdr pane read --format ansi` and pipe full-frame repaints into
+`shellshare --json --cols/--rows` stream mode; session share = a second
+herdr client (`env -u HERDR_ENV herdr session attach <name>`, name resolved
+by matching `HERDR_SOCKET_PATH` against `session list --json`, never
+guessed) inside `shellshare exec` with `</dev/null` - exec's stdin
+forwarder would otherwise relay pane keystrokes invisibly into the
+fully-privileged mirror client. State (room, PIDs, a liveness token -
+never URLs or keys, matching crypto.rs's nothing-on-disk posture) lives
+under `HERDR_PLUGIN_STATE_DIR`, scoped per session and swept by a startup
+hook because traps can't run on SIGKILL. The share URL's only home is the
+status pane: notifications truncate (herdr caps title 80/body 240 chars)
+and may route to the OS notification center. Lockstep contract:
+`herdr-plugin.toml` action/pane ids and commands ↔ `share.sh` dispatch
+arms ↔ `e2e/test_herdr_plugin.py` (which stubs `herdr` but runs real
+broadcasts against a real local server).
+
 ## Cross-Platform Notes
 
 - **Unix**: PTY via portable-pty, raw terminal mode via libc tcgetattr/tcsetattr, SIGWINCH handling

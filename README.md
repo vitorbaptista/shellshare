@@ -72,6 +72,13 @@ tail -f build.log | shellshare --json
 See [AGENTS.md](AGENTS.md) (or https://shellshare.net/llms.txt) for the full
 agent-facing documentation and recipes.
 
+### Sharing from herdr
+
+If you run your terminals in [herdr](https://herdr.dev), this repo doubles
+as a herdr plugin: `herdr plugin install vitorbaptista/shellshare` adds
+actions that broadcast the focused pane - or your entire herdr session -
+as a shellshare link. See [herdr-plugin/README.md](herdr-plugin/README.md).
+
 ### Hosting a server
 
 The same `shellshare` binary also includes the server code, allowing you to broadcast your terminal to a server you control.

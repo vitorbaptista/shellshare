@@ -1,0 +1,71 @@
+# Herdr plugin manifest (https://herdr.dev/docs/plugins/). It lives at
+# the repo root - not in herdr-plugin/ - so the install command the
+# marketplace card suggests, `herdr plugin install vitorbaptista/shellshare`,
+# works as typed: the v1 marketplace index does not surface
+# subdirectories, so a subdir manifest would make the obvious install
+# line fail with "missing manifest". Everything routes through
+# herdr-plugin/share.sh (commands run with the plugin checkout as cwd);
+# see herdr-plugin/README.md for usage and CLAUDE.md for the
+# manifest <-> share.sh <-> e2e lockstep contract.
+
+id = "shellshare"
+name = "Shellshare"
+version = "0.1.0"
+# Needs `herdr plugin pane open --env` to parameterize the broadcast panes
+min_herdr_version = "0.8.0"
+description = "Share a pane or your whole herdr session live via a shellshare web link"
+# share.sh is bash; shellshare itself supports Windows, this plugin not yet
+platforms = ["linux", "macos"]
+
+# Sweep is the restore point: it garbage-collects share state whose
+# processes died uncleanly (SIGKILL, server stop - traps never ran).
+# It re-runs on live handoff, and is idempotent.
+[[startup]]
+command = ["bash", "herdr-plugin/share.sh", "sweep"]
+
+# Action ids are the local, dot-free halves; keybindings and
+# `herdr plugin action invoke` use the qualified form `shellshare.<id>`.
+
+[[actions]]
+id = "share-pane"
+title = "Shellshare: share this pane"
+description = "Broadcast a live view of the focused pane; the link opens in a status tab"
+contexts = ["pane"]
+command = ["bash", "herdr-plugin/share.sh", "action-share-pane"]
+
+[[actions]]
+id = "share-session"
+title = "Shellshare: share the whole session"
+description = "Broadcast a live mirror of the entire herdr UI; the link opens in a status tab"
+contexts = ["workspace"]
+command = ["bash", "herdr-plugin/share.sh", "action-share-session"]
+
+[[actions]]
+id = "stop"
+title = "Shellshare: stop sharing"
+description = "Stop this session's live shares (links stay readable until the server's room TTL)"
+contexts = ["workspace"]
+command = ["bash", "herdr-plugin/share.sh", "action-stop"]
+
+[[actions]]
+id = "status"
+title = "Shellshare: show live shares"
+description = "Focus the status tab of each live share (the tab holds the link)"
+contexts = ["workspace"]
+command = ["bash", "herdr-plugin/share.sh", "action-status"]
+
+# The long-running broadcasts. Placement `tab`: opening one never
+# resizes the pane being shared (a split would), and the tab is the
+# visible, closeable handle on the share.
+
+[[panes]]
+id = "pane-broadcast"
+title = "Shellshare"
+placement = "tab"
+command = ["bash", "herdr-plugin/share.sh", "run-pane-share"]
+
+[[panes]]
+id = "session-broadcast"
+title = "Shellshare"
+placement = "tab"
+command = ["bash", "herdr-plugin/share.sh", "run-session-share"]
