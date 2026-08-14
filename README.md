@@ -75,9 +75,11 @@ agent-facing documentation and recipes.
 ### Sharing from herdr
 
 If you run your terminals in [herdr](https://herdr.dev), this repo doubles
-as a herdr plugin: `herdr plugin install vitorbaptista/shellshare` adds
-actions that broadcast the focused pane - or your entire herdr session -
-as a shellshare link. See [herdr-plugin/README.md](herdr-plugin/README.md).
+as a herdr plugin: `herdr plugin install vitorbaptista/shellshare` adds one
+action that broadcasts your whole herdr session, read-only, as a shellshare
+link — viewers see whichever tab you are working in. (To share a single
+pane, just run `shellshare` in it.) See
+[herdr-plugin/README.md](herdr-plugin/README.md).
 
 ### Hosting a server
 

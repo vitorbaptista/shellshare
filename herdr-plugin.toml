@@ -2,70 +2,34 @@
 # the repo root - not in herdr-plugin/ - so the install command the
 # marketplace card suggests, `herdr plugin install vitorbaptista/shellshare`,
 # works as typed: the v1 marketplace index does not surface
-# subdirectories, so a subdir manifest would make the obvious install
-# line fail with "missing manifest". Everything routes through
-# herdr-plugin/share.sh (commands run with the plugin checkout as cwd);
-# see herdr-plugin/README.md for usage and CLAUDE.md for the
-# manifest <-> share.sh <-> e2e lockstep contract.
+# subdirectories, so a subdir manifest would fail with "missing
+# manifest". Everything routes into herdr-plugin/share.sh, which is the
+# whole plugin; see herdr-plugin/README.md.
 
 id = "shellshare"
 name = "Shellshare"
 version = "0.1.0"
-# Needs `herdr plugin pane open --env` to parameterize the broadcast panes
+# Needs `herdr plugin pane open --entrypoint`
 min_herdr_version = "0.8.0"
-description = "Share a pane or your whole herdr session live via a shellshare web link"
+description = "Share your herdr session live, read-only, as a shellshare link"
 # share.sh is bash; shellshare itself supports Windows, this plugin not yet
 platforms = ["linux", "macos"]
 
-# Sweep is the restore point: it garbage-collects share state whose
-# processes died uncleanly (SIGKILL, server stop - traps never ran).
-# It re-runs on live handoff, and is idempotent. Sidebar badges need no
-# sweeping: they carry a TTL the broadcaster refreshes, so a dead one's
-# badge expires on its own.
-[[startup]]
-command = ["bash", "herdr-plugin/share.sh", "sweep"]
-
-# Action ids are the local, dot-free halves; keybindings and
-# `herdr plugin action invoke` use the qualified form `shellshare.<id>`.
-
+# One verb. Pressed again while a share is live, it stops it - so a
+# single keybinding is the whole interface.
 [[actions]]
-id = "share-pane"
-title = "Shellshare: share this pane (read-only)"
-description = "Broadcast a live, read-only view of the focused pane"
-contexts = ["pane"]
-command = ["bash", "herdr-plugin/share.sh", "action-share-pane"]
-
-[[actions]]
-id = "share-session"
+id = "share"
 title = "Shellshare: share this session (read-only)"
-description = "Broadcast a live, read-only mirror of the entire herdr UI"
-contexts = ["workspace"]
-command = ["bash", "herdr-plugin/share.sh", "action-share-session"]
+description = "Broadcast this herdr session as a live link, or stop the current broadcast"
+contexts = ["workspace", "pane"]
+command = ["bash", "herdr-plugin/share.sh", "toggle"]
 
-[[actions]]
-id = "stop"
-title = "Shellshare: stop sharing"
-description = "Stop this session's live shares (links stay readable until the server's room TTL)"
-contexts = ["workspace"]
-command = ["bash", "herdr-plugin/share.sh", "action-stop"]
-
-[[actions]]
-id = "status"
-title = "Shellshare: show share links"
-description = "Show the links for this session's live shares"
-contexts = ["workspace"]
-command = ["bash", "herdr-plugin/share.sh", "action-status"]
-
-# The only pane this plugin ever opens: a transient overlay showing the
-# link, which restores the previous focus and zoom when dismissed. The
-# broadcasts themselves run detached - a permanent tab for something
-# that is not a terminal you want to read would be chrome, and herdr
-# documents actions as one-shot, so a long-lived process belongs
-# outside them. While a share is live it announces itself through
-# herdr's own sidebar metadata instead (see the README).
-
+# The share IS this pane: it runs the broadcaster, shows the link, and
+# stops when it closes. Placement `tab` keeps it out of the layout you
+# are broadcasting - viewers see the tab you are working in, not this
+# one - and its entry in the tab bar is the "you are live" indicator.
 [[panes]]
-id = "link"
-title = "Shellshare"
-placement = "overlay"
-command = ["bash", "herdr-plugin/share.sh", "show-link"]
+id = "live"
+title = "Shellshare · live"
+placement = "tab"
+command = ["bash", "herdr-plugin/share.sh", "live"]

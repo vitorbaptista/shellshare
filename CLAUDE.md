@@ -74,44 +74,42 @@ lives here too. Must stay in lockstep with `templates/room.html` and
 
 ### Herdr plugin (`herdr-plugin.toml` + `herdr-plugin/`)
 
-The repo doubles as a [herdr](https://herdr.dev) plugin: actions that
-broadcast the focused pane or the whole herdr session via shellshare. The
+The repo doubles as a [herdr](https://herdr.dev) plugin: one action that
+broadcasts the whole herdr session, read-only, as a shellshare link. The
 manifest sits at the repo ROOT (not in `herdr-plugin/`) so
 `herdr plugin install vitorbaptista/shellshare` works as typed - the
-marketplace card does not surface subdirectories. The manifest is pure
-routing into `herdr-plugin/share.sh` (bash 3.2-compatible; macOS ships
-3.2, and has no `setsid`), which holds everything.
+marketplace card does not surface subdirectories.
 
-The shape follows herdr's own grain rather than adding chrome: actions
-stay one-shot (as herdr documents them) and hand off to a **detached
-daemon** - a broadcast is not a terminal worth a permanent tab, and
-community plugins put daemons outside herdr the same way. A live share
-announces itself through herdr's **display metadata**
-(`report-metadata --token`, rendered wherever the user's
-`[ui.sidebar.*]` rows mention `$shellshare`), carrying a TTL the daemon
-refreshes so a SIGKILLed broadcaster's badge expires by itself. The link
-appears in the plugin's single pane entrypoint, an **overlay** (herdr's
-transient surface, which restores the previous focus and zoom on close);
-the daemon holds the URL in memory and serves it one line per reader
-through a fifo, so it is never at rest on disk.
+**The share is a pane, not a daemon.** The manifest declares one action
+(`share`, a toggle) and one pane (`live`), and the pane runs
+`shellshare exec -- env -u HERDR_ENV herdr session attach <name>`: the
+process's lifetime IS the share's lifetime. herdr already owns pane
+lifetime, so there is nothing to supervise, garbage collect or sweep -
+Ctrl+C, closing the tab, or toggling the action all stop it. Placement
+`tab` keeps the share out of the layout being broadcast (viewers see the
+tab you work in, not this one) and its tab-bar entry is the "live"
+indicator. An earlier design used a detached daemon plus a sidebar
+badge, a link fifo and an overlay; it was ~800 lines more and bought
+nothing herdr was not already doing.
 
-Pane share = poll `herdr pane read --format ansi` and pipe full-frame
-repaints into `shellshare --json --cols/--rows` stream mode; the geometry
-watchdog compares against `pane layout` but sits out zoomed layouts,
-because an overlay (including this plugin's own) is a temporary zoom that
-resizes every rect. Session share = a second herdr client
-(`env -u HERDR_ENV herdr session attach <name>`, name resolved by matching
-`HERDR_SOCKET_PATH` against `session list --json`, never guessed) inside
-`shellshare exec` with `</dev/null` - exec's stdin forwarder would
-otherwise relay keystrokes invisibly into the fully-privileged mirror.
-State (room, PIDs, a liveness token - never URLs or keys, matching
-crypto.rs's nothing-on-disk posture) lives under `HERDR_PLUGIN_STATE_DIR`,
-scoped per session by socket path and swept by a startup hook because
-traps can't run on SIGKILL; a start failure, having no pane to print in,
-leaves its reason in `last-error.txt`. Lockstep contract:
-`herdr-plugin.toml` action/pane ids and commands ↔ `share.sh` dispatch
-arms ↔ `e2e/test_herdr_plugin.py` (which stubs `herdr` but runs real
-broadcasts against a real local server).
+**There is deliberately no pane-sharing mode.** To share one pane you
+run `shellshare` in it - a full-fidelity byte stream, better than any
+snapshot mirror a plugin could build. The plugin only does what you
+cannot type, and all four reasons are verified against herdr 0.8.0:
+`herdr session attach` from inside a pane is refused (HERDR_ENV gates
+nesting); `HERDR_SESSION` is not exported, so a hand-typed attach guesses
+the name and a wrong guess silently starts and broadcasts the DEFAULT
+session; without `--cols/--rows` (derived from the focused tab's
+`api snapshot` layout extent) the mirror attaches at 80x24 and herdr's
+smallest-client-wins sizing shrinks the real session; and `shellshare
+exec` echoes the mirror's PTY bytes on stdout, so run by hand the mirror
+renders the pane it lives in - infinite regress. share.sh reads the
+`sharing` line off a fifo in the main shell (not through a pipe, where
+`exit` would only leave a subshell) and hands the rest to a background
+`cat >/dev/null`. Lockstep contract: `herdr-plugin.toml` action/pane ids
+and commands ↔ `share.sh` dispatch arms ↔ `e2e/test_herdr_plugin.py`
+(which stubs `herdr` but runs a real encrypted broadcast against a real
+local server).
 
 ## Cross-Platform Notes
 
