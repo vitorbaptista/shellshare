@@ -18,16 +18,29 @@ use crate::protocol::TermSize;
 use qrcode::{render::unicode, QrCode};
 use rand::Rng;
 
+/// Dimensions pinned by `--cols`/`--rows`, set once at client startup.
+/// Applied inside `get_terminal_size` so every size read - initial
+/// connect, SIGWINCH updates, stream-mode re-reads - sees the same
+/// fixed geometry: a pinned dimension never follows the real terminal.
+static SIZE_OVERRIDE: std::sync::OnceLock<(Option<u16>, Option<u16>)> =
+    std::sync::OnceLock::new();
+
 /// Get the current terminal size using ioctl (TIOCGWINSZ) via `term_size`.
-/// Falls back to 80x24 when not attached to a terminal.
+/// Falls back to 80x24 when not attached to a terminal. Each dimension
+/// can be pinned independently by `--cols`/`--rows`.
 #[allow(clippy::cast_possible_truncation)] // Terminal dimensions always fit in u16
 fn get_terminal_size() -> TermSize {
-    term_size::dimensions()
+    let detected = term_size::dimensions()
         .map(|(cols, rows)| TermSize {
             cols: cols as u16,
             rows: rows as u16,
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let (cols, rows) = SIZE_OVERRIDE.get().copied().unwrap_or((None, None));
+    TermSize {
+        cols: cols.unwrap_or(detected.cols),
+        rows: rows.unwrap_or(detected.rows),
+    }
 }
 
 /// Client configuration arguments
@@ -50,6 +63,10 @@ pub struct ClientArgs {
     /// terminal is sent in plaintext - for viewers on plain HTTP, where
     /// browsers can't decrypt
     pub encrypt: bool,
+    /// Pin the broadcast width (`--cols`), overriding detection
+    pub cols: Option<u16>,
+    /// Pin the broadcast height (`--rows`), overriding detection
+    pub rows: Option<u16>,
 }
 
 /// Environment variable carrying the live broadcast's share URL into the
@@ -210,6 +227,7 @@ pub fn status(json: bool) -> i32 {
 /// Run the shellshare client. Returns the exit code to propagate: the
 /// child command's status for `exec`, otherwise 0.
 pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
+    let _ = SIZE_OVERRIDE.set((args.cols, args.rows));
     let server = normalize_server_url(&args.server);
     let share_base = args
         .display_server

@@ -43,13 +43,9 @@ from conftest import (
     broadcast_message,
     parse_share_key,
     poll_until,
+    size_dims,
     wait_for_content,
 )
-
-
-def size_dims(size):
-    """The (cols, rows) of a size message, ignoring extras like theme."""
-    return (size.get("cols"), size.get("rows")) if size else None
 
 
 def give_listener_the_key(cli, listener):

@@ -406,6 +406,11 @@ def open_records(key, data):
     return bytes(out)
 
 
+def size_dims(size):
+    """The (cols, rows) of a size message, ignoring extras like theme."""
+    return (size.get("cols"), size.get("rows")) if size else None
+
+
 def parse_share_key(text):
     """Extract the hex decryption key from a printed share link, or None.
 

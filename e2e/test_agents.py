@@ -11,6 +11,7 @@ E2E tests for the machine-readable surfaces aimed at scripts and AI agents:
 import json
 import os
 import platform
+import re
 import subprocess
 
 import pytest
@@ -131,6 +132,61 @@ class TestExecSubcommand:
         assert events[0]["url"].startswith(f"{SERVER_URL}/r/{unique_room}#")
         assert events[-1] == {"event": "end", "exit_code": 0}, \
             f"stdout was: {proc.stdout!r}"
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="asserts POSIX read semantics")
+    def test_exec_empty_stdin_injects_nothing(self, unique_room, unique_password):
+        """`</dev/null` (the documented way to run exec headless) must not
+        type anything into the child. Dropping the PTY writer encodes EOF
+        as newline+VEOF, so a naive implementation injects an Enter and a
+        Ctrl+D - a keystroke pair that exits a shell sitting at its
+        prompt. The child proves silence: a read with a timeout must time
+        out (>128) instead of consuming an injected line (0) or EOF (1)."""
+        proc = subprocess.run(
+            CLI_COMMAND
+            + ["exec", "--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password]
+            + ["--", "bash", "-c", "read -t 1 x; echo READ-STATUS:$?"],
+            capture_output=True,
+            text=True,
+            timeout=CLI_SESSION_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+        assert proc.returncode == 0
+        match = re.search(r"READ-STATUS:(\d+)", proc.stdout)
+        assert match, f"child never reported: {proc.stdout!r}"
+        # An injected line is the one outcome where read succeeds
+        # (status 0). Timeout is >128 on bash 4+, but bash 3.2 (macOS)
+        # reports it as 1 - the same as EOF - so nonzero is the
+        # strongest portable assertion, and it is exactly the property
+        # we guard: no line was typed into the child.
+        assert int(match.group(1)) != 0, \
+            f"child received injected stdin (read status {match.group(1)})"
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="asserts POSIX EOF semantics")
+    @pytest.mark.parametrize("payload", ["pipe-data\n", ""], ids=["data", "empty"])
+    def test_exec_piped_stdin_forwards_bytes_and_eof(
+        self, unique_room, unique_password, payload
+    ):
+        """A pipe keeps full EOF semantics - even a pipe that carried
+        zero bytes: the child sees any data and then EOF, so
+        `... | shellshare exec -- cat` terminates instead of hanging.
+        Only a null-device stdin (the previous test) suppresses the EOF
+        encoding, because there it would be an injected keystroke pair,
+        not the end of a real stream."""
+        marker = f"pipe-eof-{random_id()}"
+        proc = subprocess.run(
+            CLI_COMMAND
+            + ["exec", "--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password]
+            + ["--", "cat"],
+            input=payload.replace("pipe-data", marker),
+            capture_output=True,
+            text=True,
+            timeout=CLI_SESSION_TIMEOUT,
+        )
+        # cat exited on EOF (a hang would have tripped the subprocess
+        # timeout instead) and echoed whatever bytes were piped
+        assert proc.returncode == 0
+        if payload:
+            assert marker in proc.stdout
 
     @pytest.mark.skipif(IS_WINDOWS, reason="recipe uses a POSIX shell")
     def test_exec_propagates_exit_code(self, unique_room, unique_password):
