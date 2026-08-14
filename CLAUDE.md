@@ -80,21 +80,35 @@ manifest sits at the repo ROOT (not in `herdr-plugin/`) so
 `herdr plugin install vitorbaptista/shellshare` works as typed - the
 marketplace card does not surface subdirectories. The manifest is pure
 routing into `herdr-plugin/share.sh` (bash 3.2-compatible; macOS ships
-3.2), which holds everything: actions (short-lived, logged by herdr) open
-plugin panes (placement `tab`, so opening one never resizes the pane being
-shared) that run the long-lived broadcasts. Pane share = poll
-`herdr pane read --format ansi` and pipe full-frame repaints into
-`shellshare --json --cols/--rows` stream mode; session share = a second
-herdr client (`env -u HERDR_ENV herdr session attach <name>`, name resolved
-by matching `HERDR_SOCKET_PATH` against `session list --json`, never
-guessed) inside `shellshare exec` with `</dev/null` - exec's stdin
-forwarder would otherwise relay pane keystrokes invisibly into the
-fully-privileged mirror client. State (room, PIDs, a liveness token -
-never URLs or keys, matching crypto.rs's nothing-on-disk posture) lives
-under `HERDR_PLUGIN_STATE_DIR`, scoped per session and swept by a startup
-hook because traps can't run on SIGKILL. The share URL's only home is the
-status pane: notifications truncate (herdr caps title 80/body 240 chars)
-and may route to the OS notification center. Lockstep contract:
+3.2, and has no `setsid`), which holds everything.
+
+The shape follows herdr's own grain rather than adding chrome: actions
+stay one-shot (as herdr documents them) and hand off to a **detached
+daemon** - a broadcast is not a terminal worth a permanent tab, and
+community plugins put daemons outside herdr the same way. A live share
+announces itself through herdr's **display metadata**
+(`report-metadata --token`, rendered wherever the user's
+`[ui.sidebar.*]` rows mention `$shellshare`), carrying a TTL the daemon
+refreshes so a SIGKILLed broadcaster's badge expires by itself. The link
+appears in the plugin's single pane entrypoint, an **overlay** (herdr's
+transient surface, which restores the previous focus and zoom on close);
+the daemon holds the URL in memory and serves it one line per reader
+through a fifo, so it is never at rest on disk.
+
+Pane share = poll `herdr pane read --format ansi` and pipe full-frame
+repaints into `shellshare --json --cols/--rows` stream mode; the geometry
+watchdog compares against `pane layout` but sits out zoomed layouts,
+because an overlay (including this plugin's own) is a temporary zoom that
+resizes every rect. Session share = a second herdr client
+(`env -u HERDR_ENV herdr session attach <name>`, name resolved by matching
+`HERDR_SOCKET_PATH` against `session list --json`, never guessed) inside
+`shellshare exec` with `</dev/null` - exec's stdin forwarder would
+otherwise relay keystrokes invisibly into the fully-privileged mirror.
+State (room, PIDs, a liveness token - never URLs or keys, matching
+crypto.rs's nothing-on-disk posture) lives under `HERDR_PLUGIN_STATE_DIR`,
+scoped per session by socket path and swept by a startup hook because
+traps can't run on SIGKILL; a start failure, having no pane to print in,
+leaves its reason in `last-error.txt`. Lockstep contract:
 `herdr-plugin.toml` action/pane ids and commands ↔ `share.sh` dispatch
 arms ↔ `e2e/test_herdr_plugin.py` (which stubs `herdr` but runs real
 broadcasts against a real local server).

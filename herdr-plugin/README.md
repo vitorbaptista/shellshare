@@ -2,8 +2,12 @@
 
 Share your [herdr](https://herdr.dev) terminal with anyone who has a
 browser: one action broadcasts a single pane - or your entire herdr
-session - as a live [shellshare](https://shellshare.net) link. No
-signups; viewers just open the URL.
+session - as a live, read-only [shellshare](https://shellshare.net)
+link. No signups; viewers just open the URL.
+
+The broadcast runs in the background: it takes no pane, no tab, and no
+space in your layout. While a share is live it says so in herdr's own
+sidebar, and the link lives in an overlay you dismiss with any key.
 
 ## Installing
 
@@ -36,12 +40,13 @@ looking at):
 herdr plugin action invoke shellshare.share-session
 ```
 
-A "Shellshare" tab opens with the link. Anyone opening it watches your
-whole herdr UI live, read-only. `shellshare.share-pane` shares only the
-focused pane instead. Stop with:
+An overlay shows the link (plus a QR code if you have `qrencode`);
+press any key and herdr puts you back exactly where you were.
+`shellshare.share-pane` shares only the focused pane instead.
 
 ```bash
-herdr plugin action invoke shellshare.stop
+herdr plugin action invoke shellshare.status   # show the links again
+herdr plugin action invoke shellshare.stop     # stop this session's shares
 ```
 
 Stopping ends the broadcast, but the link keeps showing the final state
@@ -69,17 +74,30 @@ description = "share the whole session"
 `herdr plugin action list --plugin shellshare` shows everything the
 plugin can do (`share-pane`, `share-session`, `stop`, `status`).
 
-Agents and scripts can share a specific pane without a keybinding
-(`SHELLSHARE_DIRECT=1` opts out of the guard that stops respawned panes
-from silently resuming a broadcast):
+## Show live shares in the sidebar (recommended)
 
-```bash
-herdr plugin pane open --plugin shellshare --entrypoint pane-broadcast \
-  --placement tab --env SHELLSHARE_TARGET_PANE=<pane-id> \
-  --env SHELLSHARE_STATE_KEY=manual-<pane-id> \
-  --env SHELLSHARE_SHARE_TOKEN=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n') \
-  --env SHELLSHARE_DIRECT=1
+While a share is live the plugin reports a `shellshare` display token
+on the shared pane (or, for a session share, on every space). herdr
+renders tokens only where your sidebar layout asks for them, so add
+`$shellshare` to the rows you want it in:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "workspace", "tab", "$shellshare"],
+  ["agent"],
+]
+
+[ui.sidebar.spaces]
+rows = [
+  ["state_icon", "workspace", "$shellshare"],
+  ["branch", "git_status"],
+]
 ```
+
+A live share then shows `◉ shared` in the sidebar for as long as it
+runs. The token carries a TTL the broadcaster refreshes, so it clears
+itself within ~90 seconds even if the broadcaster is killed outright.
 
 ## Configuration
 
@@ -136,16 +154,21 @@ shellshare_bin=/usr/local/bin/shellshare
   broadcasts its full UI - sidebar, tabs, every pane - sized to your
   own client when detectable. It is exactly what it sounds like:
   **everything visible anywhere in your session goes out**, including
-  the status tabs of other live shares (which display their links) if
-  you focus them while sharing.
+  the link overlay itself if you open it while sharing.
 - Viewers are always read-only; shellshare has no input channel.
+
+Sharing a pane follows the pane, not your attention: switching focus,
+or moving the shared pane to a background tab, changes nothing for
+viewers. Invoke `share-pane` again on another pane to run a second,
+independent share.
 
 ## Security notes
 
 - Broadcasts are end-to-end encrypted by default; the server relays
   ciphertext. The key is the `#fragment` of the link - browsers never
-  send fragments, so the server can't read your terminal. The link
-  appears only in the status tab: not in notifications, not on disk.
+  send fragments, so the server can't read your terminal. The link is
+  shown only in the overlay: not in notifications, not on disk, not in
+  herdr's plugin logs.
 - Anyone with the link can watch. Don't broadcast secrets.
 - `room_prefix` trades privacy for a stable URL: the room name rides in
   the process argv, so **on a multi-user machine another local user can
@@ -159,10 +182,28 @@ shellshare_bin=/usr/local/bin/shellshare
   config file is yours: if you set `room_prefix` on a shared machine,
   keep the file private (`chmod 600`) - the prefix is enough to derive
   room names.
+- While a session share is live, the overlay refuses to display other
+  shares' links: it is on screen, so it is being broadcast too.
+
+## Troubleshooting
+
+A share that cannot start has no pane to complain in, so it reports
+through a notification and writes the reason to `last-error.txt` in the
+plugin's state directory (`~/.local/state/herdr/plugins/shellshare` on
+Linux by default):
+
+```bash
+cat ~/.local/state/herdr/plugins/shellshare/last-error.txt
+herdr plugin log list --plugin shellshare   # what herdr ran, and when
+```
 
 ## Limitations
 
 - Linux and macOS only for now (the plugin is bash; shellshare itself
   runs on Windows).
 - One share per pane and one session share at a time; re-invoking an
-  active share focuses its status tab instead of double-broadcasting.
+  active share shows its link again instead of double-broadcasting.
+- herdr's right-click menus are built-in only, so the actions live on
+  keybindings and `plugin action invoke` (the manifest already declares
+  their `pane`/`workspace` contexts, so they would appear automatically
+  if herdr ever surfaces plugin actions in menus).

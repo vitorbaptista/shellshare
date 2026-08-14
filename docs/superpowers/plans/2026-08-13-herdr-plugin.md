@@ -79,20 +79,37 @@ the qualified form `shellshare.<id>` used by keybindings and
 - `share-pane` (contexts `["pane"]`)
 - `share-session` (contexts `["workspace"]`)
 - `stop` (contexts `["workspace"]`) - stops this session's live shares
-- `status` (contexts `["workspace"]`) - re-focuses live status panes
+- `status` (contexts `["workspace"]`) - re-shows the live links
 
-Pane entrypoints (the long-running processes): `pane-broadcast` and
-`session-broadcast`, placement `tab` (opening one never resizes the pane
-being shared), opened by the actions with `--focus`: the user just asked
-for a link; showing it is the expected response, and the entrypoint
-prints the URL as its first visible output. Notifications are a
-secondary channel and never carry the URL (herdr truncates titles at 80
-and bodies at 240 chars - a truncated key fragment yields a
-"wrong key" viewer page that looks like a plugin bug - and toast
-delivery can route to the OS notification center, persisting the key in
-notification history). Notification copy is "Sharing pane - link in the
-shellshare tab", sent best-effort (the herdr CLI does not surface the
-delivery reason); the focused status pane is the delivery guarantee.
+Actions stay one-shot, as herdr documents them: they validate, take the
+start lock, spawn a **detached daemon**, and return in ~0.1s. The
+broadcast deliberately does NOT live in a plugin pane. A pane would put
+a permanent tab in the user's tab bar for a process that is not a
+terminal anyone wants to read - chrome the rest of herdr does not ask
+for - and the community precedent (collie's systemd unit, mirror's
+daemon) is to keep long-lived processes outside herdr's one-shot hooks.
+`setsid` where available, `nohup` on macOS which lacks it.
+
+Three native surfaces replace that tab:
+
+1. **Sidebar badge.** While a share is live the daemon reports herdr
+   display metadata (`pane`/`workspace report-metadata --source
+   plugin:shellshare --token shellshare=...`), which herdr renders
+   wherever the user's `[ui.sidebar.*]` rows mention `$shellshare` -
+   the documented extension point for exactly this. The token carries a
+   TTL the daemon refreshes every 30s, so a SIGKILLed broadcaster's
+   badge expires by itself; nothing has to sweep it.
+2. **Link overlay.** The plugin's only pane entrypoint is `link`,
+   placement `overlay` - herdr's transient surface, which restores the
+   previous focus and zoom when it closes. The daemon opens it once the
+   link exists and `status` re-opens it on demand; it closes on any
+   key. The daemon holds the URL in memory and serves it one line per
+   reader through a fifo (no data at rest), so the overlay can show it
+   without it ever touching disk.
+3. **Notifications**, best-effort and never carrying the URL (herdr
+   truncates titles at 80 and bodies at 240 chars - a truncated key
+   fragment yields a "wrong key" viewer page that looks like a plugin
+   bug - and toast delivery can route to the OS notification center).
 
 A `[[startup]]` hook runs `share.sh sweep` (see State) - it is the
 documented restore point and re-runs on live handoff, both idempotent.
@@ -105,27 +122,34 @@ documented restore point and re-runs on live handoff, both idempotent.
 1. Target = `$SHELLSHARE_TARGET_PANE` (set by the action from the
    invocation context's `focused_pane_id`; also the documented override
    for agents/scripts, since `plugin action invoke` cannot pass a pane).
-   Absent target is a hard, actionable error printed in the pane - never
-   a guess. The action errors out before opening a pane when the context
-   has no focused pane and no override was given.
+   Absent target is a hard, actionable error from the action - never a
+   guess.
 2. Geometry from `pane layout` rect (verified: exact cell width/height).
+   Re-checked every ~2s so a resized pane ends the share instead of
+   streaming mis-shaped frames forever - but skipped while the tab is
+   zoomed, because a zoom (including the temporary one the plugin's own
+   link overlay puts on top) resizes every rect without the shared pane
+   changing. Verified live: without that guard, opening the overlay
+   killed the share it had just started.
 3. Poll `pane read <target> --source visible --format ansi` at ~4 Hz
    (configurable); compare with the previous snapshot as a shell string
    (no hash subprocess); emit a full-frame repaint (cursor hidden,
-   `ESC[H`, per-line erase, `ESC[0J`) only on change.
+   `ESC[H`, per-line erase, `ESC[0J`, no newline after the last row -
+   one at the bottom margin would scroll the viewer) only on change.
 4. Pipe into `shellshare --json --cols C --rows R ...` through a fifo -
    the fifo IS shellshare's stdin (only the session-share mirror gets
    `</dev/null`; giving the pane pipeline /dev/null would starve the
    broadcast). Stream-mode stdout carries only the two JSON events.
 5. Start protocol: read shellshare's first stdout line with a timeout
-   while checking the child is alive. No line or early exit = fatal:
-   kill both pipeline halves (a connect blocked past the timeout must
-   not linger and claim the room after failure was reported), print
-   shellshare's captured stderr in the pane, notify failure, write no
-   state, exit non-zero. On success, print the URL in the pane, write
-   state, notify (without the URL - and without relying on the
-   notification's delivery reason, which the herdr CLI does not
-   surface).
+   while checking the child is alive, then unlink that capture (its
+   first line is the URL). No line or early exit = fatal: kill both
+   pipeline halves (a connect blocked past the timeout must not linger
+   and claim the room after failure was reported), write no state, and
+   report - a detached daemon has no pane to print into, so the reason
+   goes to a notification AND to `last-error.txt` in the state dir
+   (never a URL, only what went wrong). On success: write state, start
+   the link fifo server and the badge refresher, notify (without the
+   URL), and open the link overlay.
 6. Lifetime: `wait` on shellshare; ANY exit - including 0, because
    stream mode exits 0 even on mid-run authorization loss - ends the
    share: clean state, notify "share ended". Poller write failures
@@ -158,8 +182,8 @@ shellshare exec --json --cols C --rows R <flags> -- \
   forwards every keystroke into the fully-privileged mirror client
   (navigation, input into real panes, silent share-kill via double
   Ctrl+C). EOF stdin disarms the forwarder; the mirror still gets a
-  proper TTY via shellshare's PTY. The status pane copy never says
-  "press Ctrl+C" - stopping is the `stop` action or closing the pane.
+  proper TTY via shellshare's PTY. Stopping is the `stop` action; the
+  overlay says so and never invites a Ctrl+C.
 - stdout: first line (`sharing` event - exec emits it before spawning
   the command) is consumed by the same start protocol as above; the
   rest (the mirror's PTY bytes) drains to /dev/null without ever
@@ -168,8 +192,7 @@ shellshare exec --json --cols C --rows R <flags> -- \
 - Mirror size: try to derive from the user's client viewport (via
   `herdr api snapshot`: the focused tab's layout extent - x+width by
   y+height - reproduces the client size exactly, verified live); fall
-  back to config (default 120x36) and print the chosen size in the
-  status pane.
+  back to config (default 120x36).
 
 ### shellshare binary resolution
 
@@ -209,34 +232,32 @@ files 600). State is scoped by session: key =
 
 - **No URLs on disk.** shellshare's documented posture is "nothing is
   written to disk" (crypto.rs); the plugin honors it. State records
-  mode, target pane id, status-pane id, room name, broadcaster PID, and
-  a per-share random token. The URL lives in the entrypoint's memory and
-  its status pane text; `status` re-focuses that pane rather than
-  re-printing URLs.
+  mode, target, room name, broadcaster PID, and a per-share random
+  token. The URL lives only in the daemon's memory, served through a
+  fifo (which holds nothing at rest) to the overlay that displays it.
 - **Locking:** the action takes an atomic `mkdir` lock per state key
-  before `plugin pane open` (double-press/agent-double-invoke otherwise
-  lands two broadcasts in the start window); the entrypoint converts the
+  before spawning the daemon (double-press/agent-double-invoke otherwise
+  lands two broadcasts in the start window); the daemon converts the
   lock into the state record once the URL exists.
 - **Liveness / self-heal:** liveness = recorded PID alive AND its
   environment carries the per-share token (Linux reads
   /proc/<pid>/environ; macOS has no /proc, so it falls back to the
   weaker `ps -o command=` match on share.sh's subcommand - stated
   honestly rather than pretending the token can ride in a fixed argv).
-  `share.sh sweep` (startup hook + before every action) deletes records
-  and locks that fail it - traps cannot run on SIGKILL/OOM/server stop,
-  so cleanup must not depend on them. Entrypoints refuse to start
-  without a live action lock or an explicit `SHELLSHARE_DIRECT=1`: a
-  restore that respawned the pane with its env intact would otherwise
-  silently resume broadcasting after a reboot, and one that dropped the
-  env would crash-loop.
+  `share.sh sweep` (startup hook + before every action) deletes records,
+  locks and orphaned run dirs that fail it - traps cannot run on
+  SIGKILL/OOM/server stop, so cleanup must not depend on them. Badges
+  need no sweeping: their TTL expires them. Nothing auto-resumes a
+  broadcast either - daemons are started by actions, never respawned by
+  herdr, so a restart cannot silently put a share back on the air.
 - **`stop` order:** SIGTERM the recorded broadcaster PID first, wait
-  for exit, then best-effort `plugin pane close`, then clear state.
-  For a pane share the trap stops the poller and shellshare drains on
-  stdin EOF; for a session share the trap TERMs shellshare directly,
-  which force-flushes and tears down the mirror with its PTY. Never
-  clear state while the PID is still alive (a failed pane close - e.g.
-  the user moved the status pane, changing its id - must not orphan a
-  running broadcast).
+  for exit, then clear state. For a pane share the trap stops the
+  poller and shellshare drains on stdin EOF; for a session share the
+  trap TERMs shellshare directly, which force-flushes and tears down
+  the mirror with its PTY. The daemon clears its own badge on the way
+  out; if it had to be SIGKILLed, `stop` clears the badge instead, and
+  the token's TTL is the backstop for cases nobody is around to handle.
+  Never clear state while the PID is still alive.
 
 ### Config
 
@@ -262,19 +283,19 @@ mirror size, and per-mode plaintext switches.
   and loudly warned in shellshare; the plugin must not turn it into a
   silent sticky global. `pane_plaintext=true` covers the classroom-LAN
   case; session shares require `session_plaintext=yes-i-know`, and any
-  unencrypted share prefixes its status pane and notification title with
+  unencrypted share marks its overlay and its notification title with
   "PLAINTEXT". (Security section, not just README.)
 
 ### Security considerations
 
 - Encryption on by default; the server relays ciphertext. The URL (with
-  key fragment) appears only in the owning status pane - not in
+  key fragment) appears only in the link overlay - not in
   notifications, not in state files, not in action stdout (plugin
-  command logs persist stdout).
-- A session share broadcasts everything visible in the UI - including,
-  if focused, the status panes of OTHER live shares, whose URLs are
-  displayed there. The session status pane warns when other shares are
-  live, and the README states the rule plainly.
+  command logs persist stdout), not in `last-error.txt`.
+- A session share broadcasts everything visible in the UI - the link
+  overlay included, since it is on screen. So while a session share is
+  live the overlay renders only that share's own link and says how many
+  pane-share links it withheld; the README states the rule plainly.
 - Session mirror stdin is closed (keystroke-injection channel removed);
   the mirror client is view-only in practice because no input reaches
   it.

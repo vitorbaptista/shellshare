@@ -2,25 +2,44 @@
 # Herdr plugin control script for shellshare. One script, many
 # subcommands: the manifest (../herdr-plugin.toml) is pure routing.
 #
-#   action-share-pane / action-share-session   short-lived herdr actions
-#   action-stop / action-status                short-lived herdr actions
-#   run-pane-share / run-session-share         long-running pane entrypoints
+#   action-share-pane / action-share-session   herdr actions (fast, one-shot)
+#   action-stop / action-status                herdr actions
+#   daemon-pane-share / daemon-session-share   detached broadcasters
+#   show-link                                  overlay pane entrypoint
 #   sweep                                      startup hook + pre-action GC
 #
+# Shape follows herdr's grain rather than adding chrome of its own:
+#
+#   - Broadcasts run detached, not in a plugin pane. A pane would put a
+#     permanent tab in the user's tab bar for something that is not a
+#     terminal they want to look at. Community plugins do the same
+#     (collie's systemd service, mirror's daemon); herdr actions are
+#     documented as one-shot, so a daemon belongs outside them.
+#   - The live share announces itself through herdr's own display
+#     metadata (`report-metadata --token`), which renders inside the
+#     user's configured sidebar rows - the documented extension point
+#     for exactly this. The token carries a TTL the daemon refreshes,
+#     so a hard-killed broadcaster's badge expires on its own.
+#   - The link appears in an `overlay` pane: herdr's transient surface,
+#     which restores the previous focus and zoom when it closes. It is
+#     shown once at share time and re-opened on demand by `status`.
+#
 # Written for bash 3.2 (macOS ships it): no associative arrays, no
-# mapfile. Requires jq (herdr responses are JSON) and a shellshare
-# binary; both are checked loudly, never degraded silently.
+# mapfile, no `setsid` assumption. Requires jq (herdr responses are
+# JSON) and a shellshare binary; both are checked loudly, never
+# degraded silently.
 #
 # Security posture (mirrors shellshare's own): the share URL - whose
 # #fragment IS the encryption key - is never written to disk, never put
 # in a notification (herdr truncates bodies, and toast delivery may be
 # routed to the OS notification center), and never printed to action
-# stdout (herdr persists action stdout in the plugin command log). Its
-# only home is the status pane the user is looking at.
+# stdout (herdr persists action stdout in the plugin command log). The
+# daemon holds it in memory and serves it through a fifo, which holds
+# no data at rest, to the overlay that displays it.
 #
 # Helpers that run in $(...) return their error message on stdout with a
 # non-zero status - a `fatal` inside command substitution would only
-# exit the subshell - and the caller passes it to fatal/fatal_pane.
+# exit the subshell - and the caller passes it to fatal.
 
 set -u
 
@@ -32,13 +51,24 @@ STATE_ROOT="${HERDR_PLUGIN_STATE_DIR:-}"
 CONFIG_FILE="${HERDR_PLUGIN_CONFIG_DIR:-}/config"
 SCRIPT_PATH="$0"
 
+# The metadata source id this plugin reports under; herdr scopes
+# tokens per source, so ours never collide with another reporter's.
+META_SOURCE="plugin:shellshare"
+# Sidebar badge shown while a share is live, and the refresh/TTL pair
+# that makes it self-expiring: a daemon killed with SIGKILL cannot
+# clear its own badge, so the badge outlives it by at most TTL.
+BADGE_VALUE="◉ shared"
+BADGE_REFRESH_SECS=30
+BADGE_TTL_MS=90000
+
 # Everything this plugin writes is private: state records name rooms
 # and PIDs, and fifos carry the plaintext broadcast.
 umask 077
 
 notify() {
     # Best-effort: notifications can be disabled, rate-limited, or
-    # undeliverable; the status pane is the delivery guarantee.
+    # undeliverable; the overlay and the sidebar badge are the surfaces
+    # that actually carry the news.
     "$HERDR" notification show "$1" --body "$2" >/dev/null 2>&1 || true
 }
 
@@ -49,28 +79,12 @@ fatal() {
     exit 1
 }
 
-# Entrypoints run inside a visible pane: keep the message on screen so
-# the user can actually read it before the pane goes away. Also release
-# this share's start lock - an entrypoint that dies holding it would
-# make retries claim "already starting" until the sweep GC fires.
-fatal_pane() {
-    if [ -n "${SHELLSHARE_STATE_KEY:-}" ]; then
-        rm -rf "$LOCKS_DIR/$SHELLSHARE_STATE_KEY"
-    fi
-    printf '\nERROR: %s\n' "$*" >&2
-    notify "Shellshare error" "$*"
-    if [ -t 0 ]; then
-        printf '\nPress Enter to close this pane.\n' >&2
-        read -r _ || true
-    fi
-    exit 1
-}
-
 require_plugin_env() {
     [ -n "$STATE_ROOT" ] && [ -n "${HERDR_BIN_PATH:-}" ] ||
         fatal "not running under herdr: this script is driven by the shellshare herdr plugin (see herdr-plugin/README.md)"
     command -v jq >/dev/null 2>&1 ||
         fatal "jq is required (https://jqlang.org); install it and retry"
+    mkdir -p "$SHARES_DIR" "$LOCKS_DIR"
 }
 
 # ---------------------------------------------------------------------
@@ -86,7 +100,7 @@ cfg() { # cfg <key> <default>
 }
 
 # Prints the binary path on success; prints the error message on failure
-# (caller: bin=$(shellshare_bin) || fatal[_pane] "$bin").
+# (caller: bin=$(shellshare_bin) || fatal "$bin").
 shellshare_bin() {
     local bin
     bin="${SHELLSHARE_BIN:-$(cfg shellshare_bin "")}"
@@ -105,9 +119,9 @@ shellshare_bin() {
     printf 'shellshare'
 }
 
-# The entrypoints pass --cols/--rows unconditionally; releases up to
-# 3.11.0 reject them with a clap error. Preflight so an old binary
-# fails with an actionable message instead of raw clap stderr.
+# The daemons pass --cols/--rows unconditionally; releases up to 3.11.0
+# reject them with a clap error. Preflight so an old binary fails with
+# an actionable message instead of raw clap stderr.
 check_shellshare_supports_size() { # check_shellshare_supports_size <bin>
     "$1" --help 2>/dev/null | grep -q -- '--cols'
 }
@@ -117,6 +131,19 @@ pane_rect() { # pane_rect <pane-id>
     "$HERDR" pane layout --pane "$1" 2>/dev/null |
         jq -r --arg p "$1" \
             '.result.layout.panes[] | select(.pane_id == $p) | "\(.rect.width) \(.rect.height)"' 2>/dev/null
+}
+
+# The same rect, but empty while the tab is zoomed. A zoom - including
+# the temporary one an `overlay` pane puts on top, i.e. this plugin's
+# own link overlay - resizes every rect in the tab without changing the
+# pane the user is sharing. Geometry checks must sit that out rather
+# than read it as "the pane was resized".
+pane_rect_stable() { # pane_rect_stable <pane-id>
+    "$HERDR" pane layout --pane "$1" 2>/dev/null |
+        jq -r --arg p "$1" \
+            'if (.result.layout.zoomed // false) then empty
+             else .result.layout.panes[] | select(.pane_id == $p)
+                  | "\(.rect.width) \(.rect.height)" end' 2>/dev/null
 }
 
 # Append config-driven broadcast flags to the ss_args array.
@@ -136,7 +163,7 @@ poll_interval() {
     '' | *[!0-9.]* | *.*.* | .*) v="0.25" ;; # not a plain decimal
     esac
     case "$v" in
-    *[1-9]*) ;; # any nonzero digit anywhere = a real interval
+    *[1-9]*) ;;    # any nonzero digit anywhere = a real interval
     *) v="0.25" ;; # every all-zero spelling would busy-loop
     esac
     printf '%s' "$v"
@@ -161,11 +188,13 @@ sanitize() {
 
 state_file() { printf '%s/%s.json' "$SHARES_DIR" "$1"; }
 lock_dir() { printf '%s/%s' "$LOCKS_DIR" "$1"; }
+run_dir() { printf '%s/run-%s' "$STATE_ROOT" "$1"; }
 
 # A share is live when its recorded PID is alive AND still runs this
 # script (PID reuse guard): the per-share token rides in the process
-# environment (Linux: /proc; macOS fallback: the command line still
-# names share.sh run-*).
+# environment (Linux: /proc; macOS has no /proc, so fall back to
+# matching this script's daemon argv - weaker, but it cannot mistake an
+# unrelated process for a broadcaster).
 share_alive() { # share_alive <pid> <token>
     local pid="$1" token="$2"
     [ -n "$pid" ] || return 1
@@ -174,12 +203,7 @@ share_alive() { # share_alive <pid> <token>
         tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null |
             grep -qxF "SHELLSHARE_SHARE_TOKEN=$token"
     else
-        # No /proc (macOS): the token is invisible, so match this exact
-        # script's entrypoint argv - still weaker than the token check
-        # (a reused PID running another share's entrypoint would pass),
-        # but tight enough that stop/sweep cannot kill or keep alive an
-        # unrelated process.
-        ps -o command= -p "$pid" 2>/dev/null | grep -qF "$SCRIPT_PATH run-"
+        ps -o command= -p "$pid" 2>/dev/null | grep -qF "$SCRIPT_PATH daemon-"
     fi
 }
 
@@ -191,16 +215,15 @@ state_live() { # state_live <state-file>
 }
 
 # Does this record belong to the current session? Matched on the
-# recorded socket path, not the state key: the documented direct-open
-# recipe uses caller-chosen keys (manual-...), and those shares must
-# still be visible to stop/status in their session.
+# recorded socket path, not the state key: the documented direct-start
+# recipe uses caller-chosen keys, and those shares must still be
+# visible to stop/status in their session.
 state_in_session() { # state_in_session <state-file>
     [ "$(jq -r '.socket // empty' "$1" 2>/dev/null)" = "${HERDR_SOCKET_PATH:-}" ]
 }
 
-# A live session share means everything focused is broadcast - a gate
-# several callers need before focusing a pane-share status tab, whose
-# text is that share's key-bearing URL.
+# A live session share means everything visible is broadcast - a gate
+# several callers need before showing another share's link on screen.
 session_share_live() {
     local f
     for f in "$SHARES_DIR"/*.json; do
@@ -212,11 +235,10 @@ session_share_live() {
     return 1
 }
 
-# Garbage-collect records whose processes died uncleanly (SIGKILL,
-# server stop - traps never ran), locks whose start never completed,
-# and run dirs (fifos plus shellshare's stdout, whose first line is the
-# key-bearing sharing event until the entrypoint unlinks it) orphaned
-# by those same unclean deaths.
+# Garbage-collect records whose processes died uncleanly (SIGKILL, OOM,
+# a reboot - traps never ran), locks whose start never completed, and
+# run dirs orphaned by the same. Sidebar badges need no sweeping: they
+# carry a TTL and expire themselves.
 sweep() {
     mkdir -p "$SHARES_DIR" "$LOCKS_DIR"
     local f d key
@@ -225,7 +247,7 @@ sweep() {
         state_live "$f" || rm -f "$f"
     done
     # A lock older than 2 minutes with no state file is a start that
-    # died before the entrypoint could take over.
+    # died before the daemon could take over.
     for d in "$LOCKS_DIR"/*; do
         [ -d "$d" ] || continue
         [ -f "$SHARES_DIR/$(basename "$d").json" ] && continue
@@ -255,10 +277,10 @@ sweep() {
 write_state() { # write_state <key> <mode> <target> <room>
     if jq -n \
         --arg key "$1" --arg mode "$2" --arg target "$3" --arg room "$4" \
-        --arg pane "${HERDR_PANE_ID:-}" --arg socket "${HERDR_SOCKET_PATH:-}" \
+        --arg socket "${HERDR_SOCKET_PATH:-}" \
         --arg token "$SHELLSHARE_SHARE_TOKEN" --argjson pid "$$" \
         '{key:$key, mode:$mode, target:$target, room:$room,
-          status_pane:$pane, socket:$socket, token:$token, pid:$pid}' \
+          socket:$socket, token:$token, pid:$pid}' \
         >"$(state_file "$1").tmp" &&
         mv "$(state_file "$1").tmp" "$(state_file "$1")"; then
         rm -rf "$(lock_dir "$1")"
@@ -285,7 +307,7 @@ room_in_use() { # room_in_use <room> -> prints owner description
                 printf 'a live share of %s in this session (stop it with the shellshare.stop action)' \
                     "$(jq -r '.target // "?"' "$f" 2>/dev/null)"
             else
-                printf 'a live share of %s in ANOTHER herdr session (socket %s) - stop it from that session or close its Shellshare pane' \
+                printf 'a live share of %s in ANOTHER herdr session (socket %s) - stop it from that session' \
                     "$(jq -r '.target // "?"' "$f" 2>/dev/null)" \
                     "$(jq -r '.socket // "?"' "$f" 2>/dev/null)"
             fi
@@ -296,9 +318,90 @@ room_in_use() { # room_in_use <room> -> prints owner description
 }
 
 # ---------------------------------------------------------------------
-# Actions
+# Sidebar badge. herdr renders `$shellshare` wherever the user's
+# [ui.sidebar.*] rows mention it; reporting is display-only and cannot
+# affect pane lifecycle, so this is safe to do to a pane we do not own.
 
-# Prints the pane id on success; the error message on failure.
+workspace_ids() {
+    "$HERDR" workspace list 2>/dev/null |
+        jq -r '.result.workspaces[]? | (.workspace_id // .id // empty)' 2>/dev/null
+}
+
+badge_set() { # badge_set <mode> <target-pane>
+    local ws
+    if [ "$1" = "pane" ]; then
+        "$HERDR" pane report-metadata "$2" --source "$META_SOURCE" \
+            --token "shellshare=$BADGE_VALUE" --ttl-ms "$BADGE_TTL_MS" >/dev/null 2>&1 || true
+        return 0
+    fi
+    for ws in $(workspace_ids); do
+        "$HERDR" workspace report-metadata "$ws" --source "$META_SOURCE" \
+            --token "shellshare=$BADGE_VALUE" --ttl-ms "$BADGE_TTL_MS" >/dev/null 2>&1 || true
+    done
+}
+
+badge_clear() { # badge_clear <mode> <target-pane>
+    local ws
+    if [ "$1" = "pane" ]; then
+        "$HERDR" pane report-metadata "$2" --source "$META_SOURCE" \
+            --clear-token shellshare >/dev/null 2>&1 || true
+        return 0
+    fi
+    for ws in $(workspace_ids); do
+        "$HERDR" workspace report-metadata "$ws" --source "$META_SOURCE" \
+            --clear-token shellshare >/dev/null 2>&1 || true
+    done
+}
+
+# ---------------------------------------------------------------------
+# The link, in memory only. The daemon serves it through a fifo (no
+# data at rest); the overlay reads one copy per open.
+
+# One line per reader: each write opens the fifo (blocking until an
+# overlay opens the other end), delivers the URL, and closes so the
+# reader sees a clean end of line. The brief pause keeps a reader that
+# lingers from turning this into a spin.
+serve_link() { # serve_link <fifo> <url>
+    while :; do
+        printf '%s\n' "$2" >"$1" 2>/dev/null || return 0
+        sleep 0.2
+    done
+}
+
+# Reads one line from a share's fifo, with a bounded wait so a dead
+# daemon cannot hang the overlay (macOS has no coreutils `timeout`).
+read_link() { # read_link <key>
+    local fifo out
+    fifo="$(run_dir "$1")/link"
+    [ -p "$fifo" ] || return 1
+    out=$(
+        {
+            IFS= read -r line <"$fifo" && printf '%s' "$line"
+        } &
+        reader=$!
+        (
+            sleep 5
+            kill "$reader" 2>/dev/null
+        ) >/dev/null 2>&1 &
+        guard=$!
+        wait "$reader" 2>/dev/null
+        kill "$guard" 2>/dev/null
+    )
+    [ -n "$out" ] || return 1
+    printf '%s' "$out"
+}
+
+open_link_overlay() { # open_link_overlay [state-key]
+    set -- --plugin "${HERDR_PLUGIN_ID:-shellshare}" --entrypoint link \
+        --placement overlay --focus ${1:+--env "SHELLSHARE_STATE_KEY=$1"}
+    "$HERDR" plugin pane open "$@" >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------------
+# Actions - fast and one-shot, the way herdr documents them. They
+# validate, take the start lock, hand off to a detached daemon, and
+# return; the daemon owns the rest of the lifecycle.
+
 resolve_target_pane() {
     local target="${SHELLSHARE_TARGET_PANE:-}"
     if [ -z "$target" ]; then
@@ -307,55 +410,62 @@ resolve_target_pane() {
     fi
     [ -z "$target" ] && target="${HERDR_PANE_ID:-}"
     if [ -z "$target" ]; then
-        printf 'no target pane: invoke share-pane from a keybinding (the focused pane is shared), or open the broadcast directly: herdr plugin pane open --plugin shellshare --entrypoint pane-broadcast --env SHELLSHARE_TARGET_PANE=<pane-id> --env ... (see herdr-plugin/README.md)'
+        printf 'no target pane: invoke share-pane from a keybinding (the focused pane is shared), or name one explicitly with SHELLSHARE_TARGET_PANE=<pane-id> (see herdr-plugin/README.md)'
         return 1
     fi
     printf '%s' "$target"
 }
 
-# If the share behind <key> is already live, focus its pane, notify, and
-# exit 0 (idempotent re-invoke); a dead record is cleaned instead.
-# Focusing is skipped while a session share is broadcasting and the
-# re-invoked share is a pane share: its status tab shows its key-bearing
-# URL, and focusing it would hand that link to every session viewer.
+# If the share behind <key> is already live, re-show its link and exit 0
+# (idempotent re-invoke); a dead record is cleaned instead.
 bail_if_live() { # bail_if_live <key> <what>
     local f
     f=$(state_file "$1")
     [ -f "$f" ] || return 0
     if state_live "$f"; then
+        # While a session share is broadcasting, an overlay showing a
+        # pane share's link would show that link to every viewer.
         case "$1" in
-        *-session) "$HERDR" plugin pane focus "$(jq -r '.status_pane' "$f")" >/dev/null 2>&1 || true ;;
-        *)
-            if ! session_share_live; then
-                "$HERDR" plugin pane focus "$(jq -r '.status_pane' "$f")" >/dev/null 2>&1 || true
-            fi
-            ;;
+        *-session) open_link_overlay "$1" ;;
+        *) session_share_live || open_link_overlay "$1" ;;
         esac
-        notify "Shellshare" "$2 is already being shared - link in the Shellshare tab"
+        notify "Shellshare" "$2 is already being shared"
         exit 0
     fi
     rm -f "$f"
 }
 
-open_share_pane() { # open_share_pane <entrypoint> <key> [--env KEY=VAL ...]
-    local entrypoint="$1" key="$2"
+start_daemon() { # start_daemon <subcommand> <key> [NAME=VALUE ...]
+    local sub="$1" key="$2"
     shift 2
-    local token lock
-    token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    local lock run token
     lock=$(lock_dir "$key")
+    run=$(run_dir "$key")
+    token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
     # mkdir is the atomic test-and-set: a double keypress lands both
     # invocations here, and exactly one proceeds.
     if ! mkdir "$lock" 2>/dev/null; then
-        notify "Shellshare" "This share is already starting or live - see the Shellshare tab"
+        notify "Shellshare" "That share is already starting"
         exit 0
     fi
-    if ! "$HERDR" plugin pane open --plugin "${HERDR_PLUGIN_ID:-shellshare}" \
-        --entrypoint "$entrypoint" --placement tab --focus \
-        --env "SHELLSHARE_STATE_KEY=$key" --env "SHELLSHARE_SHARE_TOKEN=$token" \
-        "$@" >/dev/null; then
-        rm -rf "$lock"
-        fatal "could not open the broadcast pane (see: herdr plugin log list --plugin shellshare)"
-    fi
+    rm -rf "$run"
+    mkdir -p "$run"
+
+    # Detach: the broadcast must outlive this action (herdr actions are
+    # one-shot) without occupying a pane. setsid gives it its own
+    # session where available; nohup covers macOS, which has no setsid.
+    (
+        for kv in "$@"; do export "$kv"; done
+        export SHELLSHARE_STATE_KEY="$key" SHELLSHARE_SHARE_TOKEN="$token"
+        if command -v setsid >/dev/null 2>&1; then
+            exec setsid nohup bash "$SCRIPT_PATH" "$sub" \
+                </dev/null >/dev/null 2>"$run/err"
+        else
+            exec nohup bash "$SCRIPT_PATH" "$sub" \
+                </dev/null >/dev/null 2>"$run/err"
+        fi
+    ) &
+    disown 2>/dev/null || true
 }
 
 action_share_pane() {
@@ -365,7 +475,7 @@ action_share_pane() {
     target=$(resolve_target_pane) || fatal "$target"
     key="s$(session_scope)-pane-$(sanitize "$target")"
     bail_if_live "$key" "Pane $target"
-    open_share_pane pane-broadcast "$key" --env "SHELLSHARE_TARGET_PANE=$target"
+    start_daemon daemon-pane-share "$key" "SHELLSHARE_TARGET_PANE=$target"
 }
 
 action_share_session() {
@@ -382,26 +492,21 @@ action_share_session() {
     [ -n "$name" ] || fatal "could not resolve which herdr session this is (socket ${HERDR_SOCKET_PATH:-unset} is not in 'herdr session list')"
     key="s$(session_scope)-session"
     bail_if_live "$key" "This session"
-    open_share_pane session-broadcast "$key" --env "SHELLSHARE_SESSION_NAME=$name"
+    start_daemon daemon-session-share "$key" "SHELLSHARE_SESSION_NAME=$name"
 }
 
 action_stop() {
     require_plugin_env
     sweep
-    local stopped=0 f pid pane i
+    local stopped=0 f pid i
     for f in "$SHARES_DIR"/*.json; do
         [ -f "$f" ] || continue
-        # Socket match, not key prefix: direct-opened shares (README's
-        # agent recipe) carry caller-chosen keys but the right socket,
-        # and their banner promises the stop action works on them.
         state_in_session "$f" || continue
         pid=$(jq -r '.pid // empty' "$f")
-        pane=$(jq -r '.status_pane // empty' "$f")
         if state_live "$f"; then
-            # TERM the entrypoint first: its trap stops the poller /
-            # mirror so shellshare drains and flushes. Only clear state
-            # once the process is really gone - a failed pane close must
-            # never orphan a running broadcast.
+            # TERM the daemon: its trap stops the poller / mirror so
+            # shellshare drains and flushes, and clears the badge. Only
+            # drop the record once the process is really gone.
             kill -TERM "$pid" 2>/dev/null || true
             i=0
             while [ "$i" -lt 100 ] && kill -0 "$pid" 2>/dev/null; do
@@ -411,10 +516,10 @@ action_stop() {
             if kill -0 "$pid" 2>/dev/null; then
                 kill -KILL "$pid" 2>/dev/null || true
                 sleep 0.2
+                # The daemon could not clear its own badge; do it here
+                # (it would expire on its own, but not for ~90s).
+                badge_clear "$(jq -r '.mode' "$f")" "$(jq -r '.target' "$f")"
             fi
-        fi
-        if [ -n "$pane" ]; then
-            "$HERDR" plugin pane close "$pane" >/dev/null 2>&1 || true
         fi
         rm -f "$f"
         stopped=$((stopped + 1))
@@ -429,54 +534,99 @@ action_stop() {
 action_status() {
     require_plugin_env
     sweep
-    local live=0 f pane mode session_live=0
-    # While a session share is live, everything focused is broadcast -
-    # including other shares' status tabs, whose URLs carry their keys.
-    # Focusing them would hand every session viewer those links.
+    local live=0 f
+    for f in "$SHARES_DIR"/*.json; do
+        [ -f "$f" ] || continue
+        state_in_session "$f" || continue
+        live=$((live + 1))
+    done
+    if [ "$live" -eq 0 ]; then
+        notify "Shellshare" "No live shares in this session"
+        exit 0
+    fi
+    open_link_overlay
+}
+
+# ---------------------------------------------------------------------
+# Overlay: shows the live share links, then restores the user's focus
+# and zoom when dismissed. This is the only place a URL is displayed.
+
+show_link() {
+    require_plugin_env
+    local want="${SHELLSHARE_STATE_KEY:-}" shown=0 hidden=0 f key mode target url
+    printf '\033[2J\033[H\n  \033[1mshellshare\033[0m\n'
+    local session_live=0
     session_share_live && session_live=1
     for f in "$SHARES_DIR"/*.json; do
         [ -f "$f" ] || continue
         state_in_session "$f" || continue
-        pane=$(jq -r '.status_pane // empty' "$f")
-        mode=$(jq -r '.mode // empty' "$f")
-        if [ -n "$pane" ] && { [ "$session_live" = "0" ] || [ "$mode" = "session" ]; }; then
-            "$HERDR" plugin pane focus "$pane" >/dev/null 2>&1 || true
+        state_live "$f" || continue
+        key=$(jq -r '.key' "$f")
+        mode=$(jq -r '.mode' "$f")
+        target=$(jq -r '.target' "$f")
+        [ -n "$want" ] && [ "$want" != "$key" ] && continue
+        # A session share broadcasts this overlay too: never render
+        # another share's key-bearing link into it.
+        if [ "$session_live" = "1" ] && [ "$mode" != "session" ]; then
+            hidden=$((hidden + 1))
+            continue
         fi
-        live=$((live + 1))
-    done
-    if [ "$live" -gt 0 ]; then
-        if [ "$session_live" = "1" ] && [ "$live" -gt 1 ]; then
-            notify "Shellshare" "$live live share(s). Not focusing pane-share tabs: a session share is broadcasting, and their links would be shown to its viewers"
+        url=$(read_link "$key") || url=""
+        shown=$((shown + 1))
+        if [ "$mode" = "session" ]; then
+            printf '\n  session \033[1m%s\033[0m - the whole herdr UI, read-only\n' "$target"
         else
-            notify "Shellshare" "$live live share(s) - links are in the Shellshare tab(s)"
+            printf '\n  pane \033[1m%s\033[0m - live view, read-only\n' "$target"
         fi
-    else
-        notify "Shellshare" "No live shares in this session"
+        if [ -n "$url" ]; then
+            printf '\n    %s\n' "$url"
+            if command -v qrencode >/dev/null 2>&1; then
+                printf '\n'
+                qrencode -t ANSIUTF8 -m 1 "$url" 2>/dev/null | sed 's/^/    /'
+            fi
+        else
+            printf '\n    (link unavailable - the broadcaster may be shutting down)\n'
+        fi
+    done
+    if [ "$shown" -eq 0 ]; then
+        printf '\n  No live shares to display.\n'
     fi
+    if [ "$hidden" -gt 0 ]; then
+        printf '\n  %d pane share(s) hidden: a session share is broadcasting,\n' "$hidden"
+        printf '  and their links would be shown to its viewers.\n'
+    fi
+    printf '\n  \033[2mStop sharing with the shellshare.stop action.\033[0m\n'
+    printf '  \033[2mPress any key to close.\033[0m\n'
+    read -r -n 1 -s _ 2>/dev/null || read -r _ 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------
-# Entrypoints (inside the status pane; long-running)
+# Daemons (detached; no controlling terminal, nothing on screen)
 
-require_entrypoint_env() {
-    # A pane respawned without its --env parameters (e.g. by a session
-    # restore that does not preserve them) must fail fast and clearly,
-    # not crash-loop or share the wrong thing.
-    [ -n "$STATE_ROOT" ] && [ -n "${HERDR_BIN_PATH:-}" ] ||
-        fatal_pane "not running under herdr (see herdr-plugin/README.md)"
-    command -v jq >/dev/null 2>&1 ||
-        fatal_pane "jq is required (https://jqlang.org); install it and retry"
-    [ -n "${SHELLSHARE_STATE_KEY:-}" ] && [ -n "${SHELLSHARE_SHARE_TOKEN:-}" ] ||
-        fatal_pane "missing share parameters - this pane must be opened by the share actions (or 'herdr plugin pane open ... --env', see herdr-plugin/README.md), not restarted directly"
+require_daemon_env() {
+    [ -n "$STATE_ROOT" ] && [ -n "${HERDR_BIN_PATH:-}" ] || {
+        printf 'ERROR: not running under herdr\n' >&2
+        exit 1
+    }
+    [ -n "${SHELLSHARE_STATE_KEY:-}" ] && [ -n "${SHELLSHARE_SHARE_TOKEN:-}" ] || {
+        printf 'ERROR: missing share parameters (start shares through the plugin actions)\n' >&2
+        exit 1
+    }
     export SHELLSHARE_SHARE_TOKEN # liveness checks read it from our environ
     mkdir -p "$SHARES_DIR" "$LOCKS_DIR"
-    # Broadcasts start only from a fresh action invocation (which holds
-    # the lock) or an explicit opt-in. Without this, a session restore
-    # that preserves the pane's env would silently resume broadcasting
-    # after a reboot - a surprise share is a privacy problem, not a
-    # convenience.
-    [ -d "$(lock_dir "$SHELLSHARE_STATE_KEY")" ] || [ "${SHELLSHARE_DIRECT:-}" = "1" ] ||
-        fatal_pane "refusing to auto-restart a broadcast (this pane was respawned, not opened by a share action). Re-run the share action, or pass --env SHELLSHARE_DIRECT=1 when opening the pane yourself"
+}
+
+# A start that never produced a link: report it where the user will see
+# it, drop the lock, and leave no half-share behind. A detached daemon
+# has no pane to print into and its stderr dies with the run dir, so
+# the message also lands in a last-error file the README points at (it
+# never contains a URL - only what went wrong).
+start_failed() { # start_failed <key> <message>
+    printf 'ERROR: %s\n' "$2" >&2
+    printf '%s\n' "$2" >"$STATE_ROOT/last-error.txt" 2>/dev/null || true
+    rm -rf "$(lock_dir "$1")" "$(run_dir "$1")"
+    notify "Shellshare could not start" "$2"
+    exit 1
 }
 
 # Wait for shellshare's first stdout line (the `sharing` event). It is
@@ -496,21 +646,13 @@ wait_for_sharing() { # wait_for_sharing <out-file> <pid> -> sets SHARE_URL
     SHARE_URL=$(head -n 1 "$out" 2>/dev/null | jq -r '.url // empty' 2>/dev/null)
 }
 
-banner() { # banner <what> <url> <plaintext?> <extra lines...>
-    local what="$1" url="$2" plaintext="$3"
-    shift 3
-    printf '\n'
-    if [ "$plaintext" = "1" ]; then
-        printf '  PLAINTEXT - this broadcast is NOT end-to-end encrypted.\n\n'
-    fi
-    printf '  shellshare - %s\n\n' "$what"
-    printf '    %s\n\n' "$url"
-    while [ "$#" -gt 0 ]; do
-        printf '  %s\n' "$1"
-        shift
+# Keep the sidebar badge alive while we are. The TTL is what makes a
+# SIGKILLed daemon's badge disappear on its own.
+badge_keeper() { # badge_keeper <mode> <target>
+    while :; do
+        badge_set "$1" "$2"
+        sleep "$BADGE_REFRESH_SECS"
     done
-    printf '\n  Stop: run the shellshare.stop action, or close this pane.\n'
-    printf '  The link stays readable for a while after stopping (server room TTL).\n\n'
 }
 
 # The pane poller: full-frame repaints of the target pane's rendered
@@ -551,7 +693,7 @@ poll_pane() { # poll_pane <target> <geometry> <interval> <reason-file>
         # streaming mis-shaped frames into the old grid indefinitely.
         tick=$(((tick + 1) % 8))
         if [ "$tick" = "0" ]; then
-            rect=$(pane_rect "$target")
+            rect=$(pane_rect_stable "$target")
             if [ -n "$rect" ] && [ "$rect" != "$geometry" ]; then
                 printf 'pane %s resized' "$target" >"$reason"
                 exit 0
@@ -575,32 +717,29 @@ poll_pane() { # poll_pane <target> <geometry> <interval> <reason-file>
     done
 }
 
-run_pane_share() {
-    require_entrypoint_env
-    local target="${SHELLSHARE_TARGET_PANE:-}"
-    [ -n "$target" ] || fatal_pane "missing SHELLSHARE_TARGET_PANE"
-    local key="$SHELLSHARE_STATE_KEY" ss
-    ss=$(shellshare_bin) || fatal_pane "$ss"
+daemon_pane_share() {
+    require_daemon_env
+    local key="$SHELLSHARE_STATE_KEY" target="${SHELLSHARE_TARGET_PANE:-}" ss
+    [ -n "$target" ] || start_failed "$key" "missing SHELLSHARE_TARGET_PANE"
+    ss=$(shellshare_bin) || start_failed "$key" "$ss"
     check_shellshare_supports_size "$ss" ||
-        fatal_pane "this shellshare is too old for the herdr plugin (needs --cols/--rows, shellshare 3.12+). Upgrade: npx -y shellshare@latest, or download from https://shellshare.net"
+        start_failed "$key" "this shellshare is too old for the herdr plugin (needs --cols/--rows, shellshare 3.12+). Upgrade: npx -y shellshare@latest"
 
-    # Geometry: the pane's exact cell rect.
     local rect cols rows
     rect=$(pane_rect "$target")
     cols=${rect%% *}
     rows=${rect##* }
-    case "${cols:-x}${rows:-x}" in *[!0-9]*) fatal_pane "cannot read the geometry of pane $target - is it still open?" ;; esac
+    case "${cols:-x}${rows:-x}" in *[!0-9]*) start_failed "$key" "cannot read the geometry of pane $target - is it still open?" ;; esac
 
     # Room: random by default (generated inside shellshare - never in
     # argv). room_prefix gives stable links, scoped per pane so
     # concurrent shares never collide on one room.
-    local prefix room=""
+    local prefix room="" owner
     local ss_args=(--json --cols "$cols" --rows "$rows")
     prefix=$(cfg room_prefix "")
     if [ -n "$prefix" ]; then
         room="$prefix-pane-$(sanitize "$target")"
-        local owner
-        owner=$(room_in_use "$room") && fatal_pane "room '$room' is already used by $owner"
+        owner=$(room_in_use "$room") && start_failed "$key" "room '$room' is already used by $owner"
         ss_args=("${ss_args[@]}" --room "$room")
     fi
     local plain_flag=0
@@ -610,10 +749,10 @@ run_pane_share() {
     fi
     add_base_args
 
-    local run="$STATE_ROOT/run-$key"
-    rm -rf "$run"
+    local run
+    run=$(run_dir "$key")
     mkdir -p "$run"
-    mkfifo "$run/frames"
+    mkfifo "$run/frames" "$run/link" 2>/dev/null
 
     # shellshare in stream mode: stdin = repaint frames, stdout = the
     # two JSON events only. Both ends open concurrently and rendezvous.
@@ -622,10 +761,6 @@ run_pane_share() {
     poll_pane "$target" "$rect" "$(poll_interval)" "$run/reason" >"$run/frames" &
     local poller_pid=$!
 
-    # Graceful stop (the stop action TERMs us): stop the poller so
-    # shellshare sees stdin EOF and drains. A pane close signals the
-    # whole process group instead; shellshare force-flushes on its own
-    # there, which full-frame repaints make harmless.
     trap 'kill "$poller_pid" 2>/dev/null' TERM INT HUP
 
     wait_for_sharing "$run/out" "$ss_pid"
@@ -633,47 +768,45 @@ run_pane_share() {
     # key fragment. Parsed, it has no business surviving on disk.
     rm -f "$run/out"
     if [ -z "$SHARE_URL" ]; then
-        # Kill shellshare too: a connect blocked past the timeout must
-        # not linger and claim the room after we've reported failure.
-        # And capture the diagnostics BEFORE deleting the run dir.
-        kill "$poller_pid" "$ss_pid" 2>/dev/null
         local err_text
         err_text=$(cat "$run/err" 2>/dev/null || true)
-        rm -rf "$run"
-        fatal_pane "could not start the broadcast: ${err_text:-no error output}"
+        kill "$poller_pid" "$ss_pid" 2>/dev/null
+        start_failed "$key" "could not start the broadcast: ${err_text:-no error output}"
     fi
 
     write_state "$key" pane "$target" "$room" || {
         kill "$poller_pid" "$ss_pid" 2>/dev/null
-        rm -rf "$run"
-        fatal_pane "could not record share state under $SHARES_DIR - stopping the broadcast rather than running untracked"
+        start_failed "$key" "could not record share state under $SHARES_DIR"
     }
-    banner "sharing pane $target (${cols}x${rows})" "$SHARE_URL" "$plain_flag" \
-        "Viewers see a live snapshot of the pane (no scrollback, ~4 frames/s)." \
-        "Resizing the pane or moving it to another workspace ends the share."
-    notify "Shellshare$([ "$plain_flag" = 1 ] && printf ' (PLAINTEXT)')" "Sharing pane $target - link in the Shellshare tab"
+
+    serve_link "$run/link" "$SHARE_URL" &
+    local link_pid=$!
+    badge_keeper pane "$target" &
+    local badge_pid=$!
+
+    notify "Shellshare$([ "$plain_flag" = 1 ] && printf ' (PLAINTEXT)')" \
+        "Sharing pane $target read-only"
+    open_link_overlay "$key"
 
     while kill -0 "$ss_pid" 2>/dev/null; do
         wait "$ss_pid" 2>/dev/null || true
     done
-    kill "$poller_pid" 2>/dev/null || true
+    kill "$poller_pid" "$link_pid" "$badge_pid" 2>/dev/null || true
+    badge_clear pane "$target"
     rm -f "$(state_file "$key")"
     local reason=""
     [ -f "$run/reason" ] && reason=$(cat "$run/reason")
     rm -rf "$run"
-    printf '\033[?25h\nShare ended%s. The link stays readable until the room idles out (~6h).\n' \
-        "${reason:+ ($reason)}"
     notify "Shellshare" "Share of pane $target ended${reason:+ ($reason)}"
 }
 
-run_session_share() {
-    require_entrypoint_env
-    local name="${SHELLSHARE_SESSION_NAME:-}"
-    [ -n "$name" ] || fatal_pane "missing SHELLSHARE_SESSION_NAME"
-    local key="$SHELLSHARE_STATE_KEY" ss
-    ss=$(shellshare_bin) || fatal_pane "$ss"
+daemon_session_share() {
+    require_daemon_env
+    local key="$SHELLSHARE_STATE_KEY" name="${SHELLSHARE_SESSION_NAME:-}" ss
+    [ -n "$name" ] || start_failed "$key" "missing SHELLSHARE_SESSION_NAME"
+    ss=$(shellshare_bin) || start_failed "$key" "$ss"
     check_shellshare_supports_size "$ss" ||
-        fatal_pane "this shellshare is too old for the herdr plugin (needs --cols/--rows, shellshare 3.12+). Upgrade: npx -y shellshare@latest, or download from https://shellshare.net"
+        start_failed "$key" "this shellshare is too old for the herdr plugin (needs --cols/--rows, shellshare 3.12+). Upgrade: npx -y shellshare@latest"
 
     # Mirror size: the user's own render extent when available (viewers
     # then see roughly what the user sees), else config, else 120x36.
@@ -688,13 +821,12 @@ run_session_share() {
     [ -n "$cols" ] || cols=$(cfg session_cols "120")
     [ -n "$rows" ] || rows=$(cfg session_rows "36")
 
-    local prefix room=""
+    local prefix room="" owner
     local ss_args=(--json --cols "$cols" --rows "$rows")
     prefix=$(cfg room_prefix "")
     if [ -n "$prefix" ]; then
         room="$prefix-session"
-        local owner
-        owner=$(room_in_use "$room") && fatal_pane "room '$room' is already used by $owner"
+        owner=$(room_in_use "$room") && start_failed "$key" "room '$room' is already used by $owner"
         ss_args=("${ss_args[@]}" --room "$room")
     fi
 
@@ -710,22 +842,21 @@ run_session_share() {
         plain_flag=1
         ;;
     "") ;;
-    *) fatal_pane "session_plaintext must be exactly 'yes-i-know' to broadcast the whole session unencrypted" ;;
+    *) start_failed "$key" "session_plaintext must be exactly 'yes-i-know' to broadcast the whole session unencrypted" ;;
     esac
     add_base_args
 
-    local run="$STATE_ROOT/run-$key"
-    rm -rf "$run"
+    local run
+    run=$(run_dir "$key")
     mkdir -p "$run"
-    mkfifo "$run/pty"
+    mkfifo "$run/pty" "$run/link" 2>/dev/null
 
     # The mirror: a second herdr client attached to this session inside
     # shellshare's PTY. HERDR_ENV gates nested herdr - unset exactly
     # that. </dev/null is load-bearing: with a TTY stdin, exec mode
-    # raw-modes this pane and forwards every keystroke invisibly into
-    # the fully-privileged mirror client (double Ctrl+C would even kill
-    # the share); EOF disarms the forwarder while the mirror still gets
-    # a real TTY from shellshare's PTY.
+    # raw-modes the terminal and forwards every keystroke invisibly into
+    # the fully-privileged mirror client; EOF disarms the forwarder
+    # while the mirror still gets a real TTY from shellshare's PTY.
     "$ss" exec "${ss_args[@]}" \
         -- env -u HERDR_ENV "$HERDR" session attach "$name" \
         </dev/null >"$run/pty" 2>"$run/err" &
@@ -745,46 +876,35 @@ run_session_share() {
     trap 'kill -TERM "$ss_pid" 2>/dev/null' TERM INT HUP
 
     wait_for_sharing "$run/out" "$ss_pid"
-    # The out file's first line is the sharing event - the URL with its
-    # key fragment. Parsed, it has no business surviving on disk.
     rm -f "$run/out"
     if [ -z "$SHARE_URL" ]; then
-        kill "$ss_pid" "$drain_pid" 2>/dev/null
         local err_text
         err_text=$(cat "$run/err" 2>/dev/null || true)
-        rm -rf "$run"
-        fatal_pane "could not start the broadcast: ${err_text:-no error output}"
+        kill "$ss_pid" "$drain_pid" 2>/dev/null
+        start_failed "$key" "could not start the broadcast: ${err_text:-no error output}"
     fi
 
     write_state "$key" session "$name" "$room" || {
         kill "$ss_pid" "$drain_pid" 2>/dev/null
-        rm -rf "$run"
-        fatal_pane "could not record share state under $SHARES_DIR - stopping the broadcast rather than running untracked"
+        start_failed "$key" "could not record share state under $SHARES_DIR"
     }
-    # Count other live shares in THIS session - their status tabs, if
-    # focused, are visible to these viewers.
-    local others=0 f
-    for f in "$SHARES_DIR"/*.json; do
-        [ -f "$f" ] || continue
-        [ "$(basename "$f")" = "$key.json" ] && continue
-        state_in_session "$f" || continue
-        state_live "$f" && others=$((others + 1))
-    done
-    set -- "Viewers see the entire herdr UI at ${cols}x${rows} - every pane and tab." \
-        "This tab is what they see right now - switch back to your work tab."
-    if [ "$others" -gt 0 ]; then
-        set -- "$@" "Careful: $others other share(s) are live - focusing their status tabs shows their links to these viewers too."
-    fi
-    banner "sharing session '$name'" "$SHARE_URL" "$plain_flag" "$@"
-    notify "Shellshare$([ "$plain_flag" = 1 ] && printf ' (PLAINTEXT)')" "Sharing session $name - link in the Shellshare tab"
+
+    serve_link "$run/link" "$SHARE_URL" &
+    local link_pid=$!
+    badge_keeper session "" &
+    local badge_pid=$!
+
+    notify "Shellshare$([ "$plain_flag" = 1 ] && printf ' (PLAINTEXT)')" \
+        "Sharing session $name read-only - everything visible in the UI"
+    open_link_overlay "$key"
 
     while kill -0 "$ss_pid" 2>/dev/null; do
         wait "$ss_pid" 2>/dev/null || true
     done
-    kill "$drain_pid" 2>/dev/null || true
+    kill "$drain_pid" "$link_pid" "$badge_pid" 2>/dev/null || true
+    badge_clear session ""
     rm -f "$(state_file "$key")"
     rm -rf "$run"
-    printf '\nShare ended. The link stays readable until the room idles out (~6h).\n'
     notify "Shellshare" "Session share ended"
 }
 
@@ -795,14 +915,15 @@ action-share-pane) action_share_pane ;;
 action-share-session) action_share_session ;;
 action-stop) action_stop ;;
 action-status) action_status ;;
-run-pane-share) run_pane_share ;;
-run-session-share) run_session_share ;;
+daemon-pane-share) daemon_pane_share ;;
+daemon-session-share) daemon_session_share ;;
+show-link) show_link ;;
 sweep)
     require_plugin_env
     sweep
     ;;
 *)
-    printf 'usage: share.sh {action-share-pane|action-share-session|action-stop|action-status|run-pane-share|run-session-share|sweep}\n' >&2
+    printf 'usage: share.sh {action-share-pane|action-share-session|action-stop|action-status|daemon-pane-share|daemon-session-share|show-link|sweep}\n' >&2
     exit 2
     ;;
 esac

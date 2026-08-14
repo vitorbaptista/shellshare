@@ -3,18 +3,25 @@ E2E Tests for the herdr plugin (herdr-plugin.toml + herdr-plugin/share.sh)
 
 The suite never talks to a real herdr: a stub `herdr` binary serves the
 handful of calls share.sh makes (pane layout/read, session list, api
-snapshot, notification show), driven by files the test controls. The
-shellshare side is real - broadcasts run against a dedicated local
-server with encryption ON, and assertions read the viewer WebSocket,
-so the whole pipeline (poller -> stream mode -> server -> viewer) is
-exercised, not just the script.
+snapshot, report-metadata, notification show, plugin pane open), driven
+by files the test controls and logging what the plugin asked herdr to
+do. The shellshare side is real - broadcasts run against a dedicated
+local server with encryption ON, and assertions read the viewer
+WebSocket, so the whole pipeline (poller -> stream mode -> server ->
+viewer) is exercised, not just the script.
+
+The plugin's surfaces are herdr-native: the broadcast runs detached
+(no pane), it announces itself through herdr display metadata (a
+sidebar token), and the link is shown by an overlay entrypoint that
+reads it from the daemon's fifo. The tests drive those same surfaces.
 
 Test categories:
-- Manifest <-> share.sh lockstep (routing, dot-free ids)
-- Pane share: live frames reach a viewer; graceful stop cleans state
-- Pane share: a group signal (what a pane close delivers) still leaves
-  a complete last frame, and `sweep` collects the stale record
+- Manifest <-> share.sh lockstep (routing, dot-free ids, entrypoint)
+- Pane share: live frames reach a viewer; badge set and cleared; the
+  link is served to the overlay and never written to disk
+- Uncatchable kill: link keeps serving, sweep collects the leftovers
 - Session share: the mirror runs with HERDR_ENV unset and stdin closed
+- Actions: fast hand-off to a detached daemon, lock, stop
 - Failure paths: unreachable server; unresolvable session
 """
 
@@ -24,7 +31,6 @@ import signal
 import subprocess
 import sys
 import textwrap
-import threading
 import time
 from pathlib import Path
 
@@ -34,6 +40,7 @@ from conftest import (
     CLI_PATH,
     SocketListener,
     parse_share_key,
+    poll_until,
     random_id,
 )
 
@@ -49,16 +56,22 @@ FAKE_SOCKET = "/tmp/herdr-plugin-e2e.sock"
 
 # One stub for every herdr call share.sh makes. Reads/writes files under
 # $STUB_DIR so tests can both drive it (frame file) and observe it
-# (notification log, attach env dump).
+# (metadata/notification/pane-open logs, attach env dump).
 STUB_HERDR = textwrap.dedent("""\
     #!/bin/bash
     case "$1 $2" in
     "pane layout")
-        printf '{"id":"x","result":{"layout":{"panes":[{"pane_id":"w1:p7","rect":{"height":20,"width":60,"x":0,"y":1}}]}}}\\n'
+        printf '{"id":"x","result":{"layout":{"zoomed":false,"panes":[{"pane_id":"w1:p7","rect":{"height":20,"width":60,"x":0,"y":1}}]}}}\\n'
         ;;
     "pane read")
         [ -f "$STUB_DIR/frame" ] || exit 1
         cat "$STUB_DIR/frame"
+        ;;
+    "pane report-metadata"|"workspace report-metadata")
+        printf '%s\\n' "$*" >> "$STUB_DIR/metadata.log"
+        ;;
+    "workspace list")
+        printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1"}]}}\\n'
         ;;
     "session list")
         printf '{"sessions":[{"default":true,"name":"e2e-session","running":true,"socket_path":"%s"}]}\\n' "$FAKE_SOCKET"
@@ -116,7 +129,7 @@ def plugin_env(tmp_path, dedicated_server):
         HERDR_PLUGIN_STATE_DIR=str(state),
         HERDR_PLUGIN_CONFIG_DIR=str(config_dir),
         HERDR_PLUGIN_ID="shellshare",
-        HERDR_PANE_ID="w1:p99",
+        HERDR_PANE_ID="w1:p7",
         SHELLSHARE_BIN=str(CLI_PATH),
         STUB_DIR=str(stub_dir),
         FAKE_SOCKET=FAKE_SOCKET,
@@ -129,75 +142,81 @@ def plugin_env(tmp_path, dedicated_server):
     )
 
 
-def start_entrypoint(plugin_env, subcommand, extra_env):
+def run_script(plugin_env, subcommand, extra_env=None, timeout=60):
+    """Run a share.sh subcommand to completion."""
+    env = dict(plugin_env.env)
+    env.update(extra_env or {})
+    return subprocess.run(
+        ["bash", str(SHARE_SH), subcommand],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(REPO_ROOT),
+        timeout=timeout,
+    )
+
+
+def start_daemon(plugin_env, subcommand, extra_env):
+    """Start a broadcast daemon the way an action does, and wait for it
+    to publish its state record."""
+    key = f"s1-{random_id(6)}"
     env = dict(plugin_env.env)
     env.update(
-        SHELLSHARE_STATE_KEY=f"s1-{random_id(6)}",
+        SHELLSHARE_STATE_KEY=key,
         SHELLSHARE_SHARE_TOKEN=f"tok-{random_id(8)}",
-        # The documented direct-open opt-in: without a lock from a share
-        # action, entrypoints refuse to start (the restore-respawn guard)
-        SHELLSHARE_DIRECT="1",
         **extra_env,
     )
+    (plugin_env.state / "locks" / key).mkdir(parents=True)
     proc = subprocess.Popen(
         ["bash", str(SHARE_SH), subcommand],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=env,
-        start_new_session=True,  # its own process group, like a pane
+        start_new_session=True,
         cwd=str(REPO_ROOT),
     )
-    return proc, env["SHELLSHARE_STATE_KEY"]
+    state_file = plugin_env.state / "shares" / f"{key}.json"
+    if not poll_until(state_file.exists, timeout=45):
+        stop_and_reap(proc, sig=signal.SIGKILL, to_group=True)
+        last_error = plugin_env.state / "last-error.txt"
+        pytest.fail(
+            "daemon never published its share; last error: "
+            f"{last_error.read_text() if last_error.exists() else '<none>'}"
+        )
+    return proc, key
 
 
-def wait_for_url(proc, timeout=45):
-    """The banner is the URL's only home - read it from pane stdout.
-
-    Reading happens on a thread: readline on the live pipe would block
-    the test (and its deadline check) whenever the entrypoint is slow to
-    print, hanging the CI worker instead of failing. The timeout leaves
-    headroom over share.sh's own 30s start ceiling so its error message
-    wins the race and shows up in the failure."""
-    lines = []
-    reader = threading.Thread(
-        target=lambda: lines.extend(iter(proc.stdout.readline, "")), daemon=True
-    )
-    reader.start()
-
-    def scan():
-        for line in list(lines):
-            if "/r/" in line:
-                return line.strip()
-        return None
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        found = scan()
-        if found:
-            return found
-        if proc.poll() is not None and not reader.is_alive():
-            break
-        time.sleep(0.1)
-    # One last scan: the reader thread may have appended the URL between
-    # the loop's snapshot and its exit condition.
-    found = scan()
-    if found:
-        return found
-    pytest.fail(
-        f"no share URL in entrypoint output; stdout={''.join(lines)!r} "
-        f"stderr={proc.stderr.read() if proc.poll() is not None else '<still running>'}"
-    )
+def share_url(plugin_env, key):
+    """The link, read the way the overlay reads it: from the daemon's
+    fifo. It exists nowhere else - not on disk, not in any log."""
+    proc = run_script(plugin_env, "show-link", {"SHELLSHARE_STATE_KEY": key},
+                      timeout=30)
+    for line in proc.stdout.splitlines():
+        if "/r/" in line:
+            return line.strip()
+    pytest.fail(f"overlay showed no link: {proc.stdout!r} {proc.stderr!r}")
 
 
 def stop_and_reap(proc, sig=signal.SIGTERM, to_group=False):
     if proc.poll() is None:
-        os.killpg(proc.pid, sig) if to_group else proc.send_signal(sig)
+        if to_group:
+            os.killpg(proc.pid, sig)
+        else:
+            proc.send_signal(sig)
     try:
-        proc.wait(timeout=15)
+        proc.wait(timeout=20)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait(timeout=5)
+
+
+def listener_for(plugin_env, url):
+    room = url.split("/r/")[1].split("#")[0]
+    listener = SocketListener(room, server_url=plugin_env.server.url)
+    listener.set_key(parse_share_key(url))
+    listener.connect()
+    return listener
 
 
 class TestManifestLockstep:
@@ -223,15 +242,16 @@ class TestManifestLockstep:
             # Every routed subcommand must have a dispatch arm.
             assert f"{cmd[2]})" in script, f"share.sh has no arm for {cmd[2]}"
 
-        # The other direction: share.sh hardcodes the entrypoint ids it
-        # passes to `plugin pane open --entrypoint`, which herdr resolves
-        # against [[panes]] - renaming one side must fail here.
-        pane_ids = {p["id"] for p in manifest["panes"]}
-        assert pane_ids == {"pane-broadcast", "session-broadcast"}
-        for pane_id in pane_ids:
-            assert f"open_share_pane {pane_id} " in script or \
-                f'open_share_pane {pane_id} "' in script, \
-                f"share.sh never opens entrypoint {pane_id}"
+        # The daemons are spawned by share.sh itself rather than routed
+        # by the manifest, so their subcommands must exist too.
+        for sub in ("daemon-pane-share", "daemon-session-share"):
+            assert f"{sub})" in script and f'"$sub"' in script or sub in script
+
+        # The one pane entrypoint is the transient link overlay, and
+        # share.sh opens it by that exact id.
+        assert {p["id"] for p in manifest["panes"]} == {"link"}
+        assert manifest["panes"][0]["placement"] == "overlay"
+        assert "--entrypoint link" in script
 
         # Local ids are dot-free: dots are reserved for the qualified
         # form shellshare.<id> used by keybindings and action invoke.
@@ -241,67 +261,69 @@ class TestManifestLockstep:
 
 
 class TestPaneShare:
-    def test_frames_reach_viewer_and_stop_cleans_up(self, plugin_env):
-        proc, key = start_entrypoint(
-            plugin_env, "run-pane-share", {"SHELLSHARE_TARGET_PANE": "w1:p7"}
+    def test_frames_reach_viewer_badge_is_reported_and_stop_cleans_up(
+        self, plugin_env
+    ):
+        proc, key = start_daemon(
+            plugin_env, "daemon-pane-share", {"SHELLSHARE_TARGET_PANE": "w1:p7"}
         )
         try:
-            url = wait_for_url(proc)
-            room = url.split("/r/")[1].split("#")[0]
-
-            listener = SocketListener(room, server_url=plugin_env.server.url)
-            listener.set_key(parse_share_key(url))
-            listener.connect()
+            url = share_url(plugin_env, key)
+            listener = listener_for(plugin_env, url)
             try:
-                assert listener.wait_for_message(timeout=10, containing="hello viewers")
+                assert listener.wait_for_message(timeout=15, containing="hello viewers")
 
                 # Change the pane content; the poller must pick it up.
                 (plugin_env.stub_dir / "frame").write_text("frame-two\nCHANGED-CONTENT\n")
-                assert listener.wait_for_message(timeout=10, containing="CHANGED-CONTENT")
+                assert listener.wait_for_message(timeout=15, containing="CHANGED-CONTENT")
             finally:
                 listener.disconnect()
 
+            # The live share announces itself through herdr's own display
+            # metadata, on the pane being shared, with a TTL so a killed
+            # daemon's badge expires by itself.
+            metadata = (plugin_env.stub_dir / "metadata.log").read_text()
+            assert "pane report-metadata w1:p7" in metadata
+            assert "--token shellshare=" in metadata
+            assert "--ttl-ms" in metadata
+
             state_file = plugin_env.state / "shares" / f"{key}.json"
-            assert state_file.exists()
             state = json.loads(state_file.read_text())
-            assert state["target"] == "w1:p7"
+            assert state["target"] == "w1:p7" and state["mode"] == "pane"
             # The URL (whose #fragment is the key) must never be on disk:
-            # not in the state record, and the run dir's shellshare
-            # stdout capture is unlinked as soon as the URL is parsed.
+            # not in the state record, and the run dir's stdout capture
+            # is unlinked as soon as the URL is parsed.
             assert "url" not in state and "#" not in state_file.read_text()
             assert (state_file.stat().st_mode & 0o777) == 0o600
-            assert not (plugin_env.state / f"run-{key}" / "out").exists(), \
-                "the sharing event (URL + key) must not persist on disk"
+            assert not (plugin_env.state / f"run-{key}" / "out").exists()
             # Notifications never carry the URL either - herdr truncates
             # them and may route them to the OS notification center.
             notifications = (plugin_env.stub_dir / "notifications.log").read_text()
             assert "Shellshare" in notifications
             assert "/r/" not in notifications and "#" not in notifications
 
-            # Graceful stop: TERM to share.sh alone (the stop action's path).
+            # Graceful stop: TERM to the daemon (the stop action's path).
             stop_and_reap(proc)
             assert not state_file.exists(), "state must be cleared on stop"
+            assert "--clear-token shellshare" in \
+                (plugin_env.stub_dir / "metadata.log").read_text(), \
+                "the badge must be cleared when the share ends"
         finally:
             stop_and_reap(proc, sig=signal.SIGKILL, to_group=True)
 
-    def test_uncatchable_kill_leaves_frame_and_sweep_collects(self, plugin_env):
-        """SIGKILL to the whole group is the worst case a pane teardown
-        can degrade to: no traps, no drains. The link must keep serving
-        the already-delivered content afterwards (rooms outlive their
-        broadcaster), the state file necessarily survives, and `sweep` -
-        the startup hook - must then collect both it and the leftover
-        run dir."""
-        proc, key = start_entrypoint(
-            plugin_env, "run-pane-share", {"SHELLSHARE_TARGET_PANE": "w1:p7"}
+    def test_uncatchable_kill_leaves_link_readable_and_sweep_collects(self, plugin_env):
+        """SIGKILL to the whole group is the worst case: no traps, no
+        drains, no badge clearing (the badge's TTL covers that). The
+        link must keep serving what it already delivered, and `sweep` -
+        the startup hook - must collect the stale record and run dir."""
+        proc, key = start_daemon(
+            plugin_env, "daemon-pane-share", {"SHELLSHARE_TARGET_PANE": "w1:p7"}
         )
         try:
-            url = wait_for_url(proc)
-            room = url.split("/r/")[1].split("#")[0]
-            listener = SocketListener(room, server_url=plugin_env.server.url)
-            listener.set_key(parse_share_key(url))
-            listener.connect()
+            url = share_url(plugin_env, key)
+            listener = listener_for(plugin_env, url)
             try:
-                assert listener.wait_for_message(timeout=10, containing="hello viewers")
+                assert listener.wait_for_message(timeout=15, containing="hello viewers")
             finally:
                 listener.disconnect()
 
@@ -309,12 +331,10 @@ class TestPaneShare:
             assert state_file.exists()
             stop_and_reap(proc, sig=signal.SIGKILL, to_group=True)
 
-            # The last flushed frame stays readable after the group died.
-            listener = SocketListener(room, server_url=plugin_env.server.url)
-            listener.set_key(parse_share_key(url))
-            listener.connect()
+            # Rooms outlive their broadcaster: the link still serves.
+            listener = listener_for(plugin_env, url)
             try:
-                assert listener.wait_for_message(timeout=10, containing="hello viewers")
+                assert listener.wait_for_message(timeout=15, containing="hello viewers")
             finally:
                 listener.disconnect()
 
@@ -326,13 +346,7 @@ class TestPaneShare:
             run_dir = plugin_env.state / f"run-{key}"
             old = time.time() - 300
             os.utime(run_dir, (old, old))
-            subprocess.run(
-                ["bash", str(SHARE_SH), "sweep"],
-                env=plugin_env.env,
-                cwd=str(REPO_ROOT),
-                timeout=30,
-                check=True,
-            )
+            run_script(plugin_env, "sweep", timeout=30)
             assert not state_file.exists(), "sweep must collect stale state"
             assert not run_dir.exists(), "sweep must collect the orphaned run dir"
         finally:
@@ -342,21 +356,35 @@ class TestPaneShare:
         (plugin_env.stub_dir.parent / "config" / "config").write_text(
             "server=http://127.0.0.1:1\n"
         )
-        proc, key = start_entrypoint(
-            plugin_env, "run-pane-share", {"SHELLSHARE_TARGET_PANE": "w1:p7"}
+        key = f"s1-{random_id(6)}"
+        (plugin_env.state / "locks" / key).mkdir(parents=True)
+        proc = run_script(
+            plugin_env,
+            "daemon-pane-share",
+            {
+                "SHELLSHARE_STATE_KEY": key,
+                "SHELLSHARE_SHARE_TOKEN": "tok",
+                "SHELLSHARE_TARGET_PANE": "w1:p7",
+            },
         )
-        stdout, stderr = proc.communicate(timeout=60)
         assert proc.returncode != 0
-        assert "could not start the broadcast" in stderr
+        assert "could not start the broadcast" in proc.stderr
         # The message must carry shellshare's actual diagnostics - the
         # fallback text would mean the stderr capture was destroyed
-        # before being shown (a bug this suite once had).
-        assert "no error output" not in stderr, stderr
+        # before being shown.
+        assert "no error output" not in proc.stderr, proc.stderr
         assert not (plugin_env.state / "shares" / f"{key}.json").exists()
+        assert not (plugin_env.state / "locks" / key).exists(), \
+            "a failed start must release its lock so a retry can proceed"
+        # A detached daemon has no pane to print into: the failure has to
+        # survive somewhere the user (and `herdr plugin log`) can find.
+        last_error = plugin_env.state / "last-error.txt"
+        assert last_error.exists() and "broadcast" in last_error.read_text()
+        assert "/r/" not in last_error.read_text()
 
 
 class TestActions:
-    """The action layer: lock handoff, pane open parameters, stop."""
+    """The action layer: fast hand-off to a detached daemon, then stop."""
 
     def run_action(self, plugin_env, action, extra_env=None):
         env = dict(plugin_env.env)
@@ -371,34 +399,48 @@ class TestActions:
             timeout=30,
         )
 
-    def test_share_pane_action_opens_focused_tab_once(self, plugin_env):
+    def test_share_pane_action_hands_off_to_a_daemon_and_returns(self, plugin_env):
+        """The action must not become the broadcaster: herdr documents
+        actions as one-shot, and a share that lived inside one would die
+        with it (and sit 'running' in the plugin log forever)."""
+        started = time.time()
         proc = self.run_action(plugin_env, "action-share-pane")
         assert proc.returncode == 0, proc.stderr
-        calls = (plugin_env.stub_dir / "pane-calls.log").read_text()
-        assert "open --plugin shellshare --entrypoint pane-broadcast" in calls
-        assert "--placement tab --focus" in calls
-        assert "SHELLSHARE_TARGET_PANE=w1:p7" in calls
-        locks = list((plugin_env.state / "locks").iterdir())
-        assert len(locks) == 1, "the action must hold the start lock for the entrypoint"
+        assert time.time() - started < 10, "the action must hand off, not broadcast"
 
-        # A double invocation inside the start window must not open a
-        # second broadcast pane (the lock is the atomic test-and-set).
-        proc = self.run_action(plugin_env, "action-share-pane")
-        assert proc.returncode == 0, proc.stderr
-        calls = (plugin_env.stub_dir / "pane-calls.log").read_text()
-        assert calls.count("--entrypoint pane-broadcast") == 1
+        shares = plugin_env.state / "shares"
+        try:
+            assert poll_until(lambda: any(shares.glob("*.json")), timeout=45), \
+                "the detached daemon never published its share"
+            key = next(shares.glob("*.json")).stem
+            assert key.endswith("pane-w1-p7")
+            # No pane was opened for the broadcast itself; the only pane
+            # this plugin opens is the transient link overlay (the
+            # daemon opens it just after publishing its state).
+            pane_log = plugin_env.stub_dir / "pane-calls.log"
+            assert poll_until(
+                lambda: pane_log.exists() and "--entrypoint link" in pane_log.read_text(),
+                timeout=15,
+            ), "the daemon never opened the link overlay"
+            calls = pane_log.read_text()
+            assert "broadcast" not in calls
+
+            # A second invocation while it is live re-shows the link
+            # instead of starting a second broadcast.
+            before = calls.count("--entrypoint link")
+            proc = self.run_action(plugin_env, "action-share-pane")
+            assert proc.returncode == 0, proc.stderr
+            calls = (plugin_env.stub_dir / "pane-calls.log").read_text()
+            assert calls.count("--entrypoint link") == before + 1
+            assert len(list(shares.glob("*.json"))) == 1
+        finally:
+            self.run_action(plugin_env, "action-stop")
 
     def test_stop_sees_direct_shares_and_clears_them(self, plugin_env):
         """stop/status match shares by session socket, not state-key
-        shape - the documented direct-open recipe uses caller-chosen
-        keys (manual-...), and its banner promises the stop action
-        works."""
-        # A stand-in broadcaster that passes BOTH liveness checks: the
-        # token rides in its environment (Linux reads /proc/pid/environ)
-        # and its argv matches the entrypoint pattern (the macOS ps
-        # fallback greps for "<share.sh path> run-").
+        shape - a directly started share carries a caller-chosen key."""
         keeper = subprocess.Popen(
-            ["bash", "-c", f'exec -a "{SHARE_SH} run-fake" sleep 60'],
+            ["bash", "-c", f'exec -a "{SHARE_SH} daemon-fake" sleep 60'],
             env={**plugin_env.env, "SHELLSHARE_SHARE_TOKEN": "tok-manual"},
         )
         try:
@@ -409,7 +451,6 @@ class TestActions:
                 "mode": "pane",
                 "target": "w1:p7",
                 "room": "",
-                "status_pane": "w1:p42",
                 "socket": FAKE_SOCKET,
                 "token": "tok-manual",
                 "pid": keeper.pid,
@@ -417,8 +458,7 @@ class TestActions:
             proc = self.run_action(plugin_env, "action-stop")
             assert proc.returncode == 0, proc.stderr
             assert not (shares / "manual-w1-p7.json").exists(), \
-                "stop must clear direct-opened shares in this session"
-            assert "close w1:p42" in (plugin_env.stub_dir / "pane-calls.log").read_text()
+                "stop must clear shares in this session whatever their key"
             if os.path.exists("/proc"):
                 # On Linux the liveness token matched, so stop must have
                 # terminated the recorded PID before clearing state.
@@ -431,22 +471,18 @@ class TestActions:
 
 class TestSessionShare:
     def test_mirror_runs_detached_from_herdr_env_and_stdin(self, plugin_env):
-        proc, key = start_entrypoint(
+        proc, key = start_daemon(
             plugin_env,
-            "run-session-share",
+            "daemon-session-share",
             {"SHELLSHARE_SESSION_NAME": "e2e-session", "HERDR_ENV": "1"},
         )
         try:
-            url = wait_for_url(proc)
-            room = url.split("/r/")[1].split("#")[0]
-
-            listener = SocketListener(room, server_url=plugin_env.server.url)
-            listener.set_key(parse_share_key(url))
-            listener.connect()
+            url = share_url(plugin_env, key)
+            listener = listener_for(plugin_env, url)
             try:
                 # The stub mirror's PTY output reaches viewers...
                 assert listener.wait_for_message(
-                    timeout=10, containing="MIRROR-MARKER-e2e-session"
+                    timeout=15, containing="MIRROR-MARKER-e2e-session"
                 )
             finally:
                 listener.disconnect()
@@ -459,6 +495,10 @@ class TestSessionShare:
             env_dump = (plugin_env.stub_dir / "attach-env").read_text()
             assert "HERDR_ENV=UNSET" in env_dump
             assert "STDIN=quiet" in env_dump
+
+            # A session share badges the workspaces, not a single pane.
+            metadata = (plugin_env.stub_dir / "metadata.log").read_text()
+            assert "workspace report-metadata w1" in metadata
 
             stop_and_reap(proc)
             assert not (plugin_env.state / "shares" / f"{key}.json").exists()
