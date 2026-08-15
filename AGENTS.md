@@ -11,7 +11,7 @@ Viewers see the terminal live in their browser, read-only.
 ## Install
 
 ```bash
-npx -y shellshare --help                 # no install (Node.js)
+npx shellshare --help                    # no install (Node.js)
 curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare   # static binary (auto-detects OS)
 ```
 

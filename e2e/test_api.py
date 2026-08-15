@@ -151,7 +151,7 @@ class TestInstallOptions:
         wait_for_server(SERVER_URL)
         status, headers, body = make_request('GET', '/')
         assert status == 200, f"Expected 200, got {status}"
-        assert 'npx -y shellshare' in body, "Expected npx install command on home page"
+        assert 'npx shellshare' in body, "Expected npx install command on home page"
 
     def test_os_options_present_but_unchecked(self):
         """The per-OS binary options should exist and be unchecked by default."""

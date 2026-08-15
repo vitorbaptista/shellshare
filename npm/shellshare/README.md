@@ -24,10 +24,10 @@ broadcast finishes. Errors go to stderr as `ERROR: ...` with a non-zero exit.
 
 ```bash
 # Share a single command live; exits with the command's exit code
-npx -y shellshare exec --json -- npm test
+npx shellshare exec --json -- npm test
 
 # Stream a log or any pipe (a non-TTY stdin auto-detects this, reads until EOF)
-tail -f build.log | npx -y shellshare --json
+tail -f build.log | npx shellshare --json
 ```
 
 Full agent-facing docs: [AGENTS.md](https://github.com/vitorbaptista/shellshare/blob/main/AGENTS.md) · [shellshare.net/llms.txt](https://shellshare.net/llms.txt)
