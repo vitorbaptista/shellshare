@@ -74,7 +74,11 @@ pub struct ClientArgs {
     /// Command to run instead of an interactive shell (`shellshare exec`);
     /// the broadcast ends when it exits and its exit code is propagated
     pub exec: Option<Vec<String>>,
-    /// Viewer color theme, already validated against `themes::names()`
+    /// Viewer color theme, already validated against
+    /// `themes::selectable_names()` - so this is a name from
+    /// `themes.json` OR the literal `themes::AUTO`, which is not a
+    /// theme and must be resolved (see `resolve_theme`) before any
+    /// lookup by name
     pub theme: Option<String>,
     /// End-to-end encrypt the broadcast (the default). When false the
     /// terminal is sent in plaintext - for viewers on plain HTTP, where

@@ -286,6 +286,13 @@ impl Transport {
             // A named theme the viewer looks up, or this terminal's own
             // colors by value; `colors` wins in the viewer, so a client
             // never sends both.
+            //
+            // Both ride in cleartext even under e2ee, as the theme name
+            // always has. A name is one of nine fixed values, but a
+            // detected palette is a fingerprint of the broadcaster's
+            // terminal setup, linkable across rooms by the server.
+            // `--theme <name>` avoids emitting it; see crypto.rs's
+            // threat model on visible metadata.
             match &self.theme {
                 ThemeChoice::Named(name) => size["theme"] = json!(name),
                 ThemeChoice::Detected(colors) => size["colors"] = json!(colors),

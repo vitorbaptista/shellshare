@@ -30,12 +30,23 @@
 #![allow(unsafe_code)]
 
 use std::fmt::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long to wait for one reply. A terminal that implements the
 /// queries answers in microseconds; this budget only bounds how long a
 /// terminal that never will costs us at startup.
 const REPLY_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Ceiling on the whole sweep. `REPLY_TIMEOUT` alone does not bound it:
+/// it restarts on every byte read, and the tty carries the user's
+/// keystrokes as well as the replies, so a paste or a held-down key
+/// arriving mid-detection would keep resetting it. A terminal that
+/// answers at all answers all 18 queries in ~20ms.
+const DETECT_BUDGET: Duration = Duration::from_millis(500);
+
+/// Cap on one reply. A well-formed one is ~25 bytes; anything longer is
+/// the input queue, not an answer, and must not grow without bound.
+const MAX_REPLY_BYTES: usize = 256;
 
 /// A terminal's own colors, in the shape `themes.json` uses so the
 /// viewer can apply a detected theme and a named one through the same
@@ -58,17 +69,17 @@ pub struct TerminalColors {
 #[cfg(unix)]
 pub fn detect() -> Option<TerminalColors> {
     let tty = Tty::open()?;
+    let deadline = Instant::now() + DETECT_BUDGET;
 
     // OSC 11 first as a probe: if the terminal does not answer this
     // one, it will not answer the other 17 either, and bailing here is
     // the difference between one timeout and eighteen.
-    let background = parse_color(&tty.query(b"\x1b]11;?\x07")?)?;
-    let foreground = parse_color(&tty.query(b"\x1b]10;?\x07")?)?;
+    let background = tty.query_color("11", deadline)?;
+    let foreground = tty.query_color("10", deadline)?;
 
     let mut palette = Vec::with_capacity(16);
     for i in 0..16 {
-        let query = format!("\x1b]4;{i};?\x07");
-        palette.push(parse_color(&tty.query(query.as_bytes())?)?);
+        palette.push(tty.query_color(&format!("4;{i}"), deadline)?);
     }
 
     Some(TerminalColors {
@@ -108,6 +119,18 @@ impl Tty {
         if fd < 0 {
             return None; // no controlling terminal (cron, CI, a daemon)
         }
+        // Only the foreground process group may touch terminal
+        // settings: `tcsetattr` from a background one raises SIGTTOU,
+        // whose default action stops the process group. Without this
+        // check `long-build | shellshare &` would suspend itself before
+        // it ever printed a link - a job that worked before detection
+        // existed, because stream mode never touched termios at all.
+        // SAFETY: `fd` is an open terminal.
+        if unsafe { libc::tcgetpgrp(fd) } != unsafe { libc::getpgrp() } {
+            // SAFETY: `fd` is ours and open.
+            unsafe { libc::close(fd) };
+            return None;
+        }
         // SAFETY: `fd` is a freshly opened terminal; `original` is
         // fully written by `tcgetattr` before it is read.
         unsafe {
@@ -128,10 +151,20 @@ impl Tty {
         }
     }
 
-    /// Write one query and read its reply, or `None` on timeout.
-    fn query(&self, request: &[u8]) -> Option<Vec<u8>> {
-        self.write_all(request)?;
-        self.read_reply()
+    /// Ask for one color and parse the answer.
+    ///
+    /// `selector` is the OSC body identifying the color (`11`, `10`, or
+    /// `4;<slot>`); the reply must echo it back. Verifying that is what
+    /// stops a stale report - the late answer to a previous, timed-out
+    /// query - from being accepted as this slot's color and silently
+    /// mis-assigning the palette.
+    fn query_color(&self, selector: &str, deadline: Instant) -> Option<String> {
+        self.write_all(format!("\x1b]{selector};?\x07").as_bytes())?;
+        let reply = self.read_reply(deadline)?;
+        let expected = format!("\x1b]{selector};");
+        reply
+            .strip_prefix(expected.as_bytes())
+            .and_then(parse_color)
     }
 
     fn write_all(&self, mut buf: &[u8]) -> Option<()> {
@@ -153,10 +186,10 @@ impl Tty {
     ///
     /// Both terminators are accepted no matter which we sent: the same
     /// terminal answers with `ST` directly and with `BEL` through tmux.
-    fn read_reply(&self) -> Option<Vec<u8>> {
+    fn read_reply(&self, deadline: Instant) -> Option<Vec<u8>> {
         let mut reply = Vec::new();
         loop {
-            if !self.wait_readable()? {
+            if !self.wait_readable(deadline)? {
                 return None; // timed out: this terminal does not answer
             }
             let mut chunk = [0u8; 64];
@@ -170,18 +203,23 @@ impl Tty {
             if reply.ends_with(b"\x07") || reply.ends_with(b"\x1b\\") {
                 return Some(reply);
             }
+            if reply.len() > MAX_REPLY_BYTES {
+                return None; // not a reply; stop draining the user's input
+            }
         }
     }
 
-    /// `true` if there is something to read, `false` on timeout.
-    fn wait_readable(&self) -> Option<bool> {
+    /// `true` if there is something to read, `false` on timeout or once
+    /// the whole sweep's deadline has passed.
+    fn wait_readable(&self, deadline: Instant) -> Option<bool> {
+        let remaining = deadline.checked_duration_since(Instant::now())?;
         let mut fds = libc::pollfd {
             fd: self.fd,
             events: libc::POLLIN,
             revents: 0,
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let timeout_ms = REPLY_TIMEOUT.as_millis() as i32;
+        let timeout_ms = REPLY_TIMEOUT.min(remaining).as_millis() as i32;
         // SAFETY: one initialized pollfd, and a matching count.
         let n = unsafe { libc::poll(std::ptr::addr_of_mut!(fds), 1, timeout_ms) };
         match n {
@@ -198,6 +236,13 @@ impl Drop for Tty {
         // SAFETY: `fd` is ours and open; `original` came from
         // `tcgetattr` on it.
         unsafe {
+            // Discard anything still unread before handing the terminal
+            // back. On the timeout path the reply may yet arrive - a
+            // slow terminal, an SSH round trip - and whatever is left in
+            // the input queue is read next by the stdin forwarder, which
+            // would type `\x1b]11;rgb:...` into the broadcast shell as
+            // if the user had. TCSADRAIN alone drains output, not input.
+            libc::tcflush(self.fd, libc::TCIFLUSH);
             libc::tcsetattr(self.fd, libc::TCSADRAIN, &self.original);
             libc::close(self.fd);
         }

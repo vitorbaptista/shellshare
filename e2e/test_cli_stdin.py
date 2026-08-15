@@ -63,6 +63,14 @@ def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, t
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        # Every CLI subprocess here is detached from the
+        # controlling terminal. The CLI asks the terminal for its
+        # colors (--theme auto), so an attached one - the
+        # developer's own, when pytest runs from a real shell -
+        # would answer, and these tests would assert the default
+        # theme but see a detected one. It would also be put in
+        # raw mode, by ten workers at once under -n.
+        start_new_session=True,
         text=True,
     )
     stdout, stderr = proc.communicate(input=message, timeout=timeout)
@@ -317,6 +325,7 @@ class TestServerCommunication:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc.communicate(input="test", timeout=10)
@@ -338,6 +347,7 @@ class TestServerCommunication:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc.communicate(input="test", timeout=10)
@@ -387,6 +397,7 @@ class TestAuthorization:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
 
@@ -436,6 +447,7 @@ class TestAuthorization:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
 
@@ -527,6 +539,7 @@ class TestErrorHandling:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
                 text=True,
             )
             started = time.time()
@@ -646,6 +659,7 @@ class TestErrorHandling:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         try:
@@ -740,6 +754,7 @@ class TestArgumentParsing:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc.communicate(timeout=5)
@@ -760,6 +775,7 @@ class TestArgumentParsing:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc.communicate(timeout=5)
@@ -821,6 +837,7 @@ class TestDefaultPassword:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc.communicate(input="test", timeout=10)
@@ -851,6 +868,7 @@ class TestDefaultPassword:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         _, stderr1 = proc1.communicate(input=msg1, timeout=10)
@@ -867,6 +885,7 @@ class TestDefaultPassword:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc2.communicate(input=msg2, timeout=10)

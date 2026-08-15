@@ -51,6 +51,11 @@
 //!   shell the per-keystroke timing and size leak to the server and
 //!   can reveal information about typed input (the classic
 //!   keystroke-timing side channel). Room name is visible too.
+//! - The `size` control message is cleartext, and with `--theme auto`
+//!   it carries the broadcaster's detected terminal palette. That is a
+//!   fingerprint of one machine's setup, so a curious server can link
+//!   sessions and rooms by it. `--theme <name>` sends one of nine
+//!   fixed values instead and leaks nothing beyond the choice.
 
 use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, OsRng};

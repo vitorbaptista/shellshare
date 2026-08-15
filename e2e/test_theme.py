@@ -49,6 +49,14 @@ def run_cli_stdin(message, room, password, server=SERVER_URL, extra_args=None, t
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        # Every CLI subprocess here is detached from the
+        # controlling terminal. The CLI asks the terminal for its
+        # colors (--theme auto), so an attached one - the
+        # developer's own, when pytest runs from a real shell -
+        # would answer, and these tests would assert the default
+        # theme but see a detected one. It would also be put in
+        # raw mode, by ten workers at once under -n.
+        start_new_session=True,
         text=True,
     )
     stdout, stderr = proc.communicate(input=message, timeout=timeout)
@@ -252,6 +260,7 @@ class TestThemeValidation:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc.communicate(input="", timeout=10)
@@ -267,6 +276,7 @@ class TestThemeValidation:
             CLI_COMMAND + ["--help"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         stdout, stderr = proc.communicate(timeout=10)
@@ -304,6 +314,7 @@ class TestThemeRendering:
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         try:
@@ -351,6 +362,7 @@ class TestThemeRendering:
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         try:
@@ -407,6 +419,7 @@ class TestThemeRendering:
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         try:
@@ -463,6 +476,7 @@ class TestThemeRendering:
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         try:
