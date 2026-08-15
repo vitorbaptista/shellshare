@@ -21,7 +21,9 @@ platforms = ["linux", "macos"]
 id = "share"
 title = "Shellshare: share this session (read-only)"
 description = "Broadcast this herdr session as a live link, or stop the current broadcast"
-contexts = ["workspace", "pane"]
+# What it shares is the session, so it is not scoped to the focused
+# workspace or pane - it does the same thing from anywhere.
+contexts = ["global"]
 command = ["bash", "herdr-plugin/share.sh", "toggle"]
 
 # The share IS this pane: it runs the broadcaster, shows the link, and

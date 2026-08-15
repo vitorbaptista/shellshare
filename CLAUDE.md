@@ -113,6 +113,18 @@ the action are all the same stop. The pane also renames its own tab
 (`tab rename $HERDR_TAB_ID`), since a manifest pane `title` does not
 become the tab label.
 
+**herdr holds the state; the plugin holds none.** "Am I sharing?" is
+answered by looking for a workspace whose label is the plugin's own
+(`workspace list`), never by a pid file: a file outlives crashes and
+reboots, and herdr ids are small per-server counters that get reused, so
+acting on a stale one means closing somebody else's space. For the same
+reason there is no fallback that opens the share in the caller's space -
+the plugin owns its space or refuses to start, because stopping means
+closing a space and closing the wrong one destroys the user's tabs.
+Nothing is guessed anywhere else either: an unresolvable session name or
+an unreadable client size is a hard error, since a wrong guess silently
+broadcasts the wrong session or shrinks the real one.
+
 **There is deliberately no pane-sharing mode.** To share one pane you
 run `shellshare` in it - a full-fidelity byte stream, better than any
 snapshot mirror a plugin could build. The plugin only does what you

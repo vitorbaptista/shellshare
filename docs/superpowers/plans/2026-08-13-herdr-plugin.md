@@ -57,7 +57,7 @@ session share goes wrong:
 ```
 herdr-plugin.toml     # manifest at repo root: 1 action, 1 pane
 herdr-plugin/
-  share.sh            # ~180 lines: toggle + live
+  share.sh            # toggle + live; the whole plugin
   README.md
 ```
 
@@ -78,9 +78,15 @@ from wherever you are working, needing no `[ui.sidebar.*]` config and no
 badge-refresh loop. Ctrl+C, closing the space, and toggling the action
 are all the same stop, and none of them can leave the indicator lying.
 
-**One action.** `share` toggles: if the recorded PID is alive it closes
-the pane, otherwise it opens one. A stale record (the pane was killed)
-fails its `kill -0` and is replaced - self-healing without a GC.
+**One action, and no state of its own.** `share` toggles: if a space
+carrying the plugin's label exists, close it; otherwise create one and
+start. "Am I sharing?" is a question for herdr (`workspace list`), never
+a pid file - a file outlives crashes and reboots, and herdr ids are
+per-server counters that get reused, so acting on a stale one means
+closing somebody else's space. There is no fallback that puts the share
+in the caller's space either: stopping closes a space, and closing the
+wrong one takes the user's tabs with it, so the plugin owns its space or
+refuses to start.
 
 **Start protocol.** shellshare's stdout goes to a fifo; the main shell
 reads the first line (the `sharing` event), which keeps failure handling
@@ -133,9 +139,15 @@ broadcast against a dedicated local server:
 3. The four earned properties in one test: HERDR_ENV cleared, the right
    session named (the stub offers a decoy), the PTY sized to the focused
    tab's extent, stdin quiet.
-4. The mirror's bytes never reach the pane's own screen (the
-   anti-recursion contract).
-5. Toggle stops a live share; a stale record self-heals.
+   (2 also carries the anti-recursion contract: a viewer has provably
+   received the mirror's bytes, so their absence from the pane's own
+   screen is an assertion rather than a race.)
+4. The share gets a space of its own: created, labelled, pane opened
+   there, the space's own shell tab dropped, then focused.
+5. Toggle stops it by closing that space - and with no labelled space
+   present it starts one instead of closing anything, even when the
+   creation fails. Closing the wrong space would destroy the user's
+   tabs, so this is the test that matters most.
 6. Unreachable server fails visibly, with shellshare's own diagnostics.
 7. An unresolvable session refuses instead of attaching to a guess.
 

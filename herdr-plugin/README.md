@@ -87,12 +87,19 @@ shellshare_args=--server https://shellshare.example.com --theme dracula
 - Everything on your **focused tab**: every pane in it, live, read-only.
   Switching tabs switches what they see; `herdr pane zoom` narrows it to
   one pane. herdr's own controls are the privacy controls.
+- **And your herdr chrome**: the mirror is a full herdr client, so the
+  spaces sidebar (every space's name — often client or project names),
+  the tab bar, and your agent rows with their statuses are all in shot.
+  Zooming a pane hides the panes around it, not the sidebar.
 - **Everything means everything** — the `.env` you left open, the
   credential you paste. Zoom or switch away before doing anything you
   would not put on a call.
-- The mirror is a second herdr client, so it renders at your client's
-  size, pinned for the life of the share. Resize your terminal and the
-  broadcast keeps the old geometry until you stop and start again.
+- The mirror is a second herdr client pinned to the size your client had
+  when the share started. That pinning is what stops herdr's
+  smallest-client-wins sizing from shrinking your session — but it cuts
+  both ways: **while you are sharing, your own session will not grow
+  past that size**. Making your terminal bigger mid-share does nothing
+  until you stop and start again.
 - Viewers can never type: shellshare has no input channel.
 
 ## Security notes
@@ -108,9 +115,12 @@ shellshare_args=--server https://shellshare.example.com --theme dracula
   which also means a leaked link stays valid for every future broadcast
   of that room, and the room name is visible to other users on a
   multi-user machine (`ps`). The default random room avoids both.
-- The plugin writes one file: a `live-*` record holding the pane's PID
-  and the space it is in, removed when the share ends. No URLs, no keys,
-  ever.
+- The plugin keeps no record of your share: it asks herdr whether the
+  ◉ shellshare space exists. In its state directory it writes only a
+  fifo (empty; carries the mirror's output between two processes while
+  the share runs, removed when it ends) and `last-error.txt`, which
+  holds shellshare's stderr from the most recent start. No URLs, no
+  keys, ever.
 - The ◉ shellshare space is a space like any other — if you focus it,
   viewers see it, link and all. They already have that link, so nothing
   leaks; it just isn't very interesting to watch.

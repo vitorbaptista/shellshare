@@ -14,7 +14,8 @@ Test categories:
 - The pane broadcasts the session and prints its link
 - The four things a hand-typed command gets wrong (nesting gate, session
   identity, pinned geometry, swallowed stdout)
-- Toggle stops a live share; a stale record self-heals
+- Toggle stops the share by closing the space it created, and never
+  closes one it did not
 - Failure paths: unreachable server, unresolvable session
 """
 
@@ -75,9 +76,23 @@ STUB_HERDR = textwrap.dedent("""\
         ;;
     "workspace create")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
+        # A created space becomes visible to `workspace list` - that is
+        # how the plugin later recognises its own share.
+        printf '%s\\n' "$4" > "$STUB_DIR/space-label"
         printf '{"id":"x","result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}\\n'
         ;;
-    "plugin pane"|"notification show"|"workspace close"|"workspace focus"|"tab close"|"tab rename")
+    "workspace list")
+        if [ -f "$STUB_DIR/space-label" ]; then
+            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"work"},{"workspace_id":"w9","label":"%s"}]}}\\n' "$(cat "$STUB_DIR/space-label")"
+        else
+            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"work"}]}}\\n'
+        fi
+        ;;
+    "workspace close")
+        printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
+        rm -f "$STUB_DIR/space-label"
+        ;;
+    "plugin pane"|"notification show"|"workspace focus"|"tab close"|"tab rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         ;;
     *)
@@ -101,7 +116,9 @@ def plugin_env(tmp_path, dedicated_server):
     herdr = stub_dir / "herdr"
     herdr.write_text(STUB_HERDR)
     herdr.chmod(0o755)
-    (config_dir / "config").write_text(f"shellshare_args=--server {server.url}\n")
+    (config_dir / "config").write_text(
+        f"shellshare_bin={CLI_PATH}\nshellshare_args=--server {server.url}\n"
+    )
 
     env = os.environ.copy()
     env.update(
@@ -113,7 +130,6 @@ def plugin_env(tmp_path, dedicated_server):
         HERDR_PANE_ID="w1:p9",
         HERDR_TAB_ID="w1:t1",
         HERDR_WORKSPACE_ID="w1",
-        SHELLSHARE_BIN=str(CLI_PATH),
         STUB_DIR=str(stub_dir),
         FAKE_SOCKET=FAKE_SOCKET,
     )
@@ -261,11 +277,23 @@ class TestSessionShare:
             finally:
                 listener.disconnect()
 
-            # The pane records itself so the action can toggle it off.
-            state = list(plugin_env.state.glob("live-*"))
-            assert len(state) == 1
-            pid, pane, space = state[0].read_text().split()
-            assert int(pid) > 0 and pane == "w1:p9" and space == "w1"
+            # The mirror has provably streamed (a viewer just read it),
+            # so its absence from this pane's own screen is now a real
+            # assertion rather than a race: shellshare exec echoes those
+            # PTY bytes on stdout, and swallowing them is what stops the
+            # mirror from rendering a rendering of itself.
+            shown = "".join(lines)
+            assert "MIRROR-MARKER" not in shown, \
+                f"the mirror's output leaked onto the pane's screen: {shown!r}"
+            assert "SHELLSHARE" in shown and "live" in shown
+
+            # The tab says what it is (a manifest pane `title` does not
+            # become the tab label, so the pane sets it).
+            rename = [
+                c for c in (plugin_env.stub_dir / "herdr-calls.log").read_text().splitlines()
+                if "tab rename" in c
+            ]
+            assert rename and "w1:t1" in rename[0] and "live" in rename[0], rename
         finally:
             stop_pane(proc)
 
@@ -300,42 +328,58 @@ class TestSessionShare:
         finally:
             stop_pane(proc)
 
-    def test_pane_screen_never_contains_the_mirror_output(self, plugin_env):
-        """shellshare exec echoes the mirror's PTY bytes on stdout. They
-        must be swallowed: this pane is inside the broadcast, so echoing
-        them would make the mirror render a rendering of itself."""
-        proc, url, lines = start_pane(plugin_env)
-        try:
-            # Give the mirror time to stream; its bytes must never show
-            # up on this pane's screen.
-            time.sleep(3)
-            shown = "".join(lines)
-            assert "MIRROR-MARKER" not in shown, \
-                f"the mirror's output leaked onto the pane's screen: {shown!r}"
-            assert "SHELLSHARE" in shown and "live" in shown
-        finally:
-            stop_pane(proc)
-
-    def test_toggle_stops_a_live_share_and_stale_state_self_heals(self, plugin_env):
-        proc, _url, _lines = start_pane(plugin_env)
-        try:
-            state = next(iter(plugin_env.state.glob("live-*")))
-            result = run_script(plugin_env, "toggle")
-            assert result.returncode == 0, result.stderr
-            # Stopping closes the pane; the record goes with it.
-            calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
-            assert "workspace close w1" in calls
-            assert not state.exists()
-        finally:
-            stop_pane(proc)
-
-        # A record left by a killed pane must not block the next share:
-        # the toggle checks the PID and starts a new one instead.
-        state.write_text("999999 w1:p9\n")
+    def test_toggle_stops_the_share_by_closing_its_own_space(self, plugin_env):
+        """Stopping closes the space the plugin labelled - which it finds
+        by asking herdr, not by trusting a file. A pid file would go
+        stale across a crash or a reboot, and herdr ids are small
+        per-server counters that get reused: acting on a stale one means
+        closing somebody else's space."""
         result = run_script(plugin_env, "toggle")
         assert result.returncode == 0, result.stderr
         calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
-        assert "--entrypoint live" in calls, "a stale record must not block a new share"
+        assert "workspace create --label" in calls
+
+        # Now that a labelled space exists, the same action stops it -
+        # and closes w9 (the one it made), never w1 (the user's).
+        result = run_script(plugin_env, "toggle")
+        assert result.returncode == 0, result.stderr
+        calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
+        closes = [c for c in calls.splitlines() if c.startswith("workspace close")]
+        assert closes == ["workspace close w9"], closes
+
+        # The plugin keeps no state of its own to go stale.
+        assert not list(plugin_env.state.glob("live-*"))
+
+    def test_toggle_never_closes_a_space_it_did_not_create(self, plugin_env):
+        """The dangerous failure mode: closing a space takes every tab in
+        it. With no labelled space present, the action must start a share
+        rather than close whatever the user happens to be looking at -
+        even when creating the space fails."""
+        # herdr refuses to make the space (stub returns nothing useful).
+        broken = dict(plugin_env.env, HERDR_BIN_PATH=str(plugin_env.stub_dir / "broken"))
+        (plugin_env.stub_dir / "broken").write_text(
+            "#!/bin/bash\n"
+            'case "$1 $2" in\n'
+            '  "workspace list") printf \'{"result":{"workspaces":[{"workspace_id":"w1","label":"work"}]}}\\n\' ;;\n'
+            '  "workspace create") exit 1 ;;\n'
+            '  *) printf \'%s\\n\' "$*" >> "$STUB_DIR/broken-calls.log" ;;\n'
+            "esac\n"
+        )
+        (plugin_env.stub_dir / "broken").chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", str(SHARE_SH), "toggle"],
+            capture_output=True, text=True, env=broken,
+            cwd=str(REPO_ROOT), timeout=30,
+        )
+        assert result.returncode != 0
+        assert "could not create the shellshare space" in result.stderr
+        log = plugin_env.stub_dir / "broken-calls.log"
+        calls = log.read_text() if log.exists() else ""
+        assert "workspace close" not in calls, \
+            f"a failed start must never close a space: {calls!r}"
+        assert "plugin pane open" not in calls, \
+            f"no share may be opened outside its own space: {calls!r}"
 
     def test_share_gets_a_space_of_its_own(self, plugin_env):
         """What is shared is the whole session, so the share does not
@@ -359,23 +403,9 @@ class TestSessionShare:
         assert "tab close w9:t1" in calls
         assert "workspace focus w9" in calls
 
-    def test_pane_names_its_tab_live(self, plugin_env):
-        proc, _url, _lines = start_pane(plugin_env)
-        try:
-            calls_file = plugin_env.stub_dir / "herdr-calls.log"
-            assert poll_until(
-                lambda: calls_file.exists() and "tab rename" in calls_file.read_text(),
-                timeout=15,
-            ), "the pane never labelled its tab"
-            rename = [
-                c for c in calls_file.read_text().splitlines() if "tab rename" in c
-            ][0]
-            assert "w1:t1" in rename and "live" in rename
-        finally:
-            stop_pane(proc)
-
     def test_unreachable_server_fails_visibly(self, plugin_env):
         (plugin_env.stub_dir.parent / "config" / "config").write_text(
+            f"shellshare_bin={CLI_PATH}\n"
             "shellshare_args=--server http://127.0.0.1:1\n"
         )
         proc = subprocess.Popen(
@@ -388,7 +418,6 @@ class TestSessionShare:
         assert "could not start the broadcast" in err
         # shellshare's own diagnostics must survive into the message.
         assert "no error output" not in err, err
-        assert not list(plugin_env.state.glob("live-*"))
 
     def test_unresolvable_session_refuses_rather_than_guessing(self, plugin_env):
         """A wrong guess would start and broadcast a different session -
