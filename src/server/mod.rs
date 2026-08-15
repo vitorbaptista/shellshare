@@ -525,6 +525,16 @@ async fn room_get_handler(
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/octet-stream")
+                // Live, per-room, mutating bytes - never storable. The
+                // header has to be explicit because a CDN in front of us
+                // reads the `.bin` suffix as a static asset: with no
+                // origin `Cache-Control`, Cloudflare's default extension
+                // list gave this endpoint a month-long TTL and served
+                // agents a frozen snapshot with no way to tell. A short
+                // `max-age` would only shrink that window; the body is
+                // never reusable, so `no-store` (which already implies
+                // `private`) is the honest answer.
+                .header(header::CACHE_CONTROL, "no-store")
                 // Not HTML, so it cannot carry the page's `noindex`
                 // meta tag - and it is the response that would actually
                 // hold a broadcast's bytes

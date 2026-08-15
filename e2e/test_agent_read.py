@@ -31,13 +31,13 @@ from conftest import (
 
 
 def _get_bin(room):
-    """GET /r/<room>.bin -> (status, body bytes)."""
+    """GET /r/<room>.bin -> (status, body bytes, headers)."""
     url = f"{SERVER_URL}/r/{urllib.parse.quote(room, safe='')}.bin"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
-            return resp.status, resp.read()
+            return resp.status, resp.read(), resp.headers
     except urllib.error.HTTPError as e:
-        return e.code, e.read()
+        return e.code, e.read(), e.headers
 
 
 def test_bin_serves_ciphertext_that_decrypts_with_the_share_key(
@@ -53,8 +53,15 @@ def test_bin_serves_ciphertext_that_decrypts_with_the_share_key(
         SERVER_URL, unique_room, unique_password, text=f"{marker}\n", key=key
     )
 
-    status, body = _get_bin(unique_room)
+    status, body, headers = _get_bin(unique_room)
     assert status == 200
+    # The snapshot is live, mutating data. The `.bin` suffix that makes
+    # it agent-friendly is exactly what puts it on a CDN's default
+    # cacheable-extension list, so the origin must say no-store or an
+    # agent polling the room gets a month-old body back.
+    assert "no-store" in headers.get("Cache-Control", ""), (
+        "the snapshot is cacheable: a CDN will freeze it"
+    )
     assert len(body) > 0, "no history bytes served"
     # server-blind: the plaintext never appears in the relayed ciphertext
     assert marker.encode() not in body
@@ -107,5 +114,5 @@ def test_room_outlives_the_process_and_a_rerun_starts_fresh(
 
 
 def test_bin_unknown_room_is_404():
-    status, _ = _get_bin(f"no-such-room-{random_id()}")
+    status, _, _ = _get_bin(f"no-such-room-{random_id()}")
     assert status == 404
