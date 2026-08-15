@@ -118,19 +118,26 @@ shellshare_args=--server https://shellshare.example.com --theme dracula
 - The plugin keeps no record of your share: it asks herdr whether the
   ◉ shellshare space exists. In its state directory it writes only a
   fifo (empty; carries the mirror's output between two processes while
-  the share runs, removed when it ends) and `last-error.txt`, which
-  holds shellshare's stderr from the most recent start. No URLs, no
-  keys, ever.
+  the share runs, removed when it ends) and a `mirror-<pid>.err` file
+  holding shellshare's stderr, kept only when a share fails so there is
+  something to read afterwards. No URLs, no keys, ever.
 - The ◉ shellshare space is a space like any other — if you focus it,
   viewers see it, link and all. They already have that link, so nothing
   leaks; it just isn't very interesting to watch.
 
 ## Troubleshooting
 
-The share tab shows any startup error and waits for you to read it.
-`shellshare`'s own stderr is kept at
-`~/.local/state/herdr/plugins/shellshare/last-error.txt`, and
-`herdr plugin log list --plugin shellshare` shows what herdr ran.
+The share tab shows what went wrong and waits for you to read it. If a
+broadcast dies on its own, the space is renamed **✗ shellshare
+(stopped)** — so the sidebar never claims you are live when you are not
+— and the tab stays open with the reason.
+
+`shellshare`'s own stderr is kept alongside:
+
+```bash
+cat ~/.local/state/herdr/plugins/shellshare/mirror-*.err
+herdr plugin log list --plugin shellshare   # what herdr ran, and when
+```
 
 ## Limitations
 

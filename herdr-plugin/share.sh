@@ -40,6 +40,10 @@ CONFIG_FILE="${HERDR_PLUGIN_CONFIG_DIR:-}/config"
 # distinctive.
 SPACE_LABEL="◉ shellshare"
 TAB_LABEL="◉ live"
+# What the space is renamed to when a broadcast dies on its own. The
+# pane stays open holding the error, but the label must stop saying
+# "live" - it is the only thing that answers "am I sharing?".
+DEAD_LABEL="✗ shellshare (stopped)"
 
 umask 077
 
@@ -52,18 +56,21 @@ die() { # for actions: stderr lands in `herdr plugin log`
 }
 
 # For the pane: the message stays on screen, where it can be read and
-# copied, until the user dismisses it. (A pane always has a terminal;
-# the sleep is only so an automated run does not lose the message.)
+# copied, until the user dismisses it. A pane always has a terminal, so
+# `read` blocks; when it does not (an automated run) the message has
+# already gone to stderr, which that caller kept.
 die_pane() {
     printf '\n  \033[1;31mshellshare\033[0m %s\n\n  Press Enter to close.\n' "$*" >&2
-    read -r _ 2>/dev/null || sleep 5
+    "$HERDR" notification show "Shellshare" --body "$*" >/dev/null 2>&1 || true
+    read -r _ 2>/dev/null
     exit 1
 }
 
 need_env() {
-    [ -n "$STATE_ROOT" ] || die "not running under herdr (see herdr-plugin/README.md)"
+    # The toggle writes nothing and reads no state; all it needs is a
+    # herdr to talk to and jq to read the answer.
+    [ -n "${HERDR_SOCKET_PATH:-}" ] || die "not running under herdr (see herdr-plugin/README.md)"
     command -v jq >/dev/null 2>&1 || die "jq is required (https://jqlang.org)"
-    mkdir -p "$STATE_ROOT"
 }
 
 # Config: KEY=VALUE, one per line, values taken literally. Parsed, not
@@ -74,13 +81,19 @@ cfg() { # cfg <key>
         tail -n 1 | tr -d '\r' | sed 's/[[:space:]]*$//'
 }
 
-# The workspace id of the live share's space, or empty. This is the
-# plugin's entire notion of "am I sharing?" - herdr is asked, never told.
-share_space() {
-    "$HERDR" workspace list 2>/dev/null |
-        jq -r --arg l "$SPACE_LABEL" \
-            '[.result.workspaces[]? | select(.label == $l) | .workspace_id][0] // empty' \
-            2>/dev/null
+# The workspace ids of the live share's spaces (normally one, and
+# usually none), one per line. This is the plugin's entire notion of
+# "am I sharing?" - herdr is asked, never told.
+#
+# Returns non-zero when herdr could not be asked at all. That has to be
+# distinguishable from "no share is running": treating a failed lookup
+# as "not sharing" would turn a stop into a second broadcast.
+share_spaces() {
+    local out
+    out=$("$HERDR" workspace list 2>/dev/null) || return 1
+    printf '%s' "$out" | jq -r --arg l "$SPACE_LABEL" '
+        (.result.workspaces // error("no workspace list"))
+        | map(select(.label == $l) | .workspace_id) | .[]' 2>/dev/null
 }
 
 # --------------------------------------------------------------------
@@ -91,11 +104,17 @@ action_toggle() {
     # Stop: closing the space takes the pane with it, and shellshare
     # exits on the pane's SIGHUP and flushes what it has. Only ever a
     # space this plugin labelled - never one the user made.
-    local ws
-    ws=$(share_space)
-    if [ -n "$ws" ]; then
-        "$HERDR" workspace close "$ws" >/dev/null 2>&1 ||
-            die "could not close the shellshare space ($ws)"
+    local spaces ws stopped=0
+    spaces=$(share_spaces) ||
+        die "could not ask herdr which spaces exist, so refusing to guess whether you are sharing"
+    if [ -n "$spaces" ]; then
+        # Close every match, not just the first: two would mean two live
+        # broadcasts, and stopping has to mean stopped.
+        for ws in $spaces; do
+            "$HERDR" workspace close "$ws" >/dev/null 2>&1 &&
+                stopped=$((stopped + 1))
+        done
+        [ "$stopped" -gt 0 ] || die "could not close the shellshare space ($spaces)"
         "$HERDR" notification show "Shellshare" \
             --body "Stopped sharing. The link stays readable until the room idles out (~6h)" \
             >/dev/null 2>&1 || true
@@ -183,15 +202,23 @@ pane_live() {
     local extra
     extra=$(cfg shellshare_args)
 
-    # One fifo per pane process: the state dir is shared by every herdr
-    # session, so a fixed name would collide between two sessions
-    # sharing at once.
+    # One fifo and one stderr file per pane process: the state dir is
+    # shared by every herdr session, so fixed names would collide
+    # between two sessions sharing at once - and the stderr file is
+    # exactly what the user is told to read when a share goes wrong.
     local fifo err
     fifo="$STATE_ROOT/mirror-$$.fifo"
-    err="$STATE_ROOT/last-error.txt"
+    err="$STATE_ROOT/mirror-$$.err"
     rm -f "$fifo"
     mkfifo "$fifo" || die_pane "could not create $fifo"
+    # The fifo is plumbing and always goes; the stderr file outlives a
+    # failure on purpose, so there is something to read after the pane
+    # is gone. A stop the user asked for is not a failure, so it takes
+    # both - and it arrives as a signal (closing the space HUPs this
+    # pane, Ctrl+C INTs it), which bash does not run EXIT traps for
+    # unless the signal itself is trapped.
     trap 'rm -f "$fifo"' EXIT
+    trap 'rm -f "$fifo" "$err"; exit 0' HUP INT TERM
 
     # The mirror: a second herdr client attached to this session, inside
     # shellshare's PTY.
@@ -207,20 +234,38 @@ pane_live() {
     #                      first line here rather than through a pipe
     #                      keeps the control flow (and any failure) in
     #                      this shell, where `exit` actually exits.
+    # `set -f` for the split: $extra is meant to be split into words,
+    # but not to have `--room my*name` matched against the plugin
+    # directory the pane happens to run in.
+    set -f
     # shellcheck disable=SC2086 # $extra is user-authored, split on purpose
     "$ss" exec --json --cols "$cols" --rows "$rows" $extra \
         -- env -u HERDR_ENV "$HERDR" session attach "$name" \
         </dev/null >"$fifo" 2>"$err" &
     local ss_pid=$!
+    set +f
 
     local first="" url=""
     exec 3<"$fifo"
     IFS= read -r -t 45 first <&3
     url=$(printf '%s' "$first" | jq -r '.url // empty' 2>/dev/null)
     if [ -z "$url" ]; then
+        # Two very different failures reach here, and the fix for one is
+        # not the fix for the other: shellshare died (its stderr says
+        # why), or it is still running and never announced a link -
+        # a server that accepts the connection and stalls. Whether the
+        # process is still alive tells them apart; bash 3.2 does not
+        # report a `read` timeout distinguishably.
+        local detail
+        detail=$(cat "$err" 2>/dev/null)
+        if kill -0 "$ss_pid" 2>/dev/null; then
+            detail="shellshare did not report a link within 45s - is the
+  server reachable?${detail:+
+  }$detail"
+        fi
         kill "$ss_pid" 2>/dev/null
         die_pane "could not start the broadcast:
-  $(cat "$err" 2>/dev/null || echo 'no error output')"
+  ${detail:-shellshare exited without saying why}"
     fi
 
     banner "$ss" "$name" "$url" "$cols" "$rows"
@@ -235,11 +280,30 @@ pane_live() {
     wait "$ss_pid"
     local rc=$?
     kill "$drain_pid" 2>/dev/null
-    # A clean stop closes this pane (and with it the space), so there is
-    # nobody left to read a goodbye. A broadcast that DIED, though, must
-    # not look like one the user stopped: hold the pane open and say so.
-    [ "$rc" -eq 0 ] || die_pane "the broadcast stopped unexpectedly:
-  $(cat "$err" 2>/dev/null || echo 'no error output')"
+    if [ "$rc" -eq 0 ]; then
+        # A clean stop closes this pane (and with it the space), so
+        # there is nobody left to read a goodbye - and nothing to
+        # diagnose afterwards.
+        rm -f "$err"
+        exit 0
+    fi
+    # A broadcast that DIED must not look like one the user stopped.
+    # Holding the pane open keeps the message readable, but that also
+    # keeps the space alive - and the space's label is what answers
+    # "am I sharing?". Rename it first, so the sidebar stops claiming a
+    # broadcast that is over and the next keypress starts a fresh one
+    # instead of stopping this corpse.
+    [ -n "${HERDR_WORKSPACE_ID:-}" ] &&
+        "$HERDR" workspace rename "$HERDR_WORKSPACE_ID" "$DEAD_LABEL" >/dev/null 2>&1
+    # shellshare's stderr is the only thing captured here: the mirror
+    # client's own output went down the PTY, i.e. into the broadcast, so
+    # a failure inside herdr itself leaves this file empty. Say what is
+    # known either way rather than trailing off after a colon.
+    local why
+    why=$(cat "$err" 2>/dev/null)
+    die_pane "the broadcast stopped unexpectedly (exit $rc)${why:+:
+  $why}
+  shellshare's output: $err"
 }
 
 # Static on purpose: this pane is inside the broadcast, so anything that

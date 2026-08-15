@@ -36,7 +36,6 @@ from conftest import (
     SocketListener,
     parse_share_key,
     poll_until,
-    random_id,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -69,6 +68,11 @@ STUB_HERDR = textwrap.dedent("""\
             printf 'SIZE=%s\\n' "$(stty size 2>/dev/null | tr ' ' 'x')"
         } > "$STUB_DIR/attach-env"
         printf 'MIRROR-MARKER-%s\\n' "$3"
+        if [ -f "$STUB_DIR/attach-dies" ]; then
+            printf 'the mirror fell over\\n' >&2
+            sleep 1
+            exit 3
+        fi
         # Long enough to outlive any single test, short enough that an
         # orphan (shellshare's PTY child is not in our process group)
         # cannot hold a test hostage.
@@ -92,7 +96,7 @@ STUB_HERDR = textwrap.dedent("""\
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         rm -f "$STUB_DIR/space-label"
         ;;
-    "plugin pane"|"notification show"|"workspace focus"|"tab close"|"tab rename")
+    "plugin pane"|"notification show"|"workspace focus"|"workspace rename"|"tab close"|"tab rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         ;;
     *)
@@ -347,9 +351,6 @@ class TestSessionShare:
         closes = [c for c in calls.splitlines() if c.startswith("workspace close")]
         assert closes == ["workspace close w9"], closes
 
-        # The plugin keeps no state of its own to go stale.
-        assert not list(plugin_env.state.glob("live-*"))
-
     def test_toggle_never_closes_a_space_it_did_not_create(self, plugin_env):
         """The dangerous failure mode: closing a space takes every tab in
         it. With no labelled space present, the action must start a share
@@ -418,6 +419,65 @@ class TestSessionShare:
         assert "could not start the broadcast" in err
         # shellshare's own diagnostics must survive into the message.
         assert "no error output" not in err, err
+
+    def test_toggle_refuses_when_it_cannot_ask_herdr(self, plugin_env):
+        """"Not sharing" and "could not ask" must not look the same: if a
+        failed lookup read as "not sharing", pressing the key to STOP a
+        live share would start a second one instead."""
+        broken = dict(
+            plugin_env.env, HERDR_BIN_PATH=str(plugin_env.stub_dir / "mute")
+        )
+        (plugin_env.stub_dir / "mute").write_text(
+            "#!/bin/bash\n"
+            'case "$1 $2" in\n'
+            '  "workspace list") exit 1 ;;\n'
+            '  *) printf \'%s\\n\' "$*" >> "$STUB_DIR/mute-calls.log" ;;\n'
+            "esac\n"
+        )
+        (plugin_env.stub_dir / "mute").chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", str(SHARE_SH), "toggle"],
+            capture_output=True, text=True, env=broken,
+            cwd=str(REPO_ROOT), timeout=30,
+        )
+        assert result.returncode != 0
+        assert "could not ask herdr" in result.stderr
+        log = plugin_env.stub_dir / "mute-calls.log"
+        calls = log.read_text() if log.exists() else ""
+        assert "workspace create" not in calls, \
+            f"a share must not be started on a guess: {calls!r}"
+
+    def test_a_dead_broadcast_stops_claiming_to_be_live(self, plugin_env):
+        """The space's label is the only thing that answers "am I
+        sharing?". When a broadcast dies the pane stays open holding the
+        error - so the label has to be corrected, or the sidebar lies and
+        the next keypress stops a corpse instead of starting a share."""
+        (plugin_env.stub_dir / "attach-dies").touch()
+        proc, _url, _lines = start_pane(plugin_env)
+        try:
+            calls_file = plugin_env.stub_dir / "herdr-calls.log"
+            assert poll_until(
+                lambda: "workspace rename w1" in calls_file.read_text(),
+                timeout=30,
+            ), f"the dead share kept its live label: {calls_file.read_text()!r}"
+            rename = [
+                c for c in calls_file.read_text().splitlines()
+                if c.startswith("workspace rename")
+            ][0]
+            assert "shellshare" in rename and "live" not in rename, rename
+            # The pane says what it knows. A mirror that dies inside
+            # herdr writes to the PTY (i.e. into the broadcast), not to
+            # shellshare's stderr, so the exit code is the diagnosis
+            # that always survives - the message must not trail off
+            # after a colon.
+            notes = [
+                c for c in calls_file.read_text().splitlines()
+                if "stopped unexpectedly" in c
+            ]
+            assert notes and "exit 3" in notes[0], notes
+        finally:
+            stop_pane(proc)
 
     def test_unresolvable_session_refuses_rather_than_guessing(self, plugin_env):
         """A wrong guess would start and broadcast a different session -
