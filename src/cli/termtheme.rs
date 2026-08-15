@@ -45,9 +45,8 @@ use std::time::{Duration, Instant};
 const REPLY_TIMEOUT_DECISECONDS: libc::cc_t = 1;
 
 /// Ceiling on the whole sweep. The per-reply timeout alone does not
-/// bound it:
-/// it restarts on every byte read, and the tty carries the user's
-/// keystrokes as well as the replies, so a paste or a held-down key
+/// bound it: it restarts on every byte read, and the tty carries the
+/// user's keystrokes as well as the replies, so a paste or a held key
 /// arriving mid-detection would keep resetting it. A terminal that
 /// answers at all answers all 18 queries in ~20ms.
 #[cfg(unix)]
@@ -117,6 +116,10 @@ pub fn detect() -> Option<TerminalColors> {
 struct Tty {
     fd: std::os::fd::RawFd,
     original: libc::termios,
+    /// Set when a query went unanswered, so a reply may still be in
+    /// flight and must not be left in the input queue. Only then is
+    /// flushing worth the type-ahead it destroys.
+    left_query_unanswered: std::cell::Cell<bool>,
 }
 
 #[cfg(unix)]
@@ -137,6 +140,21 @@ impl Tty {
         // existed, because stream mode never touched termios at all.
         // SAFETY: `fd` is an open terminal.
         if unsafe { libc::tcgetpgrp(fd) } != unsafe { libc::getpgrp() } {
+            // SAFETY: `fd` is ours and open.
+            unsafe { libc::close(fd) };
+            return None;
+        }
+        // Anything already queued is the user's type-ahead - typed
+        // before shellshare even started. Reading a reply means reading
+        // past it, and it cannot be put back (TIOCSTI is privileged or
+        // compiled out on modern kernels), so detection would silently
+        // eat a command the parent shell was going to run. It is not
+        // worth a theme: skip detection entirely and keep the input.
+        let mut pending: libc::c_int = 0;
+        // SAFETY: `fd` is an open terminal and `pending` is a valid
+        // out-param for FIONREAD.
+        let queued = unsafe { libc::ioctl(fd, libc::FIONREAD as _, &mut pending) };
+        if queued != 0 || pending > 0 {
             // SAFETY: `fd` is ours and open.
             unsafe { libc::close(fd) };
             return None;
@@ -166,7 +184,11 @@ impl Tty {
                 libc::close(fd);
                 return None;
             }
-            Some(Self { fd, original })
+            Some(Self {
+                fd,
+                original,
+                left_query_unanswered: std::cell::Cell::new(false),
+            })
         }
     }
 
@@ -179,7 +201,10 @@ impl Tty {
     /// mis-assigning the palette.
     fn query_color(&self, selector: &str, deadline: Instant) -> Option<String> {
         self.write_all(format!("\x1b]{selector};?\x07").as_bytes())?;
-        let reply = self.read_reply(deadline)?;
+        let Some(reply) = self.read_reply(deadline) else {
+            self.left_query_unanswered.set(true);
+            return None;
+        };
         let expected = format!("\x1b]{selector};");
         reply
             .strip_prefix(expected.as_bytes())
@@ -237,13 +262,17 @@ impl Drop for Tty {
         // SAFETY: `fd` is ours and open; `original` came from
         // `tcgetattr` on it.
         unsafe {
-            // Discard anything still unread before handing the terminal
-            // back. On the timeout path the reply may yet arrive - a
-            // slow terminal, an SSH round trip - and whatever is left in
-            // the input queue is read next by the stdin forwarder, which
-            // would type `\x1b]11;rgb:...` into the broadcast shell as
-            // if the user had. TCSADRAIN alone drains output, not input.
-            libc::tcflush(self.fd, libc::TCIFLUSH);
+            // Only after a query went unanswered: the reply may yet
+            // arrive - a slow terminal, an SSH round trip - and anything
+            // left in the input queue is read next by the stdin
+            // forwarder, which would type `\x1b]11;rgb:...` into the
+            // broadcast shell as if the user had. TCSADRAIN drains
+            // output, not input, so it has to be flushed explicitly.
+            // Never on the answered path, where flushing would destroy
+            // type-ahead for no reason.
+            if self.left_query_unanswered.get() {
+                libc::tcflush(self.fd, libc::TCIFLUSH);
+            }
             libc::tcsetattr(self.fd, libc::TCSADRAIN, &self.original);
             libc::close(self.fd);
         }

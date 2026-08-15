@@ -519,3 +519,61 @@ class TestTtyThemeDetection:
         }
         # A detected theme has no name, so it replaces the named one
         assert "theme" not in size
+
+    def test_detection_leaves_type_ahead_for_the_shell(self, unique_room,
+                                                       unique_password):
+        """Detection must not swallow what the user typed ahead.
+
+        Piping (`dmesg | shellshare`) is the case that made this worth a
+        test: the CLI reads its input from the pipe, so keystrokes at the
+        terminal belong to the parent shell, and eating them fails
+        silently - the user just never runs the command they typed. Both
+        halves of detection could: reading a reply reads past whatever is
+        queued, and flushing the input queue on the way out discards it.
+        """
+        room, password = unique_room, unique_password
+        # A pipeline, so the CLI's stdin is not the terminal; then read a
+        # line from the tty, which must be the type-ahead typed below.
+        script = (
+            f"printf 'streamed\\n' | {CLI_PATH} -s {SERVER_URL} "
+            f"-r {room} -W {password} >/dev/null 2>&1; "
+            'IFS= read -r -t 5 line < /dev/tty; echo "RESULT:[$line]"'
+        )
+        pid, master = pty.fork()
+        if pid == 0:
+            try:
+                os.execve("/bin/sh", ["/bin/sh", "-c", script],
+                          dict(os.environ, TERM="xterm"))
+            finally:
+                os._exit(127)
+
+        # Type before the CLI has even started - the queue detection
+        # would otherwise read past. Nothing here answers the OSC
+        # queries, so this also covers the timeout path, where the reply
+        # may still be in flight and the input queue gets flushed.
+        os.write(master, b"TYPEAHEAD\n")
+
+        screen = b""
+        try:
+            while True:
+                try:
+                    data = os.read(master, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                screen += data
+        finally:
+            try:
+                os.waitpid(pid, 0)
+            except (ChildProcessError, OSError):
+                pass
+            try:
+                os.close(master)
+            except OSError:
+                pass
+
+        text = screen.decode("utf-8", errors="replace")
+        assert "RESULT:[TYPEAHEAD]" in text, (
+            f"type-ahead did not survive detection. Screen: {text!r}"
+        )
