@@ -73,7 +73,11 @@ STUB_HERDR = textwrap.dedent("""\
         # cannot hold a test hostage.
         exec sleep 30
         ;;
-    "plugin pane"|"notification show")
+    "workspace create")
+        printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
+        printf '{"id":"x","result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}\\n'
+        ;;
+    "plugin pane"|"notification show"|"workspace close"|"workspace focus"|"tab close"|"tab rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         ;;
     *)
@@ -107,6 +111,8 @@ def plugin_env(tmp_path, dedicated_server):
         HERDR_PLUGIN_CONFIG_DIR=str(config_dir),
         HERDR_PLUGIN_ID="shellshare",
         HERDR_PANE_ID="w1:p9",
+        HERDR_TAB_ID="w1:t1",
+        HERDR_WORKSPACE_ID="w1",
         SHELLSHARE_BIN=str(CLI_PATH),
         STUB_DIR=str(stub_dir),
         FAKE_SOCKET=FAKE_SOCKET,
@@ -250,8 +256,8 @@ class TestSessionShare:
             # The pane records itself so the action can toggle it off.
             state = list(plugin_env.state.glob("live-*"))
             assert len(state) == 1
-            pid, pane = state[0].read_text().split()
-            assert int(pid) > 0 and pane == "w1:p9"
+            pid, pane, space = state[0].read_text().split()
+            assert int(pid) > 0 and pane == "w1:p9" and space == "w1"
         finally:
             stop_pane(proc)
 
@@ -310,7 +316,7 @@ class TestSessionShare:
             assert result.returncode == 0, result.stderr
             # Stopping closes the pane; the record goes with it.
             calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
-            assert "plugin pane close w1:p9" in calls
+            assert "workspace close w1" in calls
             assert not state.exists()
         finally:
             stop_pane(proc)
@@ -322,6 +328,43 @@ class TestSessionShare:
         assert result.returncode == 0, result.stderr
         calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
         assert "--entrypoint live" in calls, "a stale record must not block a new share"
+
+    def test_share_gets_a_space_of_its_own(self, plugin_env):
+        """What is shared is the whole session, so the share does not
+        squat in a project's space: the action makes one, labelled, and
+        drops the shell tab herdr creates with it. herdr closes a space
+        with its last tab, so that space exists exactly while the
+        broadcast does - the status indicator, visible from anywhere,
+        with no sidebar configuration."""
+        result = run_script(plugin_env, "toggle")
+        assert result.returncode == 0, result.stderr
+        calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
+
+        assert "workspace create --label" in calls
+        assert "shellshare" in calls.split("workspace create --label")[1].split("\n")[0]
+        # The pane goes into that space, not the caller's.
+        pane_open = [c for c in calls.splitlines() if "plugin pane open" in c]
+        assert pane_open and "--workspace w9" in pane_open[0], pane_open
+        assert "--placement tab" in pane_open[0]
+        # The space's own shell tab is closed, and it ends up focused so
+        # the link is in front of the user who just asked to share.
+        assert "tab close w9:t1" in calls
+        assert "workspace focus w9" in calls
+
+    def test_pane_names_its_tab_live(self, plugin_env):
+        proc, _url, _lines = start_pane(plugin_env)
+        try:
+            calls_file = plugin_env.stub_dir / "herdr-calls.log"
+            assert poll_until(
+                lambda: calls_file.exists() and "tab rename" in calls_file.read_text(),
+                timeout=15,
+            ), "the pane never labelled its tab"
+            rename = [
+                c for c in calls_file.read_text().splitlines() if "tab rename" in c
+            ][0]
+            assert "w1:t1" in rename and "live" in rename
+        finally:
+            stop_pane(proc)
 
     def test_unreachable_server_fails_visibly(self, plugin_env):
         (plugin_env.stub_dir.parent / "config" / "config").write_text(

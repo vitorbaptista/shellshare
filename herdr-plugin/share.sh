@@ -12,6 +12,14 @@
 # collect, or resurrect - no locks, no liveness tokens, no sweep. Ctrl+C
 # or closing the pane ends the broadcast the way you would expect.
 #
+# That pane lives in a space of its own, created when the share starts.
+# What is being shared is the whole session, so parking it inside one
+# project's space would misfile it - and herdr closes a space when its
+# last tab goes, so the space exists exactly as long as the broadcast
+# does. A labelled row that appears in the spaces sidebar while you are
+# live, and vanishes when you stop, is the status indicator; it needs no
+# sidebar configuration and is visible from wherever you are working.
+#
 # There is deliberately NO "share this pane" mode. To share one pane,
 # run `shellshare` in it: that is a full-fidelity byte stream with
 # scrollback and keystroke latency, and nothing this plugin could build
@@ -38,6 +46,11 @@ set -u
 HERDR="${HERDR_BIN_PATH:-herdr}"
 STATE_ROOT="${HERDR_PLUGIN_STATE_DIR:-}"
 CONFIG_FILE="${HERDR_PLUGIN_CONFIG_DIR:-}/config"
+
+# The label of the space that exists while a share is live, and of the
+# tab inside it. Short: a spaces sidebar row is narrow.
+SPACE_LABEL="◉ shellshare"
+TAB_LABEL="◉ live"
 
 umask 077
 
@@ -85,14 +98,15 @@ state_file() {
 
 action_toggle() {
     need_env
-    local f pid pane
+    local f pid pane space
     f=$(state_file)
     if [ -f "$f" ]; then
-        read -r pid pane <"$f"
+        read -r pid pane space <"$f"
         if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
-            # Closing the pane stops the broadcast: shellshare exits on
-            # the pane's SIGHUP and flushes what it has.
-            "$HERDR" plugin pane close "$pane" >/dev/null 2>&1 ||
+            # Closing the space takes the pane with it, and shellshare
+            # exits on the pane's SIGHUP and flushes what it has.
+            { [ -n "${space:-}" ] && "$HERDR" workspace close "$space" >/dev/null 2>&1; } ||
+                "$HERDR" plugin pane close "$pane" >/dev/null 2>&1 ||
                 kill -TERM "$pid" 2>/dev/null
             rm -f "$f"
             "$HERDR" notification show "Shellshare" \
@@ -102,9 +116,36 @@ action_toggle() {
         fi
         rm -f "$f"
     fi
+
+    # A space of its own for a session-wide share. Created unfocused so
+    # the layout does not jump before the pane is in place.
+    local created ws root_tab
+    created=$("$HERDR" workspace create --label "$SPACE_LABEL" --no-focus 2>/dev/null)
+    ws=$(printf '%s' "$created" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
+    root_tab=$(printf '%s' "$created" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
+
+    local open_args
+    if [ -n "$ws" ]; then
+        open_args="--workspace $ws"
+    else
+        # herdr would not give us a space; fall back to a tab here
+        # rather than refusing to share.
+        open_args=""
+    fi
+
+    # shellcheck disable=SC2086 # open_args is a fixed internal string
     "$HERDR" plugin pane open --plugin "${HERDR_PLUGIN_ID:-shellshare}" \
-        --entrypoint live --placement tab --focus >/dev/null ||
+        --entrypoint live --placement tab --no-focus $open_args >/dev/null || {
+        [ -n "$ws" ] && "$HERDR" workspace close "$ws" >/dev/null 2>&1
         die "could not open the shellshare pane (see: herdr plugin log list --plugin shellshare)"
+    }
+
+    if [ -n "$ws" ]; then
+        # The space came with a shell tab; the share does not need it.
+        # (Order matters: herdr closes a space when its last tab goes.)
+        [ -n "$root_tab" ] && "$HERDR" tab close "$root_tab" >/dev/null 2>&1
+        "$HERDR" workspace focus "$ws" >/dev/null 2>&1 || true
+    fi
 }
 
 # --------------------------------------------------------------------
@@ -186,7 +227,11 @@ pane_live() {
         -- env -u HERDR_ENV "$HERDR" session attach "$name" \
         </dev/null >"$fifo" 2>"$err" &
     local ss_pid=$!
-    printf '%s %s\n' "$$" "${HERDR_PANE_ID:-}" >"$(state_file)"
+    printf '%s %s %s\n' "$$" "${HERDR_PANE_ID:-}" "${HERDR_WORKSPACE_ID:-}" >"$(state_file)"
+    # Name the tab for what it is; the space label says the same thing
+    # one level up, where other spaces can see it.
+    [ -n "${HERDR_TAB_ID:-}" ] &&
+        "$HERDR" tab rename "$HERDR_TAB_ID" "$TAB_LABEL" >/dev/null 2>&1
 
     local first="" url=""
     exec 3<"$fifo"

@@ -25,9 +25,10 @@ contexts = ["workspace", "pane"]
 command = ["bash", "herdr-plugin/share.sh", "toggle"]
 
 # The share IS this pane: it runs the broadcaster, shows the link, and
-# stops when it closes. Placement `tab` keeps it out of the layout you
-# are broadcasting - viewers see the tab you are working in, not this
-# one - and its entry in the tab bar is the "you are live" indicator.
+# stops when it closes. The action opens it as the only tab of a space
+# it creates for the purpose - a session-wide share does not belong
+# inside one project's space, and since herdr closes a space with its
+# last tab, that space is live exactly while the broadcast is.
 [[panes]]
 id = "live"
 title = "Shellshare · live"

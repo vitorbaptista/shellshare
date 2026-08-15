@@ -65,10 +65,18 @@ herdr-plugin/
 the broadcaster, so the process's lifetime is the share's lifetime.
 herdr already owns pane lifetime - which means no supervision, no state
 machine, no locks, no liveness tokens, no sweep, and no way to leave an
-orphan behind. Ctrl+C, closing the tab, or toggling the action all stop
-it. Placement `tab`, so the share never disturbs the layout it is
-broadcasting: viewers see the tab you are working in, and the tab-bar
-entry is the "you are live" indicator, with no sidebar config needed.
+orphan behind.
+
+**That pane gets a space of its own.** The action creates one
+(`workspace create --label "◉ shellshare"`), opens the pane there as a
+tab, and closes the shell tab herdr creates with it. Two reasons: what
+is being shared is the whole session, so parking it inside one project's
+space misfiles it; and herdr closes a space when its last tab goes,
+which means the space exists for exactly as long as the broadcast. That
+makes it the indicator - a labelled row in the spaces sidebar, visible
+from wherever you are working, needing no `[ui.sidebar.*]` config and no
+badge-refresh loop. Ctrl+C, closing the space, and toggling the action
+are all the same stop, and none of them can leave the indicator lying.
 
 **One action.** `share` toggles: if the recorded PID is alive it closes
 the pane, otherwise it opens one. A stale record (the pane was killed)

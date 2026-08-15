@@ -36,11 +36,19 @@ From a terminal inside herdr:
 herdr plugin action invoke shellshare.share
 ```
 
-A "Shellshare · live" tab opens with your link. Copy it, switch back to
-your work tab, and carry on — viewers follow whatever tab you are on.
-Run the same action again (or press Ctrl+C in that tab, or close it) to
-stop. The link keeps showing the final frame until the server's room
-TTL evicts it (~6 hours on shellshare.net).
+A space called **◉ shellshare** appears with your link in it. Copy the
+link, switch back to your own space, and carry on — viewers follow
+whatever tab you are looking at.
+
+That space is the indicator: it exists for exactly as long as you are
+broadcasting, and you can see it from wherever you are working. What is
+being shared is the whole session, so it lives at the session level
+rather than inside one of your projects.
+
+To stop: run the action again, close the ◉ shellshare space, or press
+Ctrl+C in it — all three do the same thing. The link keeps showing the
+final frame until the server's room TTL evicts it (~6 hours on
+shellshare.net).
 
 One keybinding is the whole interface. Add to
 `~/.config/herdr/config.toml`, then `herdr server reload-config`:
@@ -96,8 +104,12 @@ shellshare_args=--server https://shellshare.example.com --theme dracula
   which also means a leaked link stays valid for every future broadcast
   of that room, and the room name is visible to other users on a
   multi-user machine (`ps`). The default random room avoids both.
-- The plugin writes one file: a `live-*` record holding the pane's PID,
-  removed when the share ends. No URLs, no keys, ever.
+- The plugin writes one file: a `live-*` record holding the pane's PID
+  and the space it is in, removed when the share ends. No URLs, no keys,
+  ever.
+- The ◉ shellshare space is a space like any other — if you focus it,
+  viewers see it, link and all. They already have that link, so nothing
+  leaks; it just isn't very interesting to watch.
 
 ## Troubleshooting
 

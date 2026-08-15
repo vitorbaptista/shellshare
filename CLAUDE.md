@@ -84,13 +84,22 @@ marketplace card does not surface subdirectories.
 (`share`, a toggle) and one pane (`live`), and the pane runs
 `shellshare exec -- env -u HERDR_ENV herdr session attach <name>`: the
 process's lifetime IS the share's lifetime. herdr already owns pane
-lifetime, so there is nothing to supervise, garbage collect or sweep -
-Ctrl+C, closing the tab, or toggling the action all stop it. Placement
-`tab` keeps the share out of the layout being broadcast (viewers see the
-tab you work in, not this one) and its tab-bar entry is the "live"
-indicator. An earlier design used a detached daemon plus a sidebar
-badge, a link fifo and an overlay; it was ~800 lines more and bought
-nothing herdr was not already doing.
+lifetime, so there is nothing to supervise, garbage collect or sweep. An
+earlier design used a detached daemon plus a sidebar badge, a link fifo
+and an overlay; it was ~800 lines more and bought nothing herdr was not
+already doing.
+
+That pane lives in a **space of its own**, created by the action
+(`workspace create --label "◉ shellshare"`, then the pane opens there as
+a tab and the space's own shell tab is closed). A session-wide share
+parked inside one project's space is misfiled, and herdr closes a space
+when its last tab goes - so the space exists exactly as long as the
+broadcast, which makes it the status indicator: a labelled row in the
+spaces sidebar, visible from wherever the user is working, needing no
+`[ui.sidebar.*]` configuration. Ctrl+C, closing the space, and toggling
+the action are all the same stop. The pane also renames its own tab
+(`tab rename $HERDR_TAB_ID`), since a manifest pane `title` does not
+become the tab label.
 
 **There is deliberately no pane-sharing mode.** To share one pane you
 run `shellshare` in it - a full-fidelity byte stream, better than any
