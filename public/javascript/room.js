@@ -6,6 +6,10 @@
   // immutably cached asset shared by every room.
   var THEMES = JSON.parse(
     document.getElementById('themes').textContent);
+  // The CLI's default --theme, used until a size message names one.
+  // Must stay in lockstep with the default in src/main.rs and with the
+  // fallback colors hard-coded in room.css.
+  var DEFAULT_THEME = 'tango';
   // Matches the base terminal font size in room.css
   var BASE_FONT_PX = 14;
   // A raw WebSocket to /ws/v + this page's path: binary frames are
@@ -534,7 +538,13 @@
   ];
 
   function applyTheme(name) {
-    var entry = THEMES[name];
+    // Before the first size message (and for a theme this viewer
+    // doesn't know) fall back to the CLI's default theme rather than
+    // plain black/white: the terminal is created and painted as soon
+    // as the font loads, so an arbitrary fallback flashes against the
+    // theme that then lands - and tango is what most broadcasts send.
+    // Same reasoning as the CSS fallbacks in room.css.
+    var entry = THEMES[name] || THEMES[DEFAULT_THEME];
     var colors = {
       background: entry ? entry.background : '#000000',
       foreground: entry ? entry.foreground : '#f0f0f0',
@@ -590,9 +600,11 @@
   }
 
   function applyPageChrome(colors, entry) {
-    // No real theme yet (pre-size default, or an unknown name): leave
-    // the page at the CSS default (dark) rather than forcing it black,
-    // so there's no flash before the broadcaster's theme lands.
+    // Only if even the default theme is missing from the injected
+    // block: leave the page at the CSS defaults rather than forcing it
+    // black. Normally entry is the broadcast theme, or tango until one
+    // lands - and tango is exactly what those CSS defaults encode, so
+    // applying it here is a no-op repaint, not a flash.
     if (!entry) {
       return;
     }

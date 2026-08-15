@@ -172,7 +172,12 @@ header {
    wrapping or clipping. */
 #terminal {
   position: relative;
-  background-color: black;
+  /* The default theme's (tango) background, matching --page-bg's
+     fallback above: the container is painted before any JS runs, and
+     the script overwrites it with the broadcast theme's background as
+     soon as one lands. Pure black here would flash against the far
+     more common tango terminal. */
+  background-color: #121314;
   padding: 5px;
   overflow-x: auto;
 }
