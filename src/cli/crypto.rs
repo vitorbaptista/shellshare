@@ -11,7 +11,7 @@
 //! late joiner can start from any whole-record boundary in the
 //! history, and chunks dropped by the replay buffer cap never tear a
 //! record. Must stay in lockstep with the viewer's parser in
-//! `templates/room.html`.
+//! `public/javascript/room.js`.
 //!
 //! Key derivation: the key is HKDF-SHA256 over this machine's stable
 //! id (`/etc/machine-id`, the Windows `MachineGuid`, or the macOS
