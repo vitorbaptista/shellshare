@@ -70,6 +70,23 @@ def terminal_background(page):
     )
 
 
+def wait_for_terminal_background(page, expected, timeout=10000):
+    """Wait until the terminal is painted in `expected` ("rgb(r, g, b)").
+
+    The theme arrives in the size message, which is independent of the
+    output `wait_for_terminal_text` watches for. Sampling the colour the
+    instant text appears is a race: on a slow runner it reads the
+    pre-theme default instead, and the page chrome derived from it with
+    it. Both are set in one synchronous apply, so this settles both.
+    """
+    page.wait_for_function(
+        "expected => getComputedStyle(document.getElementById('terminal'))"
+        ".backgroundColor === expected",
+        arg=expected,
+        timeout=timeout,
+    )
+
+
 def page_background(page):
     """The page body's computed background color - the chrome around the
     terminal, which the viewer tints to match the theme."""
@@ -210,20 +227,20 @@ class TestDetectedColorsRender:
             page = browser.new_page()
             page.goto(f"{server.url}/r/{room_id}")
             wait_for_terminal_text(page, "detected output")
-            assert terminal_background(page) == "rgb(26, 27, 38)"
+            wait_for_terminal_background(page, "rgb(26, 27, 38)")
             # The page chrome follows the detected background too, so a
             # by-value theme is not a second-class one
             assert perceived_luminance(parse_rgb(page_background(page))) < 0.5
             browser.close()
 
-    @pytest.mark.parametrize("colors, why", [
-        ({"foreground": "#a9b1d6", "background": "red",
-          "palette": DETECTED["palette"]}, "non-hex color"),
-        ({"foreground": "#a9b1d6", "background": "#1a1b26",
-          "palette": ["#000000"]}, "short palette"),
+    @pytest.mark.parametrize("colors", [
+        {"foreground": "#a9b1d6", "background": "red",
+         "palette": DETECTED["palette"]},
+        {"foreground": "#a9b1d6", "background": "#1a1b26",
+         "palette": ["#000000"]},
     ], ids=["non-hex", "short-palette"])
     def test_malformed_colors_fall_back_to_named_theme(
-        self, dedicated_server, colors, why
+        self, dedicated_server, colors
     ):
         """`colors` comes from the broadcaster and lands in CSS custom
         properties, so anything that is not a full set of #rrggbb is
@@ -247,7 +264,7 @@ class TestDetectedColorsRender:
             page = browser.new_page()
             page.goto(f"{server.url}/r/{room_id}")
             wait_for_terminal_text(page, "fallback output")
-            assert terminal_background(page) == DRACULA_BG, why
+            wait_for_terminal_background(page, DRACULA_BG)
             browser.close()
 
 
@@ -336,17 +353,19 @@ class TestThemeRendering:
                 proc.stdin.flush()
 
                 wait_for_terminal_text(page, "themed output")
-                assert terminal_background(page) == expected_bg
+                wait_for_terminal_background(page, expected_bg)
                 browser.close()
         finally:
             proc.stdin.close()
             proc.wait(timeout=10)
 
-    @pytest.mark.parametrize("theme_args, light", [
-        (["--theme", "solarized-light"], True),
-        ([], False),  # the default theme (tango) is dark
+    @pytest.mark.parametrize("theme_args, light, theme_bg", [
+        (["--theme", "solarized-light"], True, SOLARIZED_LIGHT_BG),
+        ([], False, TANGO_BG),  # the default theme (tango) is dark
     ], ids=["light", "default-dark"])
-    def test_page_chrome_follows_theme(self, dedicated_server, theme_args, light):
+    def test_page_chrome_follows_theme(
+        self, dedicated_server, theme_args, light, theme_bg
+    ):
         """The page chrome (body background) tracks the theme so a light
         terminal doesn't sit on a dark page or a dark one on white, yet is
         offset from the terminal so the terminal still reads as a distinct
@@ -384,6 +403,7 @@ class TestThemeRendering:
                 proc.stdin.flush()
 
                 wait_for_terminal_text(page, "chrome output")
+                wait_for_terminal_background(page, theme_bg)
                 page_bg = parse_rgb(page_background(page))
                 term_bg = parse_rgb(terminal_background(page))
                 # Tracks the theme's tone...
