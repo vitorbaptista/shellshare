@@ -6,6 +6,7 @@
 mod crypto;
 mod screen;
 mod script;
+mod termtheme;
 mod ws;
 
 use std::io::{self, IsTerminal, Read, Write};
@@ -28,6 +29,35 @@ fn get_terminal_size() -> TermSize {
             rows: rows as u16,
         })
         .unwrap_or_default()
+}
+
+/// What viewers should be told to render the broadcast in: either a
+/// built-in theme by name, or this terminal's own colors by value.
+///
+/// Both are carried in the `size` control message and both end up in
+/// the same `applyTheme` path in `public/javascript/room.js`; the difference
+/// is only whether the viewer looks the theme up or is handed it.
+pub enum ThemeChoice {
+    Named(String),
+    Detected(termtheme::TerminalColors),
+}
+
+/// Turn the validated `--theme` value into what goes on the wire.
+///
+/// `auto` (the default) asks the terminal; anything else is a name the
+/// user chose and is passed through untouched - an explicit `--theme`
+/// must never be second-guessed by detection. Detection failing is the
+/// ordinary case on Windows, in CI, over a pipe with no controlling
+/// terminal, and on any terminal that ignores OSC color queries, so it
+/// lands on the same theme the CLI defaulted to before this existed.
+fn resolve_theme(theme: Option<String>) -> ThemeChoice {
+    match theme {
+        Some(name) if name != crate::themes::AUTO => ThemeChoice::Named(name),
+        _ => termtheme::detect().map_or_else(
+            || ThemeChoice::Named(crate::themes::FALLBACK.to_string()),
+            ThemeChoice::Detected,
+        ),
+    }
 }
 
 /// Client configuration arguments
@@ -253,8 +283,8 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     // is handed over to the shell. Failures must propagate (not exit):
     // the caller may hold a tunnel whose cleanup an exit would skip
     let size = get_terminal_size();
-    let transport =
-        ws::Transport::connect(&server, &room_path, &password, size, args.theme, cipher)?;
+    let theme = resolve_theme(args.theme);
+    let transport = ws::Transport::connect(&server, &room_path, &password, size, theme, cipher)?;
 
     // A termination signal only flips flags; the loops below own the
     // transport and flush on their way out

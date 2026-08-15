@@ -37,9 +37,12 @@ pytestmark = pytest.mark.filterwarnings(
     "ignore:.*use of forkpty.*:DeprecationWarning"
 )
 
+import re
+
 from conftest import (
     CLI_PATH,
     SERVER_URL,
+    SocketListener,
     broadcast_message,
     parse_share_key,
     poll_until,
@@ -381,3 +384,138 @@ class TestTtySignals:
         assert cli.wait_exit(timeout=10), (
             "Double Ctrl+C did not force-quit the CLI"
         )
+
+
+class OscRespondingTty:
+    """A PTY that answers OSC color queries - i.e. one that pretends to
+    be a real terminal emulator.
+
+    A bare PTY (what `pty.fork` and `script` give you) has nothing behind
+    it, so it never answers, which exercises only the fallback. To reach
+    the detection path at all the harness has to play the emulator and
+    reply the way real ones were measured to.
+    """
+
+    # What this emulator claims to be: Tokyo Night, the palette a real
+    # Alacritty answered with while the feature was designed
+    BACKGROUND = "#1a1b26"
+    FOREGROUND = "#a9b1d6"
+    PALETTE = [
+        "#32344a", "#f7768e", "#9ece6a", "#e0af68",
+        "#7aa2f7", "#ad8ee6", "#449dab", "#787c99",
+        "#444b6a", "#ff7a93", "#b9f27c", "#ff9e64",
+        "#7da6ff", "#bb9af7", "#0db9d7", "#acb0d0",
+    ]
+
+    QUERY_RE = re.compile(rb"\x1b\](10|11|4;(\d+));\?(?:\x07|\x1b\\)")
+
+    def __init__(self, room, password, terminator, server=SERVER_URL):
+        self.terminator = terminator
+        winsize = struct.pack("HHHH", 24, 80, 0, 0)
+        pid, master = pty.fork()
+        if pid == 0:  # child: become the CLI
+            try:
+                fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
+                env = dict(os.environ)
+                env["SHELL"] = "/bin/sh"
+                env["PS1"] = "$ "
+                env["TERM"] = "xterm"
+                os.execve(
+                    str(CLI_PATH),
+                    [str(CLI_PATH), "-s", server, "-r", room, "-W", password],
+                    env,
+                )
+            finally:
+                os._exit(127)
+
+        self.pid = pid
+        self.master = master
+        self._screen = b""
+        self._lock = threading.Lock()
+        self._reader = threading.Thread(target=self._serve, daemon=True)
+        self._reader.start()
+
+    def _color_reply(self, prefix, hex_color):
+        """`ESC ] <prefix> ; rgb:RRRR/GGGG/BBBB <terminator>` - the
+        16-bit-per-component form terminals actually answer with, which
+        the CLI has to scale back down to 8."""
+        parts = "/".join(
+            f"{int(hex_color[i:i + 2], 16) * 0x101:04x}" for i in (1, 3, 5)
+        )
+        return f"\x1b]{prefix};rgb:{parts}".encode() + self.terminator
+
+    def _serve(self):
+        """Drain the CLI's output, answering any color query in it."""
+        while True:
+            try:
+                data = os.read(self.master, 4096)
+            except OSError:
+                return
+            if not data:
+                return
+            with self._lock:
+                self._screen += data
+            for match in self.QUERY_RE.finditer(data):
+                kind, index = match.group(1), match.group(2)
+                if index is not None:
+                    slot = int(index)
+                    reply = self._color_reply(f"4;{slot}", self.PALETTE[slot])
+                elif kind == b"11":
+                    reply = self._color_reply("11", self.BACKGROUND)
+                else:
+                    reply = self._color_reply("10", self.FOREGROUND)
+                try:
+                    os.write(self.master, reply)
+                except OSError:
+                    return
+
+    @property
+    def screen(self):
+        with self._lock:
+            return self._screen.decode("utf-8", errors="replace")
+
+    def close(self):
+        for step in (
+            lambda: os.write(self.master, b"exit\n"),
+            lambda: os.waitpid(self.pid, 0),
+            lambda: os.close(self.master),
+        ):
+            try:
+                step()
+            except (OSError, ChildProcessError):
+                pass
+
+
+class TestTtyThemeDetection:
+    """`--theme auto` (the default) asks the terminal for its colors.
+
+    Only reachable with a real controlling TTY and something answering
+    on it, which is why this lives here rather than in test_theme.py.
+    """
+
+    @pytest.mark.parametrize(
+        "terminator", [b"\x07", b"\x1b\\"], ids=["bel", "st"]
+    )
+    def test_detected_colors_go_on_the_wire(
+        self, unique_room, unique_password, terminator
+    ):
+        """Both reply terminators must be accepted: a terminal answers
+        with ST directly and with BEL through tmux, so honouring only one
+        of them silently loses detection for half of all users."""
+        listener = SocketListener(unique_room)
+        listener.connect()
+        cli = OscRespondingTty(unique_room, unique_password, terminator)
+        try:
+            assert listener.wait_for_size(timeout=10), "No size event received"
+            size = listener.get_last_size()
+        finally:
+            cli.close()
+            listener.disconnect()
+
+        assert size.get("colors") == {
+            "foreground": OscRespondingTty.FOREGROUND,
+            "background": OscRespondingTty.BACKGROUND,
+            "palette": OscRespondingTty.PALETTE,
+        }
+        # A detected theme has no name, so it replaces the named one
+        assert "theme" not in size

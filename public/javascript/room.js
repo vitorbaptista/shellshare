@@ -275,7 +275,7 @@
       term.loadAddon(new Unicode11Addon.Unicode11Addon());
       term.unicode.activeVersion = '11';
     }
-    applyTheme(currentSize.theme);
+    applyTheme(themeEntry(currentSize));
     term.open(terminalContainer);
     // Read-only viewer: xterm focuses its hidden textarea on
     // click, which then swallows keydown events before they reach
@@ -513,15 +513,17 @@
     if (!cols || !rows) {
       return;
     }
-    var themeChanged = currentSize.theme !== size.theme;
-    currentSize = {cols: cols, rows: rows, theme: size.theme};
+    var themeChanged = themeKey(currentSize) !== themeKey(size);
+    currentSize = {
+      cols: cols, rows: rows, theme: size.theme, colors: size.colors,
+    };
     if (!term) {
       // Applied when the terminal is created
       return;
     }
     term.resize(cols, rows);
     if (themeChanged) {
-      applyTheme(size.theme);
+      applyTheme(themeEntry(size));
     }
     fitTerminal();
   }
@@ -537,14 +539,50 @@
     'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite',
   ];
 
-  function applyTheme(name) {
-    // Before the first size message (and for a theme this viewer
-    // doesn't know) fall back to the CLI's default theme rather than
-    // plain black/white: the terminal is created and painted as soon
-    // as the font loads, so an arbitrary fallback flashes against the
-    // theme that then lands - and tango is what most broadcasts send.
-    // Same reasoning as the CSS fallbacks in room.css.
-    var entry = THEMES[name] || THEMES[DEFAULT_THEME];
+  // A named theme is looked up in the server-supplied THEMES block,
+  // but `colors` arrives from the broadcaster (a terminal that answered
+  // OSC color queries has no theme name to send), and these values are
+  // written into CSS custom properties and xterm's theme. Anything that
+  // is not a plain #rrggbb is rejected wholesale rather than partially
+  // applied, so a malformed or hostile size message falls back to a
+  // named theme instead of half-styling the page.
+  var HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+  function sanitizeColors(colors) {
+    if (!colors || !HEX_COLOR.test(colors.foreground) ||
+        !HEX_COLOR.test(colors.background)) {
+      return null;
+    }
+    var palette = colors.palette;
+    if (!Array.isArray(palette) || palette.length !== 16 ||
+        !palette.every(function (c) { return HEX_COLOR.test(c); })) {
+      return null;
+    }
+    return {
+      foreground: colors.foreground,
+      background: colors.background,
+      palette: palette,
+    };
+  }
+
+  // The theme a size message asks for: the broadcaster's own colors by
+  // value, else a named theme. Before the first size message (and for a
+  // theme this viewer doesn't know) fall back to the CLI's default
+  // rather than plain black/white: the terminal is created and painted
+  // as soon as the font loads, so an arbitrary fallback flashes against
+  // the theme that then lands. Same reasoning as room.css's fallbacks.
+  function themeEntry(size) {
+    return sanitizeColors(size && size.colors) ||
+      THEMES[size && size.theme] || THEMES[DEFAULT_THEME];
+  }
+
+  // Identity of the applied theme, so a repeated size message does not
+  // re-apply it (which would restart the chrome transition).
+  function themeKey(size) {
+    var entry = themeEntry(size);
+    return entry ? JSON.stringify(entry) : '';
+  }
+
+  function applyTheme(entry) {
     var colors = {
       background: entry ? entry.background : '#000000',
       foreground: entry ? entry.foreground : '#f0f0f0',

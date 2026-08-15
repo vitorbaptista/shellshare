@@ -19,6 +19,7 @@ from conftest import (
     CLI_COMMAND,
     SERVER_URL,
     SocketListener,
+    broadcast_message,
     random_id,
     wait_for_terminal_text,
 )
@@ -119,7 +120,13 @@ class TestThemeWireFormat:
         assert size.get("theme") == "dracula"
         assert "cols" in size and "rows" in size
 
-    def test_no_theme_flag_defaults_to_tango(self, unique_room, unique_password):
+    def test_no_theme_flag_falls_back_to_tango(self, unique_room, unique_password):
+        """`--theme auto` (the default) asks the terminal for its colors,
+        but there is no terminal to answer here - no controlling tty, and
+        no emulator behind it. The fallback must be the theme the CLI
+        always defaulted to, and it must send a plain name with no
+        `colors`, so a detection-less environment broadcasts exactly as
+        it did before detection existed."""
         listener = SocketListener(unique_room)
         listener.connect()
 
@@ -133,6 +140,107 @@ class TestThemeWireFormat:
         listener.disconnect()
 
         assert size.get("theme") == "tango"
+        assert "colors" not in size
+
+    def test_explicit_theme_is_never_overridden_by_detection(
+        self, unique_room, unique_password
+    ):
+        """An explicit --theme is a choice, so it goes on the wire as a
+        name and detection is not even attempted."""
+        listener = SocketListener(unique_room)
+        listener.connect()
+
+        returncode, stdout, stderr = run_cli_stdin(
+            "test", unique_room, unique_password, extra_args=["--theme", "nord"]
+        )
+        assert returncode == 0, f"CLI failed: {stderr}"
+
+        assert listener.wait_for_size(timeout=5), "No size event received"
+        size = listener.get_last_size()
+        listener.disconnect()
+
+        assert size.get("theme") == "nord"
+        assert "colors" not in size
+
+
+class TestDetectedColorsRender:
+    """A detected theme has no name, so it travels as `colors` by value.
+
+    This is the lockstep contract between the OSC detection in
+    src/cli/termtheme.rs and applyTheme in public/javascript/room.js:
+    detector emits {foreground, background, palette} and the viewer must
+    render exactly those. Driven through the raw ingest socket rather
+    than the CLI, because no terminal answers OSC queries under pytest.
+    """
+
+    # Tokyo Night, as an Alacritty actually answered it - the reply that
+    # motivated sending colors by value instead of snapping to a preset
+    DETECTED = {
+        "foreground": "#a9b1d6",
+        "background": "#1a1b26",
+        "palette": [
+            "#32344a", "#f7768e", "#9ece6a", "#e0af68",
+            "#7aa2f7", "#ad8ee6", "#449dab", "#787c99",
+            "#444b6a", "#ff7a93", "#b9f27c", "#ff9e64",
+            "#7da6ff", "#bb9af7", "#0db9d7", "#acb0d0",
+        ],
+    }
+
+    def test_detected_colors_render_in_browser(self, dedicated_server):
+        server = dedicated_server()
+        room_id = f"detected-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        broadcast_message(
+            server.url, room_id, password,
+            text="detected output\r\n",
+            size={"cols": 80, "rows": 24, "colors": self.DETECTED},
+        )
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"{server.url}/r/{room_id}")
+            wait_for_terminal_text(page, "detected output")
+            assert terminal_background(page) == "rgb(26, 27, 38)"
+            # The page chrome follows the detected background too, so a
+            # by-value theme is not a second-class one
+            assert perceived_luminance(parse_rgb(page_background(page))) < 0.5
+            browser.close()
+
+    @pytest.mark.parametrize("colors, why", [
+        ({"foreground": "#a9b1d6", "background": "red",
+          "palette": DETECTED["palette"]}, "non-hex color"),
+        ({"foreground": "#a9b1d6", "background": "#1a1b26",
+          "palette": ["#000000"]}, "short palette"),
+    ], ids=["non-hex", "short-palette"])
+    def test_malformed_colors_fall_back_to_named_theme(
+        self, dedicated_server, colors, why
+    ):
+        """`colors` comes from the broadcaster and lands in CSS custom
+        properties, so anything that is not a full set of #rrggbb is
+        rejected outright - the named theme alongside it still applies,
+        rather than the page being half-styled."""
+        server = dedicated_server()
+        room_id = f"badcolors-{random_id()}"
+        password = f"secret-{random_id()}"
+
+        broadcast_message(
+            server.url, room_id, password,
+            text="fallback output\r\n",
+            size={
+                "cols": 80, "rows": 24,
+                "theme": "dracula", "colors": colors,
+            },
+        )
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"{server.url}/r/{room_id}")
+            wait_for_terminal_text(page, "fallback output")
+            assert terminal_background(page) == DRACULA_BG, why
+            browser.close()
 
 
 class TestThemeValidation:
@@ -164,7 +272,7 @@ class TestThemeValidation:
         stdout, stderr = proc.communicate(timeout=10)
         help_text = stdout + stderr
         assert "--theme" in help_text
-        assert "default: tango" in help_text
+        assert "default: auto" in help_text
         # The help must list what's available
         for theme in ["asciinema", "dracula", "solarized-dark", "tango"]:
             assert theme in help_text, f"'{theme}' missing from help: {help_text}"

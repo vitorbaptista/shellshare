@@ -71,10 +71,11 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Color theme viewers see the broadcast in
+    /// Color theme viewers see the broadcast in ("auto" asks this
+    /// terminal for its own colors, falling back to tango)
     // Validated at parse time, so a typo fails before the room is
     // claimed and the shell spawns.
-    #[arg(short, long, global = true, default_value = "tango", value_parser = clap::builder::PossibleValuesParser::new(themes::names()))]
+    #[arg(short, long, global = true, default_value = themes::AUTO, value_parser = clap::builder::PossibleValuesParser::new(themes::selectable_names()))]
     theme: Option<String>,
 
     /// Broadcast in plaintext instead of end-to-end encrypted. Use this

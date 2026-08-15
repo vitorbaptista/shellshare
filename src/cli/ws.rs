@@ -17,6 +17,7 @@
 //! the room now belongs to another password.
 
 use crate::cli::crypto::Encryptor;
+use crate::cli::ThemeChoice;
 use crate::cli::screen::Keyframer;
 use crate::protocol::TermSize;
 use serde_json::json;
@@ -113,7 +114,7 @@ pub struct Transport {
     /// Viewer color theme, carried inside every size message (the
     /// server stores and forwards the size verbatim, so late joiners
     /// get the theme with no server-side knowledge of it)
-    theme: Option<String>,
+    theme: ThemeChoice,
     /// End-to-end encryption, unless `--disable-encryption`. Chunks are
     /// sealed as they enter the replay buffer, so acks, the buffer cap,
     /// and reconnect replay all operate on ciphertext - a replayed
@@ -139,7 +140,7 @@ impl Transport {
         room_path: &str,
         password: &str,
         size: TermSize,
-        theme: Option<String>,
+        theme: ThemeChoice,
         cipher: Option<Encryptor>,
     ) -> Result<Self, TransportError> {
         let ws_base = if let Some(rest) = server_url.strip_prefix("https://") {
@@ -282,8 +283,12 @@ impl Transport {
         // Size first, so viewers resize before the content that follows
         if self.sent_size != Some(self.size) {
             let mut size = json!(self.size);
-            if let Some(theme) = &self.theme {
-                size["theme"] = json!(theme);
+            // A named theme the viewer looks up, or this terminal's own
+            // colors by value; `colors` wins in the viewer, so a client
+            // never sends both.
+            match &self.theme {
+                ThemeChoice::Named(name) => size["theme"] = json!(name),
+                ThemeChoice::Detected(colors) => size["colors"] = json!(colors),
             }
             // Rides verbatim to viewers like the theme: tells a viewer
             // whether to expect encrypted records, so a plaintext room
