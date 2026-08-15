@@ -1,7 +1,4 @@
 //! Shellshare CLI client - Share your terminal session
-//!
-//! This module provides the client functionality for streaming terminal
-//! output to a shellshare server.
 
 mod crypto;
 mod screen;
@@ -18,7 +15,6 @@ use crate::protocol::TermSize;
 use qrcode::{render::unicode, QrCode};
 use rand::Rng;
 
-/// Get the current terminal size using ioctl (TIOCGWINSZ) via `term_size`.
 /// Falls back to 80x24 when not attached to a terminal.
 #[allow(clippy::cast_possible_truncation)] // Terminal dimensions always fit in u16
 fn get_terminal_size() -> TermSize {
@@ -30,7 +26,6 @@ fn get_terminal_size() -> TermSize {
         .unwrap_or_default()
 }
 
-/// Client configuration arguments
 pub struct ClientArgs {
     pub server: String,
     /// URL viewers should use when it differs from the broadcast URL
@@ -65,7 +60,6 @@ pub struct SessionEnv<'a> {
     pub room: &'a str,
 }
 
-/// Generate a random 18-character alphanumeric room ID
 fn generate_room_id() -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
@@ -81,10 +75,9 @@ fn generate_room_id() -> String {
         .collect()
 }
 
-/// Get the default password (MAC address as integer, like Python's `uuid.getnode()`)
+/// The MAC address as an integer, like Python's `uuid.getnode()`.
 fn get_default_password() -> String {
     if let Ok(Some(mac)) = mac_address::get_mac_address() {
-        // Convert MAC address bytes to an integer (like Python's uuid.getnode())
         let bytes = mac.bytes();
         let mut value: u64 = 0;
         for &byte in &bytes {
@@ -92,7 +85,6 @@ fn get_default_password() -> String {
         }
         value.to_string()
     } else {
-        // Fallback to a random value if MAC address is unavailable
         let mut rng = rand::thread_rng();
         rng.gen::<u64>().to_string()
     }
@@ -124,7 +116,6 @@ fn is_secure_context_url(base: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// Normalize server URL (ensure it has a scheme, strip trailing slashes)
 fn normalize_server_url(server: &str) -> String {
     let server = if server.contains("://") {
         server.to_string()
@@ -142,17 +133,14 @@ fn emit_json(event: &serde_json::Value) {
     let _ = io::stdout().flush();
 }
 
-/// Render a compact terminal QR code for the share URL. Failure should
-/// never prevent a broadcast; the plain link remains the source of truth.
 fn render_qr_code(url: &str) -> Option<String> {
     QrCode::new(url.as_bytes())
         .ok()
         .map(|code| code.render::<unicode::Dense1x2>().build())
 }
 
-/// Write the phone-scannable QR block for `url`, prefixed by an invitation
-/// line. Best-effort: a QR render failure leaves the plain link as the
-/// source of truth and prints nothing.
+/// Best-effort: a QR render failure leaves the plain link as the source
+/// of truth and prints nothing.
 fn write_qr_code<W: Write>(writer: &mut W, url: &str) {
     if let Some(qr) = render_qr_code(url) {
         let _ = writeln!(writer);
@@ -217,14 +205,12 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     let room = args.room.unwrap_or_else(generate_room_id);
     let password = args.password.unwrap_or_else(get_default_password);
 
-    // Build room path (r/{room})
     let room_path = format!("r/{room}");
 
     // Encrypted by default. The key goes only into the printed link's
     // #fragment - browsers never send fragments, so the server cannot
     // see it. Derived from this machine and the room name, so a named
-    // room keeps one reusable link across restarts. --disable-encryption
-    // drops to plaintext for viewers on plain HTTP (no WebCrypto there)
+    // room keeps one reusable link across restarts.
     let (cipher, share_url) = if args.encrypt {
         let (cipher, key) = crypto::Encryptor::for_room(&room);
         (Some(cipher), format!("{share_base}/{room_path}#{key}"))
@@ -277,15 +263,15 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
     let stream_mode = args.exec.is_none() && !io::stdin().is_terminal();
 
     let exit_code = if stream_mode {
-        // Stream mode - prose goes to stderr (stdout may be piped onward)
+        // Prose goes to stderr; stdout may be piped onward
         if !args.json {
             let mut stderr = io::stderr();
             let show_qr = stderr.is_terminal();
             emit_human_sharing_message(&mut stderr, &share_url, show_qr);
         }
 
-        // Read from stdin, tee to stdout, and stream to server. `--json`
-        // owns stdout for the event protocol, so it opts out of the tee.
+        // `--json` owns stdout for the event protocol, so it opts out of
+        // the tee to stdout.
         stream_stdin(transport, &running, &forced, !args.json);
 
         if !args.json {
@@ -293,9 +279,8 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
         }
         0
     } else {
-        // Script mode - prose goes to stdout. The interactive niceties
-        // only make sense for a human on a TTY; scripts and agents get
-        // the JSON contract (or nothing) instead.
+        // The interactive niceties only make sense for a human on a TTY;
+        // scripts and agents get the JSON contract (or nothing) instead.
         if !args.json {
             if io::stdout().is_terminal() && (size.rows > 30 || size.cols > 160) {
                 println!("Current terminal size is {}x{}.", size.rows, size.cols);
@@ -308,8 +293,8 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
             emit_human_sharing_message(&mut stdout, &share_url, show_qr);
         }
 
-        // Run script mode with PTY. The share URL and room ride into the
-        // shell's environment so `shellshare status` can recover the link.
+        // The share URL and room ride into the shell's environment so
+        // `shellshare status` can recover the link.
         let session = SessionEnv {
             url: &share_url,
             room: &room,
@@ -343,12 +328,11 @@ pub fn run(args: ClientArgs) -> Result<i32, Box<dyn std::error::Error>> {
 /// foreground process group, so in a pipe the producer is dying of the same
 /// signal and its last bytes are still worth relaying - `stream_stdin` keeps
 /// draining and only a second press cuts that short. The other two stop at
-/// once, which is what all three did before the drain existed: SIGTERM
-/// arrives alone (a supervisor, `kill`), so there is nobody to wait for,
-/// and waiting would only lose the flush to the follow-up SIGKILL. SIGHUP
-/// *is* group-delivered like SIGINT, but it means the terminal is gone - so
-/// nobody is watching the link, and the second press that escapes a drain
-/// could never be typed.
+/// once: SIGTERM arrives alone (a supervisor, `kill`), so there is nobody to
+/// wait for, and waiting would only lose the flush to the follow-up SIGKILL.
+/// SIGHUP *is* group-delivered like SIGINT, but it means the terminal is
+/// gone - so nobody is watching the link, and the second press that escapes
+/// a drain could never be typed.
 ///
 /// Note that a second SIGINT only arms the force-quit if it is a distinct
 /// delivery: signals are not queued, so two arriving within the same
@@ -413,16 +397,11 @@ fn lf_to_crlf(input: &[u8], prev_was_cr: &mut bool, out: &mut Vec<u8>) {
     }
 }
 
-/// Stream stdin to the server: relay bytes until EOF. When `echo_stdout` is
-/// set, also tee each chunk to stdout (verbatim) so the local pipeline keeps
-/// working - `journalctl --follow | shellshare` still shows and forwards its
-/// output. `--json` clears the flag because that mode reserves stdout for the
-/// event protocol. A broken downstream pipe (e.g. `| head`) must not abort the
-/// broadcast, so stdout write errors are ignored - the broadcast is the job.
-///
-/// Only the broadcast is normalized to CRLF (see `lf_to_crlf`); the tee stays
-/// verbatim so a downstream command sees exactly what was piped in and the
-/// local terminal applies its own ONLCR.
+/// Stream stdin to the server until EOF, teeing each chunk verbatim to
+/// stdout when `echo_stdout` is set so the local pipeline keeps working.
+/// A broken downstream pipe (e.g. `| head`) must not abort the broadcast,
+/// so stdout write errors are ignored. Only the broadcast is normalized
+/// to CRLF (see `lf_to_crlf`); the tee stays verbatim.
 ///
 /// stdin is read on its own thread so this loop can wake on a timer instead of
 /// parking inside a blocking read. A quiet producer (`journalctl -f` on an idle
@@ -470,8 +449,6 @@ fn stream_stdin(
             let chunk = &buffer[..bytes_read];
 
             if echo_stdout {
-                // Fire-and-forget: flush so `--follow` streams live; a dead
-                // downstream just means the local echo stops, not the broadcast.
                 let _ = stdout.write_all(chunk);
                 let _ = stdout.flush();
             }

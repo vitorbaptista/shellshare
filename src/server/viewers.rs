@@ -7,9 +7,6 @@
 //! silently skipped: a dropped frame would lose content with no signal
 //! to anyone (and garble what renders after it), while a disconnect
 //! makes the page reconnect and resync cleanly from the room history.
-//! The browser client reconnects automatically, so the worst case for
-//! a hopelessly slow viewer is a fresh-history reset loop instead of a
-//! corrupt terminal.
 //!
 //! Queued payloads are refcounted [`Bytes`] clones of one broadcast
 //! buffer, so queue depth costs almost nothing until a viewer actually
@@ -66,21 +63,18 @@ impl Viewers {
         (id, rx)
     }
 
-    /// Remove a viewer (connection closed, or dropped for stalling).
     fn leave(&self, room: &str, id: u64) {
         if let Some(mut entry) = self.rooms.get_mut(room) {
             entry.remove(&id);
             if entry.is_empty() {
                 drop(entry);
-                // Last viewer gone: drop the room's (empty) map entry.
                 // remove_if re-checks under the entry lock, so a viewer
-                // joining concurrently is not swept away with it
+                // joining concurrently is not swept away with the map entry
                 self.rooms.remove_if(room, |_, viewers| viewers.is_empty());
             }
         }
     }
 
-    /// How many viewers are watching the room right now.
     fn count(&self, room: &str) -> usize {
         self.rooms.get(room).map_or(0, |viewers| viewers.len())
     }
@@ -92,7 +86,6 @@ impl Viewers {
         self.send(room, || ViewerMsg::Bytes(payload.clone()));
     }
 
-    /// Queue a control event (pre-serialized JSON) to every viewer.
     fn send_control(&self, room: &str, json: &str) {
         self.send(room, || ViewerMsg::Control(json.to_string()));
     }
@@ -128,8 +121,6 @@ pub struct ViewerDelivery {
 }
 
 impl ViewerDelivery {
-    /// Construct viewer delivery and start its fan-out and user-count workers.
-    ///
     /// Must be called from within a Tokio runtime. One fan-out task is started
     /// per available CPU, so concurrent rooms emit in parallel while one room
     /// always stays on one shard and preserves its accepted publish order.
@@ -180,8 +171,7 @@ impl ViewerDelivery {
     ///
     /// This preserves the existing ordering: reset and broadcaster-status
     /// transitions may overtake bytes still waiting in a fan-out shard. Moving
-    /// them into that queue would be an observable protocol change rather than
-    /// an architectural refactor.
+    /// them into that queue would be an observable protocol change.
     pub fn publish_control(&self, room: &RoomId, control: ViewerControl) {
         let json = match control {
             ViewerControl::Reset => "{\"reset\":true}".to_string(),
@@ -310,24 +300,19 @@ const FANOUT_MAX_BATCH: usize = 64 * 1024;
 
 /// The viewer fan-out task: drains the queue and emits to viewers.
 ///
-/// Whatever queued up while the previous emits ran is coalesced - each
-/// room's payloads are concatenated (up to [`FANOUT_MAX_BATCH`] per
-/// emit), exactly like the client's sender thread coalesces PTY output.
-/// Under burst load this collapses thousands of tiny per-socket sends
-/// into a few large ones, which is what keeps slow viewers' buffers
-/// from overflowing into silent content loss. Terminal output is a raw
-/// byte stream of whole frames, so concatenation is invisible to
-/// viewers (room history already concatenates the same way).
+/// Whatever queued up while the previous emits ran is coalesced. Under
+/// burst load this collapses thousands of tiny per-socket sends into a
+/// few large ones, which is what keeps slow viewers' buffers from
+/// overflowing into silent content loss. Terminal output is a raw byte
+/// stream of whole frames, so concatenation is invisible to viewers.
 ///
-/// A single task consumes the queue, so per-room ordering is exactly
-/// the ingest order (cross-room ordering carries no meaning). The
-/// store-then-queue gap means a viewer joining mid-burst may see a
-/// queued frame around its history replay - duplicated, or even before
-/// the replay containing it. That race pre-exists this task (emits were
-/// always concurrent with the join handler); the queue widens it from
-/// microseconds to the drain latency. Same class as the duplicate
-/// render already accepted around client reconnect replay: delivery is
-/// at-least-once end to end.
+/// A single task consumes the queue, so per-room ordering is exactly the
+/// ingest order (cross-room ordering carries no meaning). The
+/// store-then-queue gap means a viewer joining mid-burst may see a queued
+/// frame around its history replay - duplicated, or even before the
+/// replay containing it. Same class as the duplicate render already
+/// accepted around client reconnect replay: delivery is at-least-once
+/// end to end.
 async fn fanout_loop(mut rx: mpsc::UnboundedReceiver<FanoutItem>, viewers: Viewers) {
     /// Payloads accumulated for one room, flushed as one emit.
     #[derive(Default)]
@@ -402,8 +387,7 @@ async fn fanout_loop(mut rx: mpsc::UnboundedReceiver<FanoutItem>, viewers: Viewe
 /// to up to N members - O(N^2) emits in a connect storm. Draining and
 /// deduplicating turns that into at most one broadcast per room per
 /// pass, each carrying the count current at emit time, so every viewer
-/// still converges on the exact final number (intermediate values may
-/// be skipped, exactly as if the joins had raced the same broadcast).
+/// still converges on the exact final number.
 async fn usercount_loop(mut rx: mpsc::UnboundedReceiver<String>, viewers: Viewers) {
     let mut rooms = HashSet::new();
     while let Some(first) = rx.recv().await {
@@ -428,8 +412,7 @@ fn room_shard(room: &str, shards: usize) -> usize {
 
 /// How long a viewer may go without sending anything (pong frames
 /// answer our pings automatically in every browser) before the
-/// connection is presumed dead. Pings go out every 25s, so a healthy
-/// peer is never close to this. The same bound caps every write: a
+/// connection is presumed dead. The same bound caps every write: a
 /// peer that stops reading (frozen tab, zero TCP window) would
 /// otherwise block `sink.send` forever, pinning the task and its
 /// backlog - the select loop can't reach its idle check while a send
@@ -447,18 +430,17 @@ where
     }
 }
 
-/// Viewer ping cadence; keeps NATs open and detects dead peers.
+/// Viewer ping cadence; keeps NATs open and detects dead peers. Must stay
+/// well under [`VIEWER_IDLE_TIMEOUT`], or healthy peers are disconnected.
 const VIEWER_PING_INTERVAL: Duration = Duration::from_secs(25);
 
 /// Relay one wake-up's worth of queued messages to the viewer.
 ///
-/// Everything already queued is drained and consecutive binary
-/// payloads are merged into one WebSocket frame (terminal output is a
-/// raw byte stream, so the merge is invisible - the client batches the
-/// same way before sending). Every message otherwise costs its own
-/// write+flush, and at thousands of viewers x dozens of frames/s those
-/// per-frame flushes dominate the server. Control events keep their
-/// own text frames, and ordering is preserved throughout.
+/// Everything already queued is drained and consecutive binary payloads
+/// are merged into one WebSocket frame. Every message otherwise costs
+/// its own write+flush, and at thousands of viewers x dozens of frames/s
+/// those per-frame flushes dominate the server. Control events keep
+/// their own text frames, and ordering is preserved throughout.
 async fn relay(
     sink: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
     rx: &mut mpsc::Receiver<ViewerMsg>,
