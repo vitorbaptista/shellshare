@@ -63,6 +63,9 @@
   var encryptedWithoutKey = false;
   var term = null;
   var currentSize = {cols: 80, rows: 30};
+  // Whether any size message has landed yet. Until one has, the theme
+  // on screen is the pre-size placeholder, not the broadcaster's.
+  var sizeReceived = false;
   // Output that arrives before the terminal exists (creation waits
   // for the webfont) is queued and flushed on creation
   var pendingWrites = [];
@@ -275,7 +278,7 @@
       term.loadAddon(new Unicode11Addon.Unicode11Addon());
       term.unicode.activeVersion = '11';
     }
-    applyTheme(themeEntry(currentSize));
+    applyTheme(themeEntry(currentSize), !sizeReceived);
     term.open(terminalContainer);
     // Read-only viewer: xterm focuses its hidden textarea on
     // click, which then swallows keydown events before they reach
@@ -513,6 +516,7 @@
     if (!cols || !rows) {
       return;
     }
+    sizeReceived = true;
     var themeChanged = themeKey(currentSize) !== themeKey(size);
     currentSize = {
       cols: cols, rows: rows, theme: size.theme, colors: size.colors,
@@ -582,7 +586,11 @@
     return entry ? JSON.stringify(entry) : '';
   }
 
-  function applyTheme(entry) {
+  // `provisional` marks the placeholder paint that happens before any
+  // size message: it must not count as the first apply, or the real
+  // theme arrives as a fade from the placeholder instead of landing
+  // instantly.
+  function applyTheme(entry, provisional) {
     var colors = {
       background: entry ? entry.background : '#000000',
       foreground: entry ? entry.foreground : '#f0f0f0',
@@ -596,7 +604,7 @@
     // The container peeks out around the canvas (padding, short
     // pages); keep it matched to the terminal background
     terminalContainer.style.backgroundColor = colors.background;
-    applyPageChrome(colors, entry);
+    applyPageChrome(colors, entry, provisional);
   }
 
   // Drive the page chrome (body/header/footer/links) from the
@@ -637,7 +645,7 @@
     ];
   }
 
-  function applyPageChrome(colors, entry) {
+  function applyPageChrome(colors, entry, provisional) {
     // Only if even the default theme is missing from the injected
     // block: leave the page at the CSS defaults rather than forcing it
     // black. Normally entry is the broadcast theme, or tango until one
@@ -675,7 +683,7 @@
     // The first apply lands instantly (no fade from the pre-size
     // default); enable the smooth transition only afterwards, so a
     // live re-theme animates. Next frame, so this apply isn't caught.
-    if (!pageChromeApplied) {
+    if (!pageChromeApplied && !provisional) {
       pageChromeApplied = true;
       requestAnimationFrame(function () {
         document.body.classList.add('theme-transitions');
