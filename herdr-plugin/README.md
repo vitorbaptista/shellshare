@@ -55,11 +55,15 @@ One keybinding is the whole interface. Add to
 
 ```toml
 [[keys.command]]
-key = "prefix+s"
+key = "prefix+shift+s"
 type = "plugin_action"
 command = "shellshare.share"
 description = "share this session (read-only)"
 ```
+
+(`prefix+s` is herdr's own **settings**; `prefix+shift+s` is free in the
+default keymap. `herdr --default-config` lists every binding herdr ships
+with, if you want a different key.)
 
 ## Configuration
 

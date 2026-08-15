@@ -72,6 +72,18 @@ xterm.js and its WebGL/Unicode11 addons are vendored under
 lives here too. Must stay in lockstep with `templates/room.html` and
 `e2e/conftest.py`.
 
+One viewer-side rewrite happens on the way into xterm.js
+(`writeBytes` in `templates/room.html`): colon-form colour parameters
+(`38:2:R:G:B`, what herdr and other modern TUIs emit) are converted to
+the classic `38;2;R;G;B`. The vendored xterm.js reads the colon form as
+`38:2:<colour-space>:R:G:B` and takes R,G,B from the 4th/5th/6th slots,
+so the short spelling shifts every channel one place - Catppuccin blue
+`#89b4fa` renders as `rgb(180,250,0)`, and a whole mirrored UI comes out
+yellow-green. Only 38/48/58 params are touched (`4:3` is a curly
+underline, not underline+italic), and an unterminated escape at the end
+of a frame is carried to the next one rather than half-rewritten.
+Covered by `e2e/test_viewer_sgr.py`.
+
 ### Herdr plugin (`herdr-plugin.toml` + `herdr-plugin/`)
 
 The repo doubles as a [herdr](https://herdr.dev) plugin: one action that
