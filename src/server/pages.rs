@@ -1,10 +1,5 @@
 //! HTML pages and static assets, embedded at compile time.
 //!
-//! Everything the browser loads that is not room data lives here: the
-//! home page, the viewer page, and the static assets under `public/`.
-//! The sibling `binaries` module plays the same role for the
-//! downloadable CLI binary.
-//!
 //! Pages are rendered once at startup: every asset reference gets a
 //! content-hash query (`?v=...`) so it can be cached forever, and the
 //! local stylesheets a page links are flattened (resolving `@import`
@@ -17,10 +12,7 @@
 //! every room URL is distinct, so CSS and JS carried inside room HTML
 //! are re-sent for every broadcast a viewer opens and can never be
 //! reused. At their own immutable URLs they are fetched once and shared
-//! by every room and both pages. The one round trip that buys back is
-//! also cheap here - same origin on the connection the HTML just
-//! arrived on, and the browser's preload scanner issues both requests
-//! before the page has finished parsing.
+//! by every room and both pages.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -48,12 +40,10 @@ const CACHE_REVALIDATE: &str = "public, no-cache";
 /// OG image are fetched by agents that never see our HTML.
 const VERSIONED_PREFIXES: [&str; 2] = ["javascript/", "font/"];
 
-/// Embedded static files from the public directory
 #[derive(Embed, Clone)]
 #[folder = "public/"]
 struct StaticAssets;
 
-/// Embedded view templates
 #[derive(Embed, Clone)]
 #[folder = "templates/"]
 struct Templates;
@@ -92,9 +82,9 @@ fn room_page() -> &'static Page {
         let page = render_page(
             "room.html",
             &[
-                // Note: Cloudflare caches Early Hints per exact URL,
-                // and every room URL is unique, so the 103 only helps
-                // from the second request to a given room onwards
+                // Cloudflare caches Early Hints per exact URL, and every
+                // room URL is unique, so the 103 only helps from the
+                // second request to a given room onwards
                 ("javascript/vendor/xterm.js", "script"),
                 ("javascript/vendor/xterm-addon-webgl.js", "script"),
                 ("javascript/vendor/xterm-addon-unicode11.js", "script"),
@@ -165,7 +155,6 @@ fn llms_txt() -> &'static (String, String) {
     })
 }
 
-/// GET /llms.txt
 pub async fn llms_handler(headers: HeaderMap) -> Response {
     let (text, etag) = llms_txt();
     let response = Response::builder()
@@ -198,10 +187,9 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
         .unwrap_or_else(|_| panic!("template {name} is not UTF-8"));
 
     // A misspelled placeholder would ship to every visitor as literal
-    // text, so require the template's to be ones we substitute below.
-    // Checked on the template rather than the rendered page: the page
-    // carries injected llms.txt prose, which would otherwise be able to
-    // fail this boot with a message blaming the template
+    // text. Checked on the template rather than the rendered page, which
+    // carries injected llms.txt prose that could otherwise fail this
+    // boot with a message blaming the template
     assert!(
         !html
             .replace("{{THEMES_JSON}}", "")
@@ -220,12 +208,10 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
     );
     let html = html.replace("{{THEMES_JSON}}", crate::themes::THEMES_JSON);
 
-    // Flatten the page's stylesheets into one bundle at its own
-    // versioned URL, and point the page's first `<link>` at it. Asset
-    // URLs inside the CSS (the `@font-face` sources) get versioned
+    // Asset URLs inside the CSS (the `@font-face` sources) get versioned
     // here: the bundle is served verbatim afterwards, so this is the
-    // only chance, and the room page preloads those same fonts - a
-    // miss here would preload one URL and request another.
+    // only chance, and the room page preloads those same fonts - a miss
+    // here would preload one URL and request another.
     let links = stylesheet_links(&html);
     assert!(!links.is_empty(), "template {name}: no stylesheet to bundle");
     let mut seen = HashSet::new();
@@ -256,8 +242,8 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
     let html = replace_stylesheet_links(&html, &links, &bundle_url);
     let html = version_asset_urls(html);
 
-    // Catch template drift at boot. A local stylesheet link the
-    // bundler did not match (attribute order?) would still be fetched
+    // Catch template drift at boot. A local stylesheet link the bundler
+    // did not match (attribute order?) would still be fetched
     // separately, unversioned and with its `@import`s unresolved; and a
     // script URL `version_asset_urls` left alone names an asset that is
     // not embedded, so it would 404 on every page load.
@@ -282,9 +268,8 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
     }
 
     // Last, so the reader is never a candidate for the rewrites and
-    // scans above: it is a whole JavaScript file pasted into the page,
-    // and `/llms.txt` ships the same bytes with no rewriting at all.
-    // Anything applied here and not there would drift the two copies.
+    // scans above: `/llms.txt` ships the same bytes with no rewriting at
+    // all, and anything applied here would drift the two copies.
     let html = html.replace("{{AGENT_DECODER}}", &agent_decoder_escaped());
 
     let etag = format!("\"{}\"", hex::encode(Sha256::digest(html.as_bytes())));
@@ -315,9 +300,7 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
 /// Inlined into both `llms.txt` and every room page, so neither costs a
 /// second request and the two cannot drift. Deliberately not in
 /// `public/`, which would serve it as a third copy at its own URL:
-/// whoever is reading already has it. Panics at boot (`bind()` warms
-/// the pages before taking a port) rather than serving an empty brief
-/// to every agent until someone notices.
+/// whoever is reading already has it.
 fn agent_source() -> String {
     let file = Templates::get("agent.mjs").expect("agent.mjs not embedded");
     let code = String::from_utf8(file.data.into_owned()).expect("agent.mjs is not UTF-8");
@@ -335,14 +318,7 @@ fn agent_source() -> String {
 /// need no escaping, but both are raw-text containers, and raw-text
 /// containers are exactly what extractors strip - measured, and the
 /// comment would also break open on any `-->` in a file full of
-/// `--follow`. Nobody pays for this but a reader of the raw
-/// bytes: anything that parses the HTML decodes the entities back.
-///
-/// The snippet needs no other protection: `render_page` substitutes it
-/// last, after every asset rewrite and boot scan, so a `/javascript/`
-/// path or an `@import` inside `agent.mjs` is left alone here exactly
-/// as it is in `/llms.txt`. Rewriting one copy and not the other is
-/// what would break the promise that they are the same file.
+/// `--follow`. Anything that parses the HTML decodes the entities back.
 fn agent_decoder_escaped() -> String {
     // Only `&` and `<` can end text content; `>` is literal there, and
     // `&` must go first or it would re-escape the escapes
@@ -351,9 +327,6 @@ fn agent_decoder_escaped() -> String {
 
 /// The local `<link rel="stylesheet" href="/...">` tags, in document
 /// order, as `(span in `html`, embedded path)`.
-///
-/// The template stays the declaration of which stylesheets a page loads
-/// and in what order; this is only how the renderer reads it.
 fn stylesheet_links(html: &str) -> Vec<(Range<usize>, String)> {
     const LINK_PREFIX: &str = "<link rel=\"stylesheet\" href=\"/";
 
@@ -474,12 +447,10 @@ fn versioned_url(path: &str) -> String {
 /// Length of the content-hash prefix used as the cache-busting version
 const VERSION_BYTES: usize = 8;
 
-/// Short content hash used as the cache-busting version
 fn asset_version(path: &str) -> Option<String> {
     StaticAssets::get(path).map(|file| hex::encode(&file.metadata.sha256_hash()[..VERSION_BYTES]))
 }
 
-/// GET / - Home page
 pub async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
     serve_page(index_page(), &headers)
 }
@@ -534,7 +505,6 @@ fn none_match(headers: &HeaderMap, etag: &str) -> bool {
         .is_some_and(|value| value == "*" || value.contains(etag))
 }
 
-/// Serve embedded static files
 pub async fn serve_static(req: Request<Body>) -> impl IntoResponse {
     let path = req.uri().path().trim_start_matches('/');
     let method = req.method();
@@ -546,7 +516,6 @@ pub async fn serve_static(req: Request<Body>) -> impl IntoResponse {
             .body(Body::from("Not Found"))
             .unwrap();
     };
-    // Only allow GET and HEAD for existing static files
     if method != Method::GET && method != Method::HEAD {
         return Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
@@ -555,18 +524,16 @@ pub async fn serve_static(req: Request<Body>) -> impl IntoResponse {
             .body(Body::from("Method Not Allowed"))
             .unwrap();
     }
-    // Immutable only when the URL carries the current content hash:
-    // that URL provably never serves different bytes.
+    // Immutable only when the URL carries the current content hash: that
+    // URL provably never serves different bytes.
     //
     // A version that is not ours names bytes this build does not have,
-    // and we answer with what we do have. That is harmless for an
-    // already-open pre-deploy page, but during a rolling deploy it is
-    // also how a viewer holding new HTML reaches an old replica - and
-    // caching that answer for a day would pin a stale script against
+    // and we answer with what we do have. During a rolling deploy that
+    // is how a viewer holding new HTML reaches an old replica - and
+    // caching the answer for a day would pin a stale script against
     // fresh markup that no reload could fix, because the HTML
-    // revalidates and the asset would not. Revalidating instead caps it
-    // at the one load. An absent version means an asset whose URL is
-    // stable by design (favicons, robots.txt), which still gets the day.
+    // revalidates and the asset would not. An absent version means an
+    // asset whose URL is stable by design, which still gets the day.
     let current = hex::encode(&hash[..VERSION_BYTES]);
     let mut versions = req
         .uri()

@@ -1,6 +1,4 @@
 //! Shellshare server - Live terminal broadcasting server
-//!
-//! This module contains the server implementation using axum.
 
 mod analytics;
 mod binaries;
@@ -31,12 +29,9 @@ use std::time::Duration;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, info, warn};
 
-/// Room cleanup configuration
 #[derive(Clone, Debug)]
 struct CleanupConfig {
-    /// How often to run cleanup
     interval: Duration,
-    /// TTL for inactive rooms
     inactive_ttl: Duration,
 }
 
@@ -49,16 +44,12 @@ impl Default for CleanupConfig {
     }
 }
 
-/// Shared application state
 #[derive(Clone)]
 struct AppState {
-    /// All live rooms (state, passwords, history, eviction)
     rooms: Rooms,
-    /// Raw-WebSocket viewer delivery, including fan-out and membership
     viewer_delivery: viewers::ViewerDelivery,
-    /// Cleanup configuration for abandoned rooms
     cleanup_config: CleanupConfig,
-    /// Optional usage analytics; a no-op unless the operator opted in
+    /// A no-op unless the operator opted in
     analytics: analytics::Analytics,
 }
 
@@ -82,14 +73,10 @@ const LEGACY_CLIENT_MESSAGE: &str = "This shellshare server no longer supports b
 /// `--port 0` the OS-picked port from the first bind is reused for the rest
 /// so all listeners share one port.
 pub async fn bind(host: &str, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
-    // Render the pages before taking a port: `serve` reports itself
-    // ready as soon as it has bound one, so a template that panics
-    // after that point would kill the server thread while the client
-    // goes on to print a share link for a listener that is already
-    // gone. Failing here fails the boot on every path a binary takes.
-    // `serve_on` warms again for its own sake: it is public and takes
-    // listeners, so a caller could reach it without coming through
-    // here. Warming twice is free - it is a `OnceLock`
+    // Render the pages before taking a port: `serve` reports itself ready
+    // as soon as it has bound one, so a template that panics after that
+    // point would kill the server thread while the client goes on to
+    // print a share link for a listener that is already gone.
     pages::warm();
 
     // A literal IP (possibly bracketed, like `[::1]`) needs no resolver
@@ -127,8 +114,8 @@ pub async fn serve_on(
     room_ttl_secs: u64,
     analytics_config: Option<AnalyticsConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Render the pages up front: a broken template or stylesheet
-    // reference fails the boot instead of the first request
+    // Public and taking listeners, so a caller can reach this without
+    // coming through `bind`. Warming twice is free - it is a `OnceLock`
     pages::warm();
 
     for listener in &listeners {
@@ -139,9 +126,8 @@ pub async fn serve_on(
         cleanup_interval_secs, room_ttl_secs
     );
 
-    // Shared state with cleanup configuration. Viewer delivery is mandatory:
-    // constructing it here removes the invalid "server is running but its
-    // fan-out queues were never installed" state.
+    // Constructing viewer delivery here removes the invalid "server is
+    // running but its fan-out queues were never installed" state.
     let rooms = Rooms::default();
     let analytics = analytics::Analytics::new(analytics_config);
     let viewer_delivery = viewers::ViewerDelivery::start(rooms.clone(), analytics.clone());
@@ -155,30 +141,19 @@ pub async fn serve_on(
         analytics,
     };
 
-    // Spawn background cleanup task for abandoned rooms
     spawn_cleanup_task(app_state.clone());
 
-    // Build router
     let app = Router::new()
-        // API routes
         .route("/", get(pages::index_handler))
         // Rendered, not static: it inlines templates/agent.mjs
         .route("/llms.txt", get(pages::llms_handler))
-        // GET serves the viewer page, or the raw history bytes with a
-        // `.bin` suffix (the agent-friendly consumer door)
         .route("/r/{*room}", get(room_get_handler))
         .route("/r/{*room}", post(broadcast_handler))
         .route("/r/{*room}", delete(delete_room_handler))
-        // WebSocket ingest - the fast path for broadcasting clients
         .route("/ws/r/{*room}", get(ws_ingest_handler))
-        // WebSocket viewers - binary frames are terminal bytes,
-        // JSON text frames are control events
         .route("/ws/v/r/{*room}", get(ws_view_handler))
-        // Binary download (serves embedded binaries or self)
         .route("/bin/shellshare", get(serve_binary))
-        // Static files - fallback
         .fallback(pages::serve_static)
-        // State and middleware
         .with_state(app_state)
         .layer(DefaultBodyLimit::max(300 * 1024)) // 300KB limit
         .layer(TraceLayer::new_for_http());
@@ -202,11 +177,8 @@ pub async fn serve_on(
     Ok(())
 }
 
-/// POST /r/:room - The retired HTTP broadcast endpoint.
-///
-/// Always answers 410 Gone with an upgrade prompt, whatever the body:
-/// only pre-WebSocket clients still POST here, and a clear rejection
-/// beats silently dropping their output.
+/// POST /r/:room - The retired HTTP broadcast endpoint. Always answers
+/// 410 Gone with an upgrade prompt, whatever the body.
 ///
 /// The body is extracted (and thereby drained) even though it's unused:
 /// answering with unread request bytes in flight makes Windows abort
@@ -216,13 +188,11 @@ async fn broadcast_handler(Path(room_path): Path<String>, _body: Bytes) -> impl 
     plain_response(StatusCode::GONE, LEGACY_CLIENT_MESSAGE)
 }
 
-/// Store a broadcast and forward it to viewers - the single ingest path
-/// shared by the HTTP and WebSocket transports.
+/// Store a broadcast and forward it to viewers.
 ///
-/// The room is claimed/verified and mutated atomically, BEFORE the
-/// fan-out is queued, so a viewer joining mid-broadcast can't miss the
-/// message entirely. Size is queued FIRST, so the terminal is resized
-/// before content arrives.
+/// The room is claimed/verified and mutated atomically BEFORE the fan-out
+/// is queued, so a viewer joining mid-broadcast can't miss the message. Size is
+/// queued FIRST, so the terminal is resized before content arrives.
 ///
 /// Forwarding goes through [`viewers::ViewerDelivery::publish_ingest`]
 /// instead of emitting inline: emitting to N viewer sockets costs O(N),
@@ -243,13 +213,12 @@ fn ingest(
 
 /// GET /ws/v/r/:room - raw-WebSocket viewer endpoint.
 ///
-/// The room is the URL: no join handshake exists to lose. On connect
-/// the server pushes, in order: the current `size` (a JSON text frame,
-/// so the terminal is sized before content), the accumulated history
-/// (one binary frame), the `broadcasting` state, and the current
-/// `usersCount`. After that, binary frames are live terminal bytes and
-/// text frames are JSON control events - the exact mirror of the
-/// ingest protocol on `/ws/r/:room`.
+/// The room is the URL: no join handshake exists to lose. On connect the
+/// server pushes, in order: the current `size` (a JSON text frame, so the
+/// terminal is sized before content), the accumulated history (one binary
+/// frame), the `broadcasting` state, and the current `usersCount`. After
+/// that, binary frames are live terminal bytes and text frames are JSON
+/// control events - the exact mirror of the ingest protocol.
 async fn ws_view_handler(
     Path(room_path): Path<String>,
     State(state): State<AppState>,
@@ -262,13 +231,13 @@ async fn ws_view_handler(
 
 /// GET /ws/r/:room - WebSocket ingest for broadcasting clients.
 ///
-/// The fast path: binary frames carry raw terminal bytes; text frames
-/// carry JSON control messages (`{"size": {...}}` to resize,
-/// `{"reset": true}` to clear a reused room's history at the start of a
-/// new session, `{"delete": true}` to delete the room - the retired exit
-/// path older clients still send). The room is claimed - or the password
-/// verified - at upgrade time, so an unauthorized client is rejected
-/// with 401 before the connection is established.
+/// Binary frames carry raw terminal bytes; text frames carry JSON control
+/// messages (`{"size": {...}}` to resize, `{"reset": true}` to clear a
+/// reused room's history at the start of a new session, `{"delete": true}`
+/// to delete the room - the retired exit path older clients still send).
+/// The room is claimed - or the password verified - at upgrade time, so an
+/// unauthorized client is rejected with 401 before the connection is
+/// established.
 async fn ws_ingest_handler(
     Path(room_path): Path<String>,
     headers: HeaderMap,
@@ -291,8 +260,7 @@ async fn ws_ingest_handler(
     // newest chunk always survives, whatever its size - so the frame size
     // is what actually closes the ceiling. Without this a single frame
     // could be tungstenite's 64MiB default and sit in the room for the
-    // whole TTL. The client coalesces to 64KB (`MAX_BATCH`), so this is
-    // ample headroom for anything a real broadcaster sends.
+    // whole TTL.
     ws.max_message_size(MAX_INGEST_FRAME)
         .on_upgrade(move |socket| ws_ingest_loop(socket, state, room_id, secret, claimed))
 }
@@ -306,12 +274,11 @@ async fn ws_ingest_handler(
 const MAX_INGEST_FRAME: usize = 1024 * 1024;
 
 /// Largest control (text) frame accepted. Control messages are a few
-/// hundred bytes; the cap exists because the `size` value is stored
-/// verbatim for the room's whole life and re-sent to every viewer on
-/// connect - outside the history budget. Without a bound, one bloated
-/// `size` (the protocol only requires that `cols` and `rows` be present)
-/// pins megabytes per room, far more than the history it sits beside,
-/// since a parsed `serde_json::Value` costs several times its wire size.
+/// hundred bytes; the cap exists because the `size` value is stored verbatim for the room's whole life and re-sent
+/// to every viewer on connect - outside the history budget. Without a
+/// bound, one bloated `size` (the protocol only requires that `cols` and
+/// `rows` be present) pins megabytes per room, since a parsed
+/// `serde_json::Value` costs several times its wire size.
 const MAX_CONTROL_FRAME: usize = 4 * 1024;
 
 /// How long the ingest loop waits for ANY frame before declaring the
@@ -345,10 +312,8 @@ async fn ws_ingest_loop(
     secret: String,
     claimed: bool,
 ) {
-    // The connection itself is the aliveness signal: viewers show the
-    // room as live while at least one ingest connection is attached.
-    // A count of 0 means the room vanished between handshake and
-    // upgrade - the loop below then ends on its first failed append.
+    // A count of 0 means the room vanished between handshake and upgrade
+    // - the loop below then ends on its first failed append.
     let connections = state.rooms.broadcaster_connected(&room_id, &secret);
     if connections > 0 {
         emit_broadcasting(&state, &room_id, true);
@@ -363,9 +328,9 @@ async fn ws_ingest_loop(
 
     let mut received_bytes: u64 = 0;
     while let Some(Ok(msg)) = recv_with_timeout(&mut socket).await {
-        // Every stored frame is acked; size frames add no bytes, so
-        // their ack repeats the current count (a no-op for the client's
-        // buffer, but it lets a sender await durability of a resize)
+        // Size frames add no bytes, so their ack repeats the current
+        // count - a no-op for the client's buffer, but it lets a sender
+        // await durability of a resize
         let (result, ack) = match msg {
             WsMessage::Binary(bytes) => {
                 let frame_len = bytes.len() as u64;
@@ -398,9 +363,9 @@ async fn ws_ingest_loop(
                     continue;
                 };
                 if body.get("delete").and_then(serde_json::Value::as_bool) == Some(true) {
-                    // The clean-exit path: deleting removes the room, so
-                    // this is the last chance to know the live segment's
-                    // length (the loop's own detach below finds nothing)
+                    // Deleting removes the room, so this is the last chance
+                    // to know the live segment's length (the loop's own
+                    // detach below finds nothing)
                     if let Ok(Some(duration)) = state.rooms.delete(&room_id, &secret) {
                         state
                             .analytics
@@ -409,11 +374,8 @@ async fn ws_ingest_loop(
                     break;
                 }
                 if body.get("reset").and_then(serde_json::Value::as_bool) == Some(true) {
-                    // A returning broadcaster's first connection on a room
-                    // it still owns: drop the previous session's history so
-                    // the reused name starts clean. Tabs already open are
-                    // mid-render of the old session, so they get the same
-                    // clear the reconnect path runs
+                    // Tabs already open are mid-render of the old session,
+                    // so they get the same clear the reconnect path runs
                     if state.rooms.reset(&room_id, &secret).is_err() {
                         break;
                     }
@@ -476,9 +438,7 @@ async fn ws_ingest_loop(
 }
 
 /// Receive the next frame, or `None` when the broadcaster has been
-/// silent past [`INGEST_IDLE_TIMEOUT`] - a live client pings every 30s,
-/// so silence that long means the connection is dead on a half-open TCP
-/// socket that would otherwise linger.
+/// silent past [`INGEST_IDLE_TIMEOUT`].
 async fn recv_with_timeout(
     socket: &mut WebSocket,
 ) -> Option<Result<WsMessage, axum::Error>> {
@@ -488,7 +448,6 @@ async fn recv_with_timeout(
         .flatten()
 }
 
-/// Tell every viewer in the room whether a broadcaster is attached
 fn emit_broadcasting(state: &AppState, room_id: &RoomId, live: bool) {
     state
         .viewer_delivery
@@ -501,14 +460,12 @@ fn emit_broadcasting(state: &AppState, room_id: &RoomId, live: bool) {
 /// `/r/<room>.bin` is the agent-friendly consumer door: the body is
 /// exactly what a WebSocket viewer receives as its history frame -
 /// opaque, self-delimiting ciphertext records when the broadcast is
-/// encrypted (the server never holds the key), or plaintext terminal
-/// bytes otherwise. A non-browser consumer (curl, an AI agent) fetches
-/// it once and decrypts client-side with the key from the share link's
-/// #fragment, so the server stays an opaque relay - the same guarantee
-/// the browser viewer relies on. Returns 404 when the room does not
-/// exist. (A room whose name literally ends in `.bin` is shadowed by
-/// this suffix; auto-generated room ids are alphanumeric, so only an
-/// explicitly chosen `--room ...bin` collides.)
+/// encrypted, or plaintext terminal bytes otherwise. A non-browser
+/// consumer decrypts client-side with the key from the share link's
+/// #fragment, so the server stays an opaque relay. (A room whose name
+/// literally ends in `.bin` is shadowed by this suffix; auto-generated
+/// room ids are alphanumeric, so only an explicit `--room ...bin`
+/// collides.)
 async fn room_get_handler(
     Path(room_path): Path<String>,
     headers: HeaderMap,
@@ -532,8 +489,7 @@ async fn room_get_handler(
                 // list gave this endpoint a month-long TTL and served
                 // agents a frozen snapshot with no way to tell. A short
                 // `max-age` would only shrink that window; the body is
-                // never reusable, so `no-store` (which already implies
-                // `private`) is the honest answer.
+                // never reusable, so `no-store` is the honest answer.
                 .header(header::CACHE_CONTROL, "no-store")
                 // Not HTML, so it cannot carry the page's `noindex`
                 // meta tag - and it is the response that would actually
@@ -546,7 +502,6 @@ async fn room_get_handler(
     }
 }
 
-/// DELETE /r/:room - Delete room
 async fn delete_room_handler(
     Path(room_path): Path<String>,
     headers: HeaderMap,
@@ -576,7 +531,6 @@ async fn delete_room_handler(
     plain_response(StatusCode::ACCEPTED, "Accepted")
 }
 
-/// The room password carried in the Authorization header
 fn auth_secret(headers: &HeaderMap) -> &str {
     headers
         .get(header::AUTHORIZATION)
@@ -584,7 +538,6 @@ fn auth_secret(headers: &HeaderMap) -> &str {
         .unwrap_or("")
 }
 
-/// Build a plain-text response
 fn plain_response(status: StatusCode, body: &'static str) -> Response {
     Response::builder()
         .status(status)
@@ -593,7 +546,6 @@ fn plain_response(status: StatusCode, body: &'static str) -> Response {
         .unwrap()
 }
 
-/// Spawn background task to clean up abandoned rooms
 fn spawn_cleanup_task(state: AppState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(state.cleanup_config.interval);
@@ -607,10 +559,8 @@ fn spawn_cleanup_task(state: AppState) {
     });
 }
 
-/// Serve platform-specific binary or fallback to self
-///
-/// Supports `?os=` query parameter and User-Agent detection.
-/// See [`binaries::serve_binary`] for details.
+/// Serve platform-specific binary or fallback to self. Supports `?os=`
+/// and User-Agent detection; see [`binaries::serve_binary`].
 async fn serve_binary(
     query: Query<BinaryDownloadQuery>,
     headers: HeaderMap,

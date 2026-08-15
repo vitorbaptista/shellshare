@@ -10,7 +10,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-/// Supported target platforms for binary distribution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     LinuxX86_64,
@@ -20,8 +19,6 @@ pub enum Platform {
 }
 
 impl Platform {
-    /// Parse platform from query parameter value
-    ///
     /// Supports: linux, windows, win, mac, macos, mac-intel, mac-arm
     pub fn from_query_param(os: &str) -> Option<Self> {
         match os.to_lowercase().as_str() {
@@ -33,13 +30,6 @@ impl Platform {
         }
     }
 
-    /// Detect platform from User-Agent header
-    ///
-    /// Detection priority:
-    /// - Windows: contains "windows"
-    /// - macOS ARM: contains "mac"/"darwin" AND "arm64"/"aarch64"
-    /// - macOS Intel: contains "mac"/"darwin" (default when arch unclear)
-    /// - Linux: contains "linux"
     pub fn from_user_agent(user_agent: &str) -> Option<Self> {
         let ua = user_agent.to_lowercase();
 
@@ -48,7 +38,6 @@ impl Platform {
         }
 
         if ua.contains("mac") || ua.contains("darwin") {
-            // Check for ARM architecture
             if ua.contains("arm64") || ua.contains("aarch64") {
                 return Some(Self::MacosAarch64);
             }
@@ -63,7 +52,6 @@ impl Platform {
         None
     }
 
-    /// Get the appropriate filename for this platform's binary
     pub const fn filename(self) -> &'static str {
         match self {
             Self::WindowsX86_64 => "shellshare.exe",
@@ -71,9 +59,6 @@ impl Platform {
         }
     }
 
-    /// Get the embedded binary data for this platform
-    ///
-    /// Returns `None` when built without `embed-binaries` feature
     #[cfg(feature = "embed-binaries")]
     pub fn binary_data(self) -> Option<&'static [u8]> {
         Some(match self {
@@ -104,9 +89,7 @@ impl Platform {
         })
     }
 
-    /// Get the embedded binary data for this platform
-    ///
-    /// Returns `None` when built without `embed-binaries` feature
+    /// `None` without the `embed-binaries` feature.
     #[cfg(not(feature = "embed-binaries"))]
     #[allow(clippy::unused_self)] // self is used in the embed-binaries version
     pub const fn binary_data(self) -> Option<&'static [u8]> {
@@ -114,7 +97,6 @@ impl Platform {
     }
 }
 
-/// Query parameters for binary download endpoint
 #[derive(Debug, serde::Deserialize)]
 pub struct BinaryDownloadQuery {
     /// Optional OS override: linux, windows, win, mac, macos, mac-intel, mac-arm
@@ -131,20 +113,16 @@ pub async fn serve_binary(
     query: axum::extract::Query<BinaryDownloadQuery>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    // Try to determine platform from query param
     let platform_from_query = query.os.as_deref().and_then(Platform::from_query_param);
 
-    // Try to determine platform from User-Agent (only useful with embed-binaries)
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let platform_from_ua = Platform::from_user_agent(user_agent);
 
-    // Priority: query param > User-Agent > fallback to self
     let requested_platform = platform_from_query.or(platform_from_ua);
 
-    // Try to serve embedded binary if we have a platform and the feature is enabled
     if let Some(platform) = requested_platform {
         if let Some(data) = platform.binary_data() {
             return Response::builder()
@@ -161,11 +139,9 @@ pub async fn serve_binary(
         }
     }
 
-    // Fallback: serve current binary (works without embed-binaries feature)
     serve_self_binary().await
 }
 
-/// Serve the running binary itself for download
 #[allow(clippy::option_if_let_else)] // Nested match is clearer here
 async fn serve_self_binary() -> Response {
     match std::env::current_exe() {
