@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use signal_hook::consts::SIGWINCH;
 #[cfg(unix)]
-use signal_hook::iterator::Signals;
+use signal_hook::iterator::{Signals, SignalsInfo};
 
 /// RAII guard to enable/restore terminal raw mode.
 /// This is essential for interactive apps like vim to work properly.
@@ -175,36 +175,48 @@ pub fn run_script_mode(
     #[cfg(unix)]
     let (resize_tx, resize_rx) = mpsc::channel::<PtySize>();
 
-    // Spawn SIGWINCH handler thread for dynamic terminal resize
+    // Watch SIGWINCH for dynamic terminal resize.
+    //
+    // Registered here, on this thread, rather than inside the worker
+    // below, because the `Handle` it yields is what stops that worker at
+    // the end of the session. Waking it with `raise(SIGWINCH)` instead
+    // raced with its own registration: SIGWINCH's default disposition is
+    // to be ignored, so a wake-up sent before the handler existed was
+    // discarded, the worker stayed parked in `forever()` and the join
+    // below never returned - a hang no termination signal could clear,
+    // since those only set flags a blocked thread never reads. Registering
+    // first closes the window; `close()` then needs no signal at all.
+    // `exec` is where it bit: a child like `sh -c 'exit 3'` produces no
+    // output, so nothing delays the teardown that races the worker's start.
     #[cfg(unix)]
-    let sigwinch_thread = {
-        let running_sigwinch = running.clone();
+    let sigwinch = Signals::new([SIGWINCH]).ok();
+    #[cfg(unix)]
+    let sigwinch_handle = sigwinch.as_ref().map(SignalsInfo::handle);
+    #[cfg(unix)]
+    let sigwinch_thread = sigwinch.map(|mut signals| {
         let cols = current_cols.clone();
         let rows = current_rows.clone();
 
-        let handle = thread::spawn(move || {
-            if let Ok(mut signals) = Signals::new([SIGWINCH]) {
-                for _ in signals.forever() {
-                    if !running_sigwinch.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    // Get new terminal size
-                    let new_size = get_terminal_size();
-                    // Update shared size atomics
-                    cols.store(new_size.cols, Ordering::SeqCst);
-                    rows.store(new_size.rows, Ordering::SeqCst);
-                    // Send resize request to main loop (which owns the master)
-                    let _ = resize_tx.send(PtySize {
-                        rows: new_size.rows,
-                        cols: new_size.cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    });
-                }
+        thread::spawn(move || {
+            // Ends when the handle is closed, not on a flag: `forever()`
+            // blocks, so a flag would only be read after a signal that
+            // may never come.
+            for _ in signals.forever() {
+                // Get new terminal size
+                let new_size = get_terminal_size();
+                // Update shared size atomics
+                cols.store(new_size.cols, Ordering::SeqCst);
+                rows.store(new_size.rows, Ordering::SeqCst);
+                // Send resize request to main loop (which owns the master)
+                let _ = resize_tx.send(PtySize {
+                    rows: new_size.rows,
+                    cols: new_size.cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
             }
-        });
-        Some(handle)
-    };
+        })
+    });
 
     // Channel for sending PTY output to the sender thread (non-blocking)
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -449,12 +461,13 @@ pub fn run_script_mode(
     // Signal the remaining helper threads (stdin forwarder, SIGWINCH) to stop
     running.store(false, Ordering::SeqCst);
 
-    // Join SIGWINCH handler thread (Unix only)
+    // Join SIGWINCH handler thread (Unix only). Closing the handle ends
+    // its `forever()` loop directly - no signal to deliver, so nothing
+    // to lose, and this join always returns.
     #[cfg(unix)]
     if let Some(handle) = sigwinch_thread {
-        // Send SIGWINCH to ourselves to unblock the signal iterator
-        unsafe {
-            libc::raise(SIGWINCH);
+        if let Some(signals) = sigwinch_handle {
+            signals.close();
         }
         let _ = handle.join();
     }
