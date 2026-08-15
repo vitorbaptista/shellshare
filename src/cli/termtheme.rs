@@ -32,10 +32,11 @@
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
-/// How long to wait for one reply. A terminal that implements the
-/// queries answers in microseconds; this budget only bounds how long a
-/// terminal that never will costs us at startup.
-const REPLY_TIMEOUT: Duration = Duration::from_millis(100);
+/// How long to wait for one reply, as termios counts it: deciseconds,
+/// in `VTIME`. A terminal that implements the queries answers in
+/// microseconds; this budget only bounds how long a terminal that never
+/// will costs us at startup.
+const REPLY_TIMEOUT_DECISECONDS: libc::cc_t = 1;
 
 /// Ceiling on the whole sweep. `REPLY_TIMEOUT` alone does not bound it:
 /// it restarts on every byte read, and the tty carries the user's
@@ -143,6 +144,15 @@ impl Tty {
             // line-buffered and echoed back at the user.
             let mut raw = original;
             libc::cfmakeraw(&mut raw);
+            // cfmakeraw leaves VMIN=1, VTIME=0, which makes read() block
+            // until a byte arrives - forever, on a terminal that never
+            // answers. VMIN=0 with VTIME in deciseconds turns read()
+            // into the timeout itself, so waiting never depends on
+            // poll()'s semantics for tty devices (which differ on
+            // macOS, where gating read() behind poll() still hung and
+            // the share link was never printed).
+            raw.c_cc[libc::VMIN] = 0;
+            raw.c_cc[libc::VTIME] = REPLY_TIMEOUT_DECISECONDS;
             if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
                 libc::close(fd);
                 return None;
@@ -189,11 +199,13 @@ impl Tty {
     fn read_reply(&self, deadline: Instant) -> Option<Vec<u8>> {
         let mut reply = Vec::new();
         loop {
-            if !self.wait_readable(deadline)? {
-                return None; // timed out: this terminal does not answer
+            if Instant::now() >= deadline {
+                return None;
             }
             let mut chunk = [0u8; 64];
             // SAFETY: `chunk` is a valid buffer of its own length.
+            // VMIN=0/VTIME bound this: 0 means the terminal stayed
+            // silent for the budget, i.e. it does not answer.
             let n = unsafe { libc::read(self.fd, chunk.as_mut_ptr().cast(), chunk.len()) };
             if n <= 0 {
                 return None;
@@ -206,26 +218,6 @@ impl Tty {
             if reply.len() > MAX_REPLY_BYTES {
                 return None; // not a reply; stop draining the user's input
             }
-        }
-    }
-
-    /// `true` if there is something to read, `false` on timeout or once
-    /// the whole sweep's deadline has passed.
-    fn wait_readable(&self, deadline: Instant) -> Option<bool> {
-        let remaining = deadline.checked_duration_since(Instant::now())?;
-        let mut fds = libc::pollfd {
-            fd: self.fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let timeout_ms = REPLY_TIMEOUT.min(remaining).as_millis() as i32;
-        // SAFETY: one initialized pollfd, and a matching count.
-        let n = unsafe { libc::poll(std::ptr::addr_of_mut!(fds), 1, timeout_ms) };
-        match n {
-            0 => Some(false),
-            n if n > 0 => Some(true),
-            _ => None,
         }
     }
 }
