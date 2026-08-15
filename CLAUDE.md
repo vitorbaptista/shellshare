@@ -116,9 +116,15 @@ renders the pane it lives in - infinite regress. share.sh reads the
 `sharing` line off a fifo in the main shell (not through a pipe, where
 `exit` would only leave a subshell) and hands the rest to a background
 `cat >/dev/null`. Lockstep contract: `herdr-plugin.toml` action/pane ids
-and commands ↔ `share.sh` dispatch arms ↔ `e2e/test_herdr_plugin.py`
-(which stubs `herdr` but runs a real encrypted broadcast against a real
-local server).
+and commands ↔ `share.sh` dispatch arms ↔ `e2e/test_herdr_plugin.py`. The banner does not print the link
+itself: it runs `SHELLSHARE_URL=<url> shellshare status`, which is
+shellshare's own link-presentation path and therefore brings the QR code
+with it on a terminal - no second QR renderer, and no new CLI surface.
+Do not pipe that call (to indent it, say): `status` gates the QR on
+`stdout.is_terminal()`. Test split: the plugin test asserts the
+delegation happened, `e2e/test_cli_tty.py` owns the QR-on-a-TTY
+behavior. The plugin's e2e test stubs `herdr` but runs a real encrypted
+broadcast against a real local server.
 
 ## Cross-Platform Notes
 

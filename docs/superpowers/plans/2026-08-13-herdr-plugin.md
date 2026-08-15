@@ -94,6 +94,17 @@ so the message can be read.
 so anything that repaints costs every viewer bandwidth for the life of
 the share.
 
+**shellshare presents its own link.** The banner does not print the URL
+itself - it runs `SHELLSHARE_URL=<url> shellshare status`, the existing
+command whose entire job is to present a share link, which brings the
+phone-scannable QR code with it. So the QR needs neither a `qrencode`
+dependency nor a new shellshare subcommand: the plugin hands back the
+URL it just parsed out of the `--json` event and lets shellshare do the
+presenting. (A `shellshare qr <url>` subcommand was written first and
+then reverted - reusing `status` says the same thing with no new CLI
+surface. The one trap: `status` gates the QR on `stdout.is_terminal()`,
+so that call must not be piped.)
+
 **Config** is two keys: `shellshare_bin` and `shellshare_args` (passed
 verbatim, covering `--server`, `--theme`, `--room`, and
 `--disable-encryption` - typed by the user, which is its own explicit

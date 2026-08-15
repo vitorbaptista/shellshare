@@ -242,9 +242,17 @@ class TestManifestLockstep:
 
 class TestSessionShare:
     def test_pane_broadcasts_the_session_and_shows_its_link(self, plugin_env):
-        proc, url, _lines = start_pane(plugin_env)
+        proc, url, lines = start_pane(plugin_env)
         try:
             assert parse_share_key(url), "the link must carry the decryption key"
+            # The link is presented by shellshare itself (`status`, handed
+            # the URL through SHELLSHARE_URL), so the pane inherits its QR
+            # code on a terminal without a second QR renderer. This phrase
+            # comes from shellshare, not from share.sh - it is the proof
+            # the delegation happened. (The QR itself is gated on a TTY
+            # and covered by test_cli_tty.py, which owns that behavior.)
+            assert any("Sharing this terminal at" in line for line in lines), \
+                f"the banner did not delegate to shellshare status: {lines!r}"
             listener = listener_for(plugin_env, url)
             try:
                 assert listener.wait_for_message(

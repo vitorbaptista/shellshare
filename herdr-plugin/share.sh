@@ -244,7 +244,7 @@ pane_live() {
   $(cat "$err" 2>/dev/null || echo 'no error output')"
     fi
 
-    banner "$name" "$url" "$cols" "$rows"
+    banner "$ss" "$name" "$url" "$cols" "$rows"
     cat <&3 >/dev/null &
     local drain_pid=$!
 
@@ -256,13 +256,23 @@ pane_live() {
 
 # Static on purpose: this pane is inside the broadcast, so anything that
 # repaints here costs every viewer bandwidth for as long as the share runs.
-banner() { # banner <session> <url> <cols> <rows>
+#
+# The link and its QR code are printed by shellshare itself: `status`
+# exists to present a share link, renders the QR whenever its stdout is a
+# terminal (this pane always is), and takes the link through the
+# documented SHELLSHARE_URL variable. So there is no second QR renderer
+# to install, and no shellshare surface to add - the plugin hands back
+# the URL it just read and lets shellshare do the presenting.
+banner() { # banner <shellshare-bin> <session> <url> <cols> <rows>
     printf '\033[2J\033[H'
-    printf '\n  \033[1mSHELLSHARE\033[0m  \033[32m● live\033[0m  read-only  %sx%s\n' "$3" "$4"
-    printf '\n  \033[1m%s\033[0m\n' "$2"
-    printf '\n  Viewers see the herdr session \033[1m%s\033[0m - whichever tab you are\n' "$1"
-    printf '  looking at, every pane in it. Switch back to your work tab.\n'
-    printf '\n  \033[2mCtrl+C, or close this tab, to stop sharing.\033[0m\n'
+    printf '\n\033[1mSHELLSHARE\033[0m  \033[32m● live\033[0m  read-only  %sx%s\n\n' "$4" "$5"
+    # No pipe here on purpose: status only draws the QR when its stdout
+    # is a terminal, and piping it (to indent, say) would quietly turn
+    # the QR off.
+    SHELLSHARE_URL="$3" "$1" status
+    printf '\nViewers see the herdr session \033[1m%s\033[0m - whichever tab you\n' "$2"
+    printf 'are looking at, every pane in it. Switch back to your work space.\n'
+    printf '\n\033[2mCtrl+C, or close this space, to stop sharing.\033[0m\n'
 }
 
 # --------------------------------------------------------------------

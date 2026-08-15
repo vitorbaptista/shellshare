@@ -36,9 +36,9 @@ From a terminal inside herdr:
 herdr plugin action invoke shellshare.share
 ```
 
-A space called **◉ shellshare** appears with your link in it. Copy the
-link, switch back to your own space, and carry on — viewers follow
-whatever tab you are looking at.
+A space called **◉ shellshare** appears with your link in it, and a QR
+code to scan it onto a phone. Copy the link, switch back to your own
+space, and carry on — viewers follow whatever tab you are looking at.
 
 That space is the indicator: it exists for exactly as long as you are
 broadcasting, and you can see it from wherever you are working. What is
