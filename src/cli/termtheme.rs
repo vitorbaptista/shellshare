@@ -29,24 +29,33 @@
 // mode around them are unsafe by nature - as in `script.rs`.
 #![allow(unsafe_code)]
 
+// Everything below the platform split is Unix-only; on Windows
+// `detect` is a stub, so these would be unused (and `libc::cc_t` does
+// not exist there at all).
+#[cfg(unix)]
 use std::fmt::Write;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 /// How long to wait for one reply, as termios counts it: deciseconds,
 /// in `VTIME`. A terminal that implements the queries answers in
 /// microseconds; this budget only bounds how long a terminal that never
 /// will costs us at startup.
+#[cfg(unix)]
 const REPLY_TIMEOUT_DECISECONDS: libc::cc_t = 1;
 
-/// Ceiling on the whole sweep. `REPLY_TIMEOUT` alone does not bound it:
+/// Ceiling on the whole sweep. The per-reply timeout alone does not
+/// bound it:
 /// it restarts on every byte read, and the tty carries the user's
 /// keystrokes as well as the replies, so a paste or a held-down key
 /// arriving mid-detection would keep resetting it. A terminal that
 /// answers at all answers all 18 queries in ~20ms.
+#[cfg(unix)]
 const DETECT_BUDGET: Duration = Duration::from_millis(500);
 
 /// Cap on one reply. A well-formed one is ~25 bytes; anything longer is
 /// the input queue, not an answer, and must not grow without bound.
+#[cfg(unix)]
 const MAX_REPLY_BYTES: usize = 256;
 
 /// A terminal's own colors, in the shape `themes.json` uses so the
