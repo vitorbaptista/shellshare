@@ -3,7 +3,7 @@
 //! Terminal output travels as **raw bytes** end to end: the CLI sends
 //! binary WebSocket frames, the server stores raw bytes, and viewers
 //! receive binary WebSocket frames which xterm.js decodes with its
-//! streaming UTF-8 decoder (`templates/room.html`). The Python e2e
+//! streaming UTF-8 decoder (`public/javascript/room.js`). The Python e2e
 //! helpers (`e2e/conftest.py`) must stay in lockstep.
 //!
 //! End-to-end encryption changes none of this: every broadcast's bytes

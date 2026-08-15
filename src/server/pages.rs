@@ -5,14 +5,26 @@
 //! The sibling `binaries` module plays the same role for the
 //! downloadable CLI binary.
 //!
-//! Pages are rendered once at startup to make first paint a single
-//! round trip: local stylesheets are inlined into the HTML (resolving
-//! `@import` chains), and the remaining asset references get a
-//! content-hash query (`?v=...`) so they can be cached forever. The
-//! pages themselves are served with `no-cache` plus an `ETag`, so a
-//! deploy takes effect immediately at the cost of a cheap 304.
+//! Pages are rendered once at startup: every asset reference gets a
+//! content-hash query (`?v=...`) so it can be cached forever, and the
+//! local stylesheets a page links are flattened (resolving `@import`
+//! chains, which left in place would resolve against the page URL and
+//! 404) into one bundle served at its own versioned URL. The pages
+//! themselves are served with `no-cache` plus an `ETag`, so a deploy
+//! takes effect immediately at the cost of a cheap 304.
+//!
+//! Bundled rather than inlined, though inlining saves a round trip:
+//! every room URL is distinct, so CSS and JS carried inside room HTML
+//! are re-sent for every broadcast a viewer opens and can never be
+//! reused. At their own immutable URLs they are fetched once and shared
+//! by every room and both pages. The one round trip that buys back is
+//! also cheap here - same origin on the connection the HTML just
+//! arrived on, and the browser's preload scanner issues both requests
+//! before the page has finished parsing.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::OnceLock;
 
 use axum::{
@@ -51,8 +63,22 @@ struct Page {
     html: String,
     etag: String,
     /// `Link: rel=preload` header so the CDN can emit 103 Early Hints
-    /// for the assets the page is about to request
-    preload: Option<String>,
+    /// for the assets the page is about to request. Never empty: every
+    /// page has at least its stylesheet bundle to announce.
+    preload: String,
+    /// The page's flattened stylesheet, and the path it is served at.
+    /// Owned by the page because it is derived from the page's own
+    /// `<link>` tags; `stylesheet_bundle` finds it again by path.
+    stylesheet: (String, Stylesheet),
+}
+
+/// A page's local stylesheets, flattened in cascade order with
+/// `@import`s resolved and asset URLs versioned, served as one file.
+struct Stylesheet {
+    css: String,
+    /// SHA-256 of `css`: the `ETag`, and the source of the `?v=` that
+    /// earns the bundle its immutable caching
+    hash: [u8; 32],
 }
 
 fn index_page() -> &'static Page {
@@ -63,7 +89,7 @@ fn index_page() -> &'static Page {
 fn room_page() -> &'static Page {
     static PAGE: OnceLock<Page> = OnceLock::new();
     PAGE.get_or_init(|| {
-        render_page(
+        let page = render_page(
             "room.html",
             &[
                 // Note: Cloudflare caches Early Hints per exact URL,
@@ -72,11 +98,44 @@ fn room_page() -> &'static Page {
                 ("javascript/vendor/xterm.js", "script"),
                 ("javascript/vendor/xterm-addon-webgl.js", "script"),
                 ("javascript/vendor/xterm-addon-unicode11.js", "script"),
+                ("javascript/room.js", "script"),
                 // One Inconsolata file (latin + latin-ext + vietnamese);
                 // the (large) Nerd Font fallback still loads on demand
                 ("font/Inconsolata.woff2", "font"),
             ],
-        )
+        );
+        // Losing either of these leaves a dead terminal on a page that
+        // still looks fine, so they fail the boot instead. The `{{...}}`
+        // sweep in `render_page` cannot catch them: it only rejects
+        // placeholders we do not substitute, not markup deleted whole.
+        assert!(
+            page.html.contains("/javascript/room.js?v="),
+            "template room.html no longer loads the viewer script"
+        );
+        let themes = page
+            .html
+            .split_once("id=\"themes\"")
+            .and_then(|(_, rest)| rest.split_once('>'))
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .map(|(json, _)| json.trim());
+        assert!(
+            themes.is_some_and(|json| json.starts_with('{')),
+            "template room.html lost its themes JSON block"
+        );
+        // The viewer script sits outside `version_asset_urls`, which
+        // only rewrites the HTML. An asset URL added there would ship
+        // unversioned, on the daily TTL, and could drift from the
+        // versioned URL the page and its stylesheet request.
+        let file = StaticAssets::get("javascript/room.js")
+            .expect("public/javascript/room.js not embedded");
+        let script = String::from_utf8_lossy(&file.data);
+        for prefix in VERSIONED_PREFIXES {
+            assert!(
+                !script.contains(&format!("/{prefix}")),
+                "public/javascript/room.js references /{prefix}..., which nothing versions"
+            );
+        }
+        page
     })
 }
 
@@ -151,49 +210,104 @@ fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
         "template {name}: unknown placeholder (misspelled?)"
     );
 
-    // Inline the theme definitions so the viewer can color the
-    // terminal without an extra request
+    // The theme definitions ride in a JSON block rather than in the
+    // viewer script, which is what lets that script stay a static,
+    // immutably cached file. `<` would end the block early, so a theme
+    // name carrying one must fail the boot, not the page.
+    assert!(
+        !crate::themes::THEMES_JSON.contains('<'),
+        "themes.json contains '<', which would break out of its <script> block"
+    );
     let html = html.replace("{{THEMES_JSON}}", crate::themes::THEMES_JSON);
-    // Inline the reader an agent needs for this room, so a fetch of the
-    // share link alone is enough. Substituted before the asset rewrites
-    // below, which are harmless over it (see agent_decoder_escaped)
-    let html = html.replace("{{AGENT_DECODER}}", &agent_decoder_escaped());
-    let html = inline_stylesheets(&html);
+
+    // Flatten the page's stylesheets into one bundle at its own
+    // versioned URL, and point the page's first `<link>` at it. Asset
+    // URLs inside the CSS (the `@font-face` sources) get versioned
+    // here: the bundle is served verbatim afterwards, so this is the
+    // only chance, and the room page preloads those same fonts - a
+    // miss here would preload one URL and request another.
+    let links = stylesheet_links(&html);
+    assert!(!links.is_empty(), "template {name}: no stylesheet to bundle");
+    let mut seen = HashSet::new();
+    let mut css = String::new();
+    for (_, href) in &links {
+        css.push_str(&inline_css(href, &mut seen));
+    }
+    let css = version_asset_urls(css);
+    assert!(
+        !css.contains("@import"),
+        "template {name}: bundled CSS still contains an @import the bundler does not handle"
+    );
+    let stylesheet = Stylesheet { hash: Sha256::digest(css.as_bytes()).into(), css };
+    let bundle_path = format!(
+        "stylesheet/{}.bundle.css",
+        name.strip_suffix(".html").unwrap_or(name)
+    );
+    // The bundle is generated, and `asset_bytes` checks it before
+    // `public/`, so a real file at this path would be unreachable
+    assert!(
+        StaticAssets::get(&bundle_path).is_none(),
+        "public/{bundle_path} would be shadowed by the generated bundle"
+    );
+    let bundle_url = format!(
+        "/{bundle_path}?v={}",
+        hex::encode(&stylesheet.hash[..VERSION_BYTES])
+    );
+    let html = replace_stylesheet_links(&html, &links, &bundle_url);
     let html = version_asset_urls(html);
 
-    // Catch template/CSS drift at boot: an `@import` the inliner did
-    // not recognize would 404 (it resolves relative to the page URL
-    // once inlined), and a local stylesheet link the inliner did not
-    // match would silently skip inlining and versioning
-    assert!(
-        !html.contains("@import"),
-        "template {name}: inlined CSS still contains an @import the inliner does not handle"
-    );
+    // Catch template drift at boot. A local stylesheet link the
+    // bundler did not match (attribute order?) would still be fetched
+    // separately, unversioned and with its `@import`s unresolved; and a
+    // script URL `version_asset_urls` left alone names an asset that is
+    // not embedded, so it would 404 on every page load.
     assert!(
         !html
             .match_indices("<link")
             .map(|(start, _)| &html[start..start + html[start..].find('>').unwrap_or(0)])
             .any(|tag| {
-                tag.contains("stylesheet") && (tag.contains("href=\"/") || tag.contains("href='/"))
+                tag.contains("stylesheet")
+                    && (tag.contains("href=\"/") || tag.contains("href='/"))
+                    && !tag.contains(&bundle_url)
             }),
-        "template {name}: a local stylesheet link was not inlined (attribute order?)"
+        "template {name}: a local stylesheet link was not bundled (attribute order?)"
     );
+    for (start, _) in html.match_indices("=\"/javascript/") {
+        let url = &html[start + 2..];
+        let url = &url[..url.find('"').expect("unterminated script URL")];
+        assert!(
+            url.contains("?v="),
+            "template {name}: {url} is not an embedded asset"
+        );
+    }
+
+    // Last, so the reader is never a candidate for the rewrites and
+    // scans above: it is a whole JavaScript file pasted into the page,
+    // and `/llms.txt` ships the same bytes with no rewriting at all.
+    // Anything applied here and not there would drift the two copies.
+    let html = html.replace("{{AGENT_DECODER}}", &agent_decoder_escaped());
 
     let etag = format!("\"{}\"", hex::encode(Sha256::digest(html.as_bytes())));
-    let preload = (!preloads.is_empty()).then(|| {
-        preloads
-            .iter()
-            .map(|(path, kind)| {
-                let url = versioned_url(path);
-                // Font preloads must be anonymous-CORS even same-origin
-                let cors = if *kind == "font" { "; crossorigin" } else { "" };
-                format!("<{url}>; rel=preload; as={kind}{cors}")
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    });
+    // The stylesheet leads: it is the page's only render-blocking
+    // resource, and unlike the room HTML its URL is shared by every
+    // room, so Cloudflare's per-URL Early Hints cache is actually
+    // effective for it.
+    let preload = std::iter::once(format!("<{bundle_url}>; rel=preload; as=style"))
+        .chain(preloads.iter().map(|(path, kind)| {
+            // A typo here would emit a preload for a 404 forever
+            assert!(
+                asset_version(path).is_some(),
+                "preload {path} is not an embedded asset"
+            );
+            let url = versioned_url(path);
+            // Font preloads must be anonymous-CORS even same-origin
+            let cors = if *kind == "font" { "; crossorigin" } else { "" };
+            format!("<{url}>; rel=preload; as={kind}{cors}")
+        }))
+        .collect::<Vec<_>>()
+        .join(", ");
 
-    Page { html, etag, preload }
+    Page { html, etag, preload, stylesheet: (bundle_path, stylesheet) }
 }
 
 /// `templates/agent.mjs`: the reader an agent runs against a share link.
@@ -224,45 +338,78 @@ fn agent_source() -> String {
 /// `--follow`. Nobody pays for this but a reader of the raw
 /// bytes: anything that parses the HTML decodes the entities back.
 ///
-/// Escaping `<` is load-bearing beyond correctness: it is what keeps
-/// the snippet invisible to `inline_stylesheets` and to the `<link`
-/// assertion, both of which run over the page afterwards. For the same
-/// reason keep quoted `/javascript/...` and `/font/...` paths and the
-/// literal `@import` out of `agent.mjs` - `version_asset_urls` would
-/// rewrite the former, and the latter trips a boot assertion whose
-/// message blames the stylesheet inliner.
+/// The snippet needs no other protection: `render_page` substitutes it
+/// last, after every asset rewrite and boot scan, so a `/javascript/`
+/// path or an `@import` inside `agent.mjs` is left alone here exactly
+/// as it is in `/llms.txt`. Rewriting one copy and not the other is
+/// what would break the promise that they are the same file.
 fn agent_decoder_escaped() -> String {
     // Only `&` and `<` can end text content; `>` is literal there, and
     // `&` must go first or it would re-escape the escapes
     agent_source().replace('&', "&amp;").replace('<', "&lt;")
 }
 
-/// Replace local `<link rel="stylesheet" href="/...">` tags with
-/// `<style>` blocks holding the file contents. `@import` chains are
-/// resolved here too: left in place they would resolve relative to the
-/// page URL and 404. Each stylesheet is included at most once.
-fn inline_stylesheets(html: &str) -> String {
+/// The local `<link rel="stylesheet" href="/...">` tags, in document
+/// order, as `(span in `html`, embedded path)`.
+///
+/// The template stays the declaration of which stylesheets a page loads
+/// and in what order; this is only how the renderer reads it.
+fn stylesheet_links(html: &str) -> Vec<(Range<usize>, String)> {
     const LINK_PREFIX: &str = "<link rel=\"stylesheet\" href=\"/";
 
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    let mut seen = HashSet::new();
-    while let Some(start) = rest.find(LINK_PREFIX) {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + LINK_PREFIX.len()..];
-        let href_end = after.find('"').expect("unterminated href in stylesheet link");
-        let tag_end = after[href_end..]
-            .find('>')
-            .expect("unterminated stylesheet link tag")
-            + href_end
-            + 1;
-        out.push_str("<style>\n");
-        out.push_str(&inline_css(&after[..href_end], &mut seen));
-        out.push_str("</style>");
-        rest = &after[tag_end..];
+    let mut links = Vec::new();
+    let mut offset = 0;
+    while let Some(found) = html[offset..].find(LINK_PREFIX) {
+        let start = offset + found;
+        let after = start + LINK_PREFIX.len();
+        let rest = &html[after..];
+        let href_end = rest.find('"').expect("unterminated href in stylesheet link");
+        let close = rest[href_end..].find('>').expect("unterminated stylesheet link tag");
+        // Bundling keeps only the href, so a tag carrying anything else
+        // would have it silently dropped and its rules applied
+        // unconditionally - `media="print"` is the one that bites.
+        assert!(
+            rest[href_end + 1..href_end + close].trim().trim_end_matches('/').is_empty(),
+            "stylesheet link for {} carries attributes bundling would drop",
+            &rest[..href_end]
+        );
+        let tag_end = after + href_end + close + 1;
+        links.push((start..tag_end, rest[..href_end].to_string()));
+        offset = tag_end;
     }
-    out.push_str(rest);
+    links
+}
+
+/// Collapse the page's stylesheet links into a single link to the
+/// bundle, in the position the first one held.
+fn replace_stylesheet_links(html: &str, links: &[(Range<usize>, String)], url: &str) -> String {
+    let link = format!("<link rel=\"stylesheet\" href=\"{url}\">");
+    let mut out = String::with_capacity(html.len());
+    let mut prev = 0;
+    for (index, (span, _)) in links.iter().enumerate() {
+        let before = &html[prev..span.start];
+        if index == 0 {
+            out.push_str(before);
+            out.push_str(&link);
+        } else {
+            // A dropped tag takes its own line's indentation with it,
+            // rather than leaving a blank line behind
+            out.push_str(before.trim_end_matches([' ', '\t', '\r', '\n']));
+        }
+        prev = span.end;
+    }
+    out.push_str(&html[prev..]);
     out
+}
+
+/// The bundle behind `/stylesheet/<page>.bundle.css`, if that is what
+/// the path names. Generated, so it is not in `StaticAssets`; a linear
+/// scan is enough for two pages.
+fn stylesheet_bundle(path: &str) -> Option<&'static Stylesheet> {
+    [index_page(), room_page()]
+        .into_iter()
+        .find(|page| page.stylesheet.0 == path)
+        .map(|page| &page.stylesheet.1)
 }
 
 /// Embedded stylesheet contents with `@import "..."` lines (as written
@@ -366,9 +513,7 @@ fn serve_page(page: &Page, request_headers: &HeaderMap) -> Response {
     let mut response = Response::builder()
         .header(header::CACHE_CONTROL, CACHE_REVALIDATE)
         .header(header::ETAG, &page.etag);
-    if let Some(preload) = &page.preload {
-        response = response.header(header::LINK, preload);
-    }
+    response = response.header(header::LINK, &page.preload);
     if none_match(request_headers, &page.etag) {
         return response.status(StatusCode::NOT_MODIFIED).body(Body::empty()).unwrap();
     }
@@ -394,57 +539,83 @@ pub async fn serve_static(req: Request<Body>) -> impl IntoResponse {
     let path = req.uri().path().trim_start_matches('/');
     let method = req.method();
 
-    match StaticAssets::get(path) {
-        Some(content) => {
-            // Only allow GET and HEAD for existing static files
-            if method != Method::GET && method != Method::HEAD {
-                return Response::builder()
-                    .status(StatusCode::METHOD_NOT_ALLOWED)
-                    .header(header::ALLOW, "GET, HEAD")
-                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                    .body(Body::from("Method Not Allowed"))
-                    .unwrap();
-            }
-            // Immutable only when the URL carries the current content
-            // hash: that URL provably never serves different bytes. A
-            // stale or absent version (e.g. an already-open page
-            // requesting a pre-deploy URL) falls back to the daily TTL.
-            let hash = content.metadata.sha256_hash();
-            let current = hex::encode(&hash[..VERSION_BYTES]);
-            let immutable = req.uri().query().is_some_and(|query| {
-                query
-                    .split('&')
-                    .any(|param| param.strip_prefix("v=") == Some(&current))
-            });
-            let cache_control = if immutable { CACHE_IMMUTABLE } else { CACHE_ONE_DAY };
-            let etag = format!("\"{}\"", hex::encode(hash));
-
-            let response = Response::builder()
-                .header(header::CACHE_CONTROL, cache_control)
-                .header(header::ETAG, &etag);
-            if none_match(req.headers(), &etag) {
-                return response.status(StatusCode::NOT_MODIFIED).body(Body::empty()).unwrap();
-            }
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            // Text files are UTF-8; without an explicit charset browsers
-            // fall back to Latin-1 and garble non-ASCII (e.g. llms.txt)
-            let content_type = if mime.type_() == mime_guess::mime::TEXT
-                && mime.get_param(mime_guess::mime::CHARSET).is_none()
-            {
-                format!("{mime}; charset=utf-8")
-            } else {
-                mime.to_string()
-            };
-            response
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, content_type)
-                .body(Body::from(content.data.into_owned()))
-                .unwrap()
-        }
-        None => Response::builder()
+    let Some((bytes, hash)) = asset_bytes(path) else {
+        return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
             .body(Body::from("Not Found"))
-            .unwrap(),
+            .unwrap();
+    };
+    // Only allow GET and HEAD for existing static files
+    if method != Method::GET && method != Method::HEAD {
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .header(header::ALLOW, "GET, HEAD")
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Method Not Allowed"))
+            .unwrap();
     }
+    // Immutable only when the URL carries the current content hash:
+    // that URL provably never serves different bytes.
+    //
+    // A version that is not ours names bytes this build does not have,
+    // and we answer with what we do have. That is harmless for an
+    // already-open pre-deploy page, but during a rolling deploy it is
+    // also how a viewer holding new HTML reaches an old replica - and
+    // caching that answer for a day would pin a stale script against
+    // fresh markup that no reload could fix, because the HTML
+    // revalidates and the asset would not. Revalidating instead caps it
+    // at the one load. An absent version means an asset whose URL is
+    // stable by design (favicons, robots.txt), which still gets the day.
+    let current = hex::encode(&hash[..VERSION_BYTES]);
+    let mut versions = req
+        .uri()
+        .query()
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter_map(|param| param.strip_prefix("v="))
+        .peekable();
+    let cache_control = if versions.peek().is_none() {
+        CACHE_ONE_DAY
+    } else if versions.any(|version| version == current) {
+        CACHE_IMMUTABLE
+    } else {
+        CACHE_REVALIDATE
+    };
+    let etag = format!("\"{}\"", hex::encode(hash));
+
+    let response = Response::builder()
+        .header(header::CACHE_CONTROL, cache_control)
+        .header(header::ETAG, &etag);
+    if none_match(req.headers(), &etag) {
+        return response.status(StatusCode::NOT_MODIFIED).body(Body::empty()).unwrap();
+    }
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    // Text files are UTF-8; without an explicit charset browsers
+    // fall back to Latin-1 and garble non-ASCII (e.g. llms.txt)
+    let content_type = if mime.type_() == mime_guess::mime::TEXT
+        && mime.get_param(mime_guess::mime::CHARSET).is_none()
+    {
+        format!("{mime}; charset=utf-8")
+    } else {
+        mime.to_string()
+    };
+    response
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(bytes.into_owned()))
+        .unwrap()
+}
+
+/// The bytes and content hash behind a static URL: an embedded file
+/// from `public/`, or a page's generated stylesheet bundle.
+///
+/// Borrowed, not owned: this runs before the 405 and 304 branches, and
+/// copying here would memcpy the 1.1MB Nerd Font to build every empty
+/// `304`. Only the 200 path pays for a copy.
+fn asset_bytes(path: &str) -> Option<(Cow<'static, [u8]>, [u8; 32])> {
+    if let Some(sheet) = stylesheet_bundle(path) {
+        return Some((Cow::Borrowed(sheet.css.as_bytes()), sheet.hash));
+    }
+    StaticAssets::get(path).map(|file| (file.data, file.metadata.sha256_hash()))
 }
