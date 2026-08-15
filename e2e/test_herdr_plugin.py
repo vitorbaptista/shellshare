@@ -420,6 +420,27 @@ class TestSessionShare:
         # shellshare's own diagnostics must survive into the message.
         assert "no error output" not in err, err
 
+    def test_a_share_that_never_starts_stops_claiming_to_be_live(self, plugin_env):
+        """The space is created and labelled before the pane runs, so a
+        failure BEFORE the link exists leaves the same lie as one after
+        it: the sidebar says live, and the next keypress stops a share
+        that never started. Every pane failure path must relabel."""
+        (plugin_env.stub_dir.parent / "config" / "config").write_text(
+            "shellshare_bin=/nonexistent/shellshare\n"
+        )
+        proc = subprocess.Popen(
+            ["bash", str(SHARE_SH), "live"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=plugin_env.env, cwd=str(REPO_ROOT), stdin=subprocess.DEVNULL,
+        )
+        _, err = proc.communicate(timeout=60)
+        assert proc.returncode != 0
+        assert "cannot execute" in err, err
+        calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
+        rename = [c for c in calls.splitlines() if c.startswith("workspace rename")]
+        assert rename and "live" not in rename[0], \
+            f"a share that never started kept its live label: {calls!r}"
+
     def test_toggle_refuses_when_it_cannot_ask_herdr(self, plugin_env):
         """"Not sharing" and "could not ask" must not look the same: if a
         failed lookup read as "not sharing", pressing the key to STOP a

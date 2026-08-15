@@ -59,7 +59,19 @@ die() { # for actions: stderr lands in `herdr plugin log`
 # copied, until the user dismisses it. A pane always has a terminal, so
 # `read` blocks; when it does not (an automated run) the message has
 # already gone to stderr, which that caller kept.
+#
+# Parking here keeps the pane - and therefore its space - alive, and the
+# space's label is the only thing that answers "am I sharing?". So every
+# way of failing, before or after the link exists, has to correct the
+# label first: otherwise the sidebar claims a live share that is not
+# running, and the next keypress stops that corpse instead of starting
+# a share.
 die_pane() {
+    [ -n "${HERDR_WORKSPACE_ID:-}" ] &&
+        "$HERDR" workspace rename "$HERDR_WORKSPACE_ID" "$DEAD_LABEL" >/dev/null 2>&1
+    # Closing this pane must not take the diagnostics with it: the
+    # message about to be printed points at that file.
+    trap 'rm -f "${fifo:-}"; exit 1' HUP INT TERM
     printf '\n  \033[1;31mshellshare\033[0m %s\n\n  Press Enter to close.\n' "$*" >&2
     "$HERDR" notification show "Shellshare" --body "$*" >/dev/null 2>&1 || true
     read -r _ 2>/dev/null
@@ -91,6 +103,9 @@ cfg() { # cfg <key>
 share_spaces() {
     local out
     out=$("$HERDR" workspace list 2>/dev/null) || return 1
+    # An empty answer is not "no spaces" - jq would read it as one and
+    # print nothing, which reads as "not sharing".
+    [ -n "$out" ] || return 1
     printf '%s' "$out" | jq -r --arg l "$SPACE_LABEL" '
         (.result.workspaces // error("no workspace list"))
         | map(select(.label == $l) | .workspace_id) | .[]' 2>/dev/null
@@ -218,7 +233,10 @@ pane_live() {
     # pane, Ctrl+C INTs it), which bash does not run EXIT traps for
     # unless the signal itself is trapped.
     trap 'rm -f "$fifo"' EXIT
-    trap 'rm -f "$fifo" "$err"; exit 0' HUP INT TERM
+    # $ss_pid is empty until the broadcaster starts; by the time a
+    # signal can arrive it is set, and killing it explicitly means a
+    # signal aimed at this pane alone cannot orphan a live broadcast.
+    trap 'kill "${ss_pid:-0}" 2>/dev/null; rm -f "$fifo" "$err"; exit 0' HUP INT TERM
 
     # The mirror: a second herdr client attached to this session, inside
     # shellshare's PTY.
@@ -287,14 +305,9 @@ pane_live() {
         rm -f "$err"
         exit 0
     fi
-    # A broadcast that DIED must not look like one the user stopped.
-    # Holding the pane open keeps the message readable, but that also
-    # keeps the space alive - and the space's label is what answers
-    # "am I sharing?". Rename it first, so the sidebar stops claiming a
-    # broadcast that is over and the next keypress starts a fresh one
-    # instead of stopping this corpse.
-    [ -n "${HERDR_WORKSPACE_ID:-}" ] &&
-        "$HERDR" workspace rename "$HERDR_WORKSPACE_ID" "$DEAD_LABEL" >/dev/null 2>&1
+    # A broadcast that DIED must not look like one the user stopped;
+    # die_pane relabels the space so the sidebar stops claiming it.
+    #
     # shellshare's stderr is the only thing captured here: the mirror
     # client's own output went down the PTY, i.e. into the broadcast, so
     # a failure inside herdr itself leaves this file empty. Say what is
