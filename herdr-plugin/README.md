@@ -47,14 +47,18 @@ gone when you stop, and you can see it from wherever you are working.
 the whole session, so it lives at the session level rather than inside
 one of your projects.
 
-To stop: run the action again, close the ◉ shellshare space, or press
-Ctrl+C in it — all three do the same thing. The link keeps showing the
-final frame until the server's room TTL evicts it (~6 hours on
-shellshare.net).
+To stop: run the action again, or press Ctrl+C in the ◉ live tab. Either
+way only the share's own pane closes — herdr then drops the tab and the
+space around it, so normally the whole ◉ shellshare row just disappears.
+If you had put anything of your own in that space (another tab, or a
+split beside the share), it stays, and the space is renamed
+**✗ shellshare (stopped)** because nothing is being broadcast any more.
 
-Stopping closes the share's own tab, never the space — so if you have
-opened a tab of your own in there, it and the space survive (renamed
-**✗ shellshare (stopped)**, since nothing is being broadcast any more).
+Closing the ◉ shellshare **space** stops the share too, but it is not
+the same thing: that closes every tab in the space, including yours.
+
+The link keeps showing the final frame until the server's room TTL
+evicts it (~6 hours on shellshare.net).
 
 One keybinding is the whole interface. Add to
 `~/.config/herdr/config.toml`, then `herdr server reload-config`:

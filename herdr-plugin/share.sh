@@ -143,25 +143,29 @@ cfg() { # cfg <key>
 # the snapshot, so there is no mark left to go stale, and no user can
 # type one by accident the way they can type a label.
 #
-# The answer is in TABS because stopping closes what comes back. Closing
-# a space takes every tab in it - including any the user opened there -
-# whereas closing the share's own tab ends the broadcast and lets herdr
-# drop the space when its last tab goes. The ordinary case is identical
-# and the awkward one cannot cost the user anything, so nothing here
-# needs to reason about whose tabs are in the way.
+# The answer is in PANES, and panes are what stopping closes - the
+# narrowest thing that is unambiguously the share and nothing else.
+# Closing a space would take every tab in it, closing a tab every pane
+# in it, and the user can put their own work in either: a tab beside the
+# share, or a split inside its tab. herdr unwinds the rest by itself -
+# the tab goes when its last pane does, the space when its last tab
+# does - so the ordinary case still ends with the space disappearing,
+# and no code here has to reason about whose windows are in the way.
 #
 # Returns non-zero when herdr could not be asked at all. That has to be
 # distinguishable from "no share is running": treating a failed lookup
-# as "not sharing" would turn a stop into a second broadcast.
-share_tabs() {
+# as "not sharing" would turn a stop into a second broadcast. Hence the
+# type check rather than `// error`: an object where the pane list
+# should be answers "no panes at all" instead of failing.
+share_panes() {
     local out
     out=$("$HERDR" api snapshot 2>/dev/null) || return 1
     # An empty answer is not "nothing running" - jq would read it as one
     # and print nothing, which reads as "not sharing".
     [ -n "$out" ] || return 1
     printf '%s' "$out" | jq -r --arg t "$OWNER_TOKEN" '
-        (.result.snapshot.panes // error("no pane list"))
-        | map(select((.tokens // {})[$t] != null) | .tab_id) | unique | .[]' 2>/dev/null
+        (.result.snapshot.panes | if type == "array" then . else error("no pane list") end)
+        | map(select((.tokens // {})[$t] != null) | .pane_id | strings) | unique | .[]' 2>/dev/null
 }
 
 # Undo a half-built share and report why it failed. This is the one
@@ -188,25 +192,25 @@ abort_start() { # abort_start <workspace> <what-failed>
 action_toggle() {
     need_env
 
-    # Stop: closing the tab takes the pane with it, and shellshare exits
-    # on the pane's SIGHUP and flushes what it has. The space goes too
-    # when this was its last tab, which it normally is - and when it is
-    # not, what stays behind is the tab the user put there.
-    local tabs tab alive=""
-    tabs=$(share_tabs) ||
+    # Stop: closing the pane ends the broadcast - shellshare exits on the
+    # SIGHUP and flushes what it has - and herdr unwinds the tab and the
+    # space behind it if nothing else is in them, which is the usual
+    # case. Anything else in them is the user's, and stays.
+    local panes pane alive=""
+    panes=$(share_panes) ||
         die "could not ask herdr what is running, so refusing to guess whether you are sharing"
-    if [ -n "$tabs" ]; then
+    if [ -n "$panes" ]; then
         # Close every match, not just the first: two would mean two live
         # broadcasts, and stopping has to mean stopped. For the same
         # reason one failed close fails the whole stop - reporting
         # "stopped sharing" while a link is still fed live bytes is the
         # one lie this action must never tell.
-        for tab in $tabs; do
-            "$HERDR" tab close "$tab" >/dev/null 2>&1 || alive="$alive $tab"
+        for pane in $panes; do
+            "$HERDR" pane close "$pane" >/dev/null 2>&1 || alive="$alive $pane"
         done
         [ -z "$alive" ] ||
-            die "could not stop every shellshare tab - still broadcasting:$alive
-  Close them by hand (herdr tab close <id>); the link stays live until you do"
+            die "could not stop every shellshare pane - still broadcasting:$alive
+  Close them by hand (herdr pane close <id>); the link stays live until you do"
         "$HERDR" notification show "Shellshare" \
             --body "Stopped sharing. The link stays readable until the room idles out (~6h)" \
             >/dev/null 2>&1 || true
@@ -259,6 +263,11 @@ pane_live() {
     "$HERDR" pane report-metadata "$HERDR_PANE_ID" \
         --source "$PLUGIN_ID" --token "$OWNER_TOKEN=1" >/dev/null 2>&1 ||
         die_pane "could not mark this pane as the share, so refusing to start one that could not be stopped"
+    # From here on this pane is a share, and everything below is setup
+    # that takes a moment. A signal arriving in that moment still has to
+    # leave the label right; the fuller trap replaces this one once
+    # there is a broadcaster to kill and files to remove.
+    trap 'retire_space; exit 0' HUP INT TERM
 
     local ss
     ss=$(cfg shellshare_bin)
@@ -433,7 +442,7 @@ banner() { # banner <shellshare-bin> <session> <url> <cols> <rows>
     SHELLSHARE_URL="$3" "$1" status
     printf '\nViewers see the herdr session \033[1m%s\033[0m as you see it: the tab\n' "$2"
     printf 'you are looking at, and herdr chrome - your spaces, tabs and agents.\n'
-    printf '\n\033[2mCtrl+C, or close this space, to stop sharing.\033[0m\n'
+    printf '\n\033[2mCtrl+C here, or the shellshare action again, to stop sharing.\033[0m\n'
 }
 
 # --------------------------------------------------------------------

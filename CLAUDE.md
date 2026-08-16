@@ -110,10 +110,12 @@ and gone when it ends, which makes it the status indicator: a labelled
 row in the spaces sidebar, visible from wherever the user is working,
 needing no `[ui.sidebar.*]` configuration. (A share that FAILED is the
 exception: its space is kept, relabelled `✗ shellshare (stopped)`, to
-hold the error.) Ctrl+C, closing the space, and toggling the action are
-all the same stop - and any of them that leaves the space standing,
-because the user put a tab of their own in it, relabels it on the way
-out so the row stops claiming a broadcast that has ended. The pane also
+hold the error.) Ctrl+C and toggling the action are the same stop, and
+both leave anything of the user's in that space standing - relabelled on
+the way out, so the row stops claiming a broadcast that has ended.
+Closing the space by hand also stops the share, but is deliberately NOT
+documented as equivalent: that one closes every tab in it, including the
+user's. The pane also
 renames its own tab (`tab rename $HERDR_TAB_ID`), since a manifest pane
 `title` does not become the tab label.
 
@@ -130,12 +132,14 @@ the pane that made it, but a dead pane is simply absent from the
 snapshot. A pane that cannot mark itself refuses to broadcast, since the
 mark is the only handle on it afterwards.
 
-**Stopping closes that pane's tab, never a workspace.** Closing a space
-takes every tab in it, so a share parked in a space the user has also
-put a tab in could destroy their work; closing the share's own tab ends
-the broadcast and lets herdr drop the space when its last tab goes. The
-ordinary case is identical and the awkward one costs nothing, so no code
-here has to work out whose tabs are in the way - the one exception is
+**Stopping closes that pane, and nothing wider.** A space holds tabs and
+a tab holds panes, and the user can put their own work in either - a tab
+beside the share, or a split inside its tab - so closing either would
+risk taking work with it. Closing the pane ends the broadcast and herdr
+unwinds the rest: the tab goes with its last pane, the space with its
+last tab, which is why the ordinary stop still ends with the whole
+`◉ shellshare` row disappearing. Nothing here has to work out whose
+windows are in the way, which is the point - the one exception is
 `abort_start`, which closes a space created milliseconds earlier by the
 lines above it, and reports loudly if that close fails (by then the pane
 is open, so the session is already being broadcast). A stop that cannot
