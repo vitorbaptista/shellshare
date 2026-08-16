@@ -62,7 +62,25 @@ STUB_HERDR = textwrap.dedent("""\
         printf '{"sessions":[{"default":true,"name":"e2e-session","running":true,"socket_path":"%s"},{"default":false,"name":"other-session","running":true,"socket_path":"/tmp/other.sock"}]}\\n' "$FAKE_SOCKET"
         ;;
     "api snapshot")
-        printf '{"id":"x","result":{"snapshot":{"focused_tab_id":"w1:t1","layouts":[{"tab_id":"w1:t1","area":{"height":37,"width":133,"x":10,"y":1}}]}}}\\n'
+        # Two jobs: the focused tab's extent is the client size the
+        # mirror is pinned to, and the pane list is where a live share
+        # announces itself. A pane that has died is simply absent, which
+        # is the whole point of marking the pane rather than the space.
+        panes='{"pane_id":"w1:p1","tab_id":"w1:t1","tokens":null}'
+        if [ -f "$STUB_DIR/pane-token" ]; then
+            panes="$panes"',{"pane_id":"w9:p2","tab_id":"w9:t9","tokens":{"shellshare_live":"1"}}'
+        fi
+        printf '{"id":"x","result":{"snapshot":{"focused_tab_id":"w1:t1","layouts":[{"tab_id":"w1:t1","area":{"height":37,"width":133,"x":10,"y":1}}],"panes":[%s]}}}\\n' "$panes"
+        ;;
+    "pane report-metadata")
+        printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
+        case "$*" in
+        *--clear-token*) rm -f "$STUB_DIR/pane-token" ;;
+        *)
+            if [ -f "$STUB_DIR/mark-fails" ]; then exit 1; fi
+            : > "$STUB_DIR/pane-token"
+            ;;
+        esac
         ;;
     "session attach")
         {
@@ -84,50 +102,31 @@ STUB_HERDR = textwrap.dedent("""\
         ;;
     "workspace create")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
-        # A created space becomes visible to `workspace list` - that is
-        # how the plugin later recognises its own share.
-        printf '%s\\n' "$4" > "$STUB_DIR/space-label"
         printf '{"id":"x","result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}\\n'
         ;;
-    "workspace report-metadata")
+    "plugin pane")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
-        # Real herdr stores these against the workspace named in $3 and
-        # hands them back in `workspace list`; these files are that
-        # store. Setting the token is what makes a space this plugin's,
-        # clearing it is how a share stops counting as one.
-        case "$*" in
-        *--clear-token*) rm -f "$STUB_DIR/token-$3" ;;
-        *) : > "$STUB_DIR/token-$3" ;;
-        esac
-        ;;
-    "workspace list")
-        # w1 is the user's, and in one test it wears the plugin's label
-        # to prove the label decides nothing. Only a token does - and
-        # tokens are per workspace here, as they are in herdr, so
-        # stamping the wrong one cannot pass unnoticed.
-        user_label="${STUB_USER_SPACE_LABEL:-work}"
-        w1_tokens=null; w9_tokens=null
-        [ -f "$STUB_DIR/token-w1" ] && w1_tokens='{"shellshare_live":"1"}'
-        [ -f "$STUB_DIR/token-w9" ] && w9_tokens='{"shellshare_live":"1"}'
-        if [ -f "$STUB_DIR/space-label" ]; then
-            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"%s","tab_count":1,"tokens":%s},{"workspace_id":"w9","label":"%s","tab_count":%s,"tokens":%s}]}}\\n' "$user_label" "$w1_tokens" "$(cat "$STUB_DIR/space-label")" "${STUB_SHARE_TABS:-1}" "$w9_tokens"
-        else
-            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"%s","tab_count":1,"tokens":%s}]}}\\n' "$user_label" "$w1_tokens"
-        fi
+        # herdr runs the pane, and the pane marks itself. Standing in for
+        # that here is what lets a toggle test press the key twice.
+        : > "$STUB_DIR/pane-token"
         ;;
     "workspace close")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
-        rm -f "$STUB_DIR/space-label" "$STUB_DIR/token-$3"
+        rm -f "$STUB_DIR/pane-token"
         ;;
     "tab close")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         if [ -f "$STUB_DIR/tab-close-fails" ]; then exit 1; fi
+        # Closing the share's tab takes its pane, and the mark with it.
+        # herdr really does this, which is why nothing in the plugin has
+        # to remember to clean up after a share that has ended.
+        if [ "$3" = "w9:t9" ]; then rm -f "$STUB_DIR/pane-token"; fi
         ;;
     "workspace rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         if [ -f "$STUB_DIR/rename-fails" ]; then exit 1; fi
         ;;
-    "plugin pane"|"notification show"|"workspace focus"|"tab rename")
+    "notification show"|"workspace focus"|"tab rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         ;;
     *)
@@ -383,16 +382,6 @@ class TestSessionShare:
 
         assert "workspace create --label" in calls
         assert "shellshare" in calls.split("workspace create --label")[1].split("\n")[0]
-        # Claimed before anything runs in it: the token is what makes the
-        # space stoppable, so it has to exist before the share does.
-        # On w9, the space it just made - never on w1, the caller's,
-        # which the next stop would then close with the user's tabs.
-        claim = [c for c in calls.splitlines() if c.startswith("workspace report-metadata")]
-        assert claim == [
-            "workspace report-metadata w9 --source shellshare "
-            "--token shellshare_live=1"
-        ], calls
-        assert calls.index("report-metadata") < calls.index("plugin pane open"), calls
         # The pane goes into that space, not the caller's.
         pane_open = [c for c in calls.splitlines() if "plugin pane open" in c]
         assert pane_open and "--workspace w9" in pane_open[0], pane_open
@@ -402,55 +391,25 @@ class TestSessionShare:
         assert "tab close w9:t1" in calls
         assert "workspace focus w9" in calls
 
-        # Now that a claimed space exists, the same action stops it -
-        # and closes w9 (the one it made), never w1 (the user's).
+        # Now that a marked pane exists, the same action stops it - by
+        # closing the share's TAB. Never a workspace: that would take
+        # every tab in it, including any the user opened there. herdr
+        # drops the space itself once its last tab goes.
         result = run_script(plugin_env, "toggle")
         assert result.returncode == 0, result.stderr
         calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
-        closes = [c for c in calls.splitlines() if c.startswith("workspace close")]
-        assert closes == ["workspace close w9"], closes
-
-    def test_a_user_space_wearing_the_label_is_never_closed(self, plugin_env):
-        """The label is for the human; it authorises nothing. A user who
-        names a space of their own "◉ shellshare" - or renames the share
-        - must not have it closed, because closing a space takes every
-        tab in it. Only the token this plugin stamps says "mine"."""
-        env = dict(plugin_env.env, STUB_USER_SPACE_LABEL="◉ shellshare")
-        result = subprocess.run(
-            ["bash", str(SHARE_SH), "toggle"],
-            capture_output=True, text=True, env=env,
-            cwd=str(REPO_ROOT), timeout=30,
-        )
-        assert result.returncode == 0, result.stderr
-        calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
+        closes = [
+            c for c in calls.splitlines()
+            if c.startswith("tab close") and "w9:t1" not in c
+        ]
+        assert closes == ["tab close w9:t9"], closes
         assert "workspace close" not in calls, \
-            f"a space the plugin never claimed was closed: {calls!r}"
-        # It read the label as "no share running" and started one.
-        assert "workspace create --label" in calls, calls
+            f"stopping closed a whole space: {calls!r}"
 
-    def test_a_space_the_user_moved_into_is_not_closed_by_stopping(self, plugin_env):
-        """The action focuses the share when it starts, so opening a tab
-        there is an easy thing to do - and stopping closes the whole
-        space. Ours to close means ours alone; otherwise one press
-        destroys work the user did in a tab they opened."""
-        result = run_script(plugin_env, "toggle")
-        assert result.returncode == 0, result.stderr
-
-        # The user has since opened a tab of their own in it.
-        result = run_script(
-            plugin_env, "toggle", extra_env={"STUB_SHARE_TABS": "2"}
-        )
-        assert result.returncode != 0
-        assert "tabs of your own" in result.stderr, result.stderr
-        calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
-        assert "workspace close" not in calls, \
-            f"stopping closed a space holding the user's own tab: {calls!r}"
-
-    def test_a_pane_that_outlives_its_space_gives_up_the_claim(self, plugin_env):
-        """Normally the space goes with this pane. When it does not -
-        the user left a tab of their own in there - the token must go
-        anyway, or their space stays marked as a live share and the next
-        stop closes it."""
+    def test_a_space_that_outlives_the_share_stops_saying_live(self, plugin_env):
+        """Normally the space goes when this pane does. When it does not
+        - the user left a tab of their own in there - the row is still
+        labelled ◉ shellshare, claiming a broadcast that has ended."""
         proc, _url, _lines = start_pane(plugin_env)
         calls_file = plugin_env.stub_dir / "herdr-calls.log"
         try:
@@ -460,9 +419,13 @@ class TestSessionShare:
             # Ctrl+C, the way the README says to stop.
             os.killpg(proc.pid, signal.SIGINT)
             assert poll_until(
-                lambda: "--clear-token shellshare_live" in calls_file.read_text(),
-                timeout=30,
-            ), f"the pane exited still holding its claim: {calls_file.read_text()!r}"
+                lambda: "workspace rename w1" in calls_file.read_text(), timeout=60,
+            ), f"the space kept its live label: {calls_file.read_text()!r}"
+            rename = [
+                c for c in calls_file.read_text().splitlines()
+                if c.startswith("workspace rename")
+            ][0]
+            assert "live" not in rename, rename
         finally:
             stop_pane(proc)
 
@@ -476,7 +439,7 @@ class TestSessionShare:
             "#!/bin/bash\n"
             'printf \'%s\\n\' "$*" >> "$STUB_DIR/stuck-calls.log"\n'
             'case "$1 $2" in\n'
-            '  "workspace list") printf \'{"result":{"workspaces":[]}}\\n\' ;;\n'
+            '  "api snapshot") printf \'{"result":{"snapshot":{"panes":[]}}}\\n\' ;;\n'
             '  "workspace create") printf \'{"result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"}}}\\n\' ;;\n'
             '  "tab close") exit 1 ;;\n'
             '  "workspace close") exit 1 ;;\n'
@@ -494,33 +457,22 @@ class TestSessionShare:
         assert "still broadcasting" in result.stderr, result.stderr
         assert "herdr workspace close w9" in result.stderr, result.stderr
 
-    def test_a_share_that_cannot_be_claimed_is_not_started(self, plugin_env):
-        """The token is the only handle on the space afterwards. Without
-        it the share would broadcast with no way for the toggle to stop
-        it, so a failed claim has to take the space down with it."""
-        broken = dict(plugin_env.env, HERDR_BIN_PATH=str(plugin_env.stub_dir / "noclaim"))
-        (plugin_env.stub_dir / "noclaim").write_text(
-            "#!/bin/bash\n"
-            'case "$1 $2" in\n'
-            '  "workspace list") printf \'{"result":{"workspaces":[]}}\\n\' ;;\n'
-            '  "workspace create") printf \'{"result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"}}}\\n\' ;;\n'
-            '  "workspace report-metadata") exit 1 ;;\n'
-            '  *) printf \'%s\\n\' "$*" >> "$STUB_DIR/noclaim-calls.log" ;;\n'
-            "esac\n"
+    def test_a_pane_that_cannot_mark_itself_does_not_broadcast(self, plugin_env):
+        """The mark is the only handle on a running share. A pane that
+        cannot make one must not go on to broadcast: it would put the
+        session on the internet with nothing able to stop it, and the
+        mark is made before the broadcast for exactly that reason."""
+        (plugin_env.stub_dir / "mark-fails").touch()
+        proc = subprocess.Popen(
+            ["bash", str(SHARE_SH), "live"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=plugin_env.env, cwd=str(REPO_ROOT), stdin=subprocess.DEVNULL,
         )
-        (plugin_env.stub_dir / "noclaim").chmod(0o755)
-
-        result = subprocess.run(
-            ["bash", str(SHARE_SH), "toggle"],
-            capture_output=True, text=True, env=broken,
-            cwd=str(REPO_ROOT), timeout=30,
-        )
-        assert result.returncode != 0
-        calls = (plugin_env.stub_dir / "noclaim-calls.log").read_text()
-        assert "plugin pane open" not in calls, \
-            f"an unstoppable share was started anyway: {calls!r}"
-        assert "workspace close w9" in calls, \
-            f"the unclaimed space was left behind: {calls!r}"
+        _, err = proc.communicate(timeout=60)
+        assert proc.returncode != 0
+        assert "could not mark this pane" in err, err
+        assert not (plugin_env.stub_dir / "attach-env").exists(), \
+            "an unstoppable broadcast was started anyway"
 
     def test_a_shell_tab_that_survives_takes_the_share_down_with_it(self, plugin_env):
         """herdr closes a space with its last tab - that is what makes
@@ -544,11 +496,11 @@ class TestSessionShare:
         stub.write_text(
             "#!/bin/bash\n"
             'case "$1 $2" in\n'
-            '  "workspace list") printf \'{"result":{"workspaces":['
-            '{"workspace_id":"w8","label":"a","tokens":{"shellshare_live":"1"}},'
-            '{"workspace_id":"w9","label":"b","tokens":{"shellshare_live":"1"}}]}}\\n\' ;;\n'
-            '  "workspace close") printf \'%s\\n\' "$*" >> "$STUB_DIR/wontclose-calls.log"\n'
-            '     if [ "$3" = "w9" ]; then exit 1; fi ;;\n'
+            '  "api snapshot") printf \'{"result":{"snapshot":{"panes":['
+            '{"pane_id":"w8:p1","tab_id":"w8:t1","tokens":{"shellshare_live":"1"}},'
+            '{"pane_id":"w9:p1","tab_id":"w9:t1","tokens":{"shellshare_live":"1"}}]}}}\\n\' ;;\n'
+            '  "tab close") printf \'%s\\n\' "$*" >> "$STUB_DIR/wontclose-calls.log"\n'
+            '     if [ "$3" = "w9:t1" ]; then exit 1; fi ;;\n'
             '  *) printf \'%s\\n\' "$*" >> "$STUB_DIR/wontclose-calls.log" ;;\n'
             "esac\n"
         )
@@ -561,24 +513,24 @@ class TestSessionShare:
             cwd=str(REPO_ROOT), timeout=30,
         )
         assert result.returncode != 0
-        assert "w9" in result.stderr, result.stderr
+        assert "w9:t1" in result.stderr, result.stderr
         calls = (plugin_env.stub_dir / "wontclose-calls.log").read_text()
         # Both were attempted - one failure must not abandon the rest.
-        assert "workspace close w8" in calls and "workspace close w9" in calls, calls
+        assert "tab close w8:t1" in calls and "tab close w9:t1" in calls, calls
         assert "Stopped sharing" not in calls, \
             f"a partial stop was announced as a stop: {calls!r}"
 
     def test_toggle_never_closes_a_space_it_did_not_create(self, plugin_env):
         """The dangerous failure mode: closing a space takes every tab in
-        it. With no labelled space present, the action must start a share
-        rather than close whatever the user happens to be looking at -
-        even when creating the space fails."""
+        it. With no share running, the action must start one rather than
+        close whatever the user happens to be looking at - even when
+        creating the space fails."""
         # herdr refuses to make the space (stub returns nothing useful).
         broken = dict(plugin_env.env, HERDR_BIN_PATH=str(plugin_env.stub_dir / "broken"))
         (plugin_env.stub_dir / "broken").write_text(
             "#!/bin/bash\n"
             'case "$1 $2" in\n'
-            '  "workspace list") printf \'{"result":{"workspaces":[{"workspace_id":"w1","label":"work"}]}}\\n\' ;;\n'
+            '  "api snapshot") printf \'{"result":{"snapshot":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","tokens":null}]}}}\\n\' ;;\n'
             '  "workspace create") exit 1 ;;\n'
             '  *) printf \'%s\\n\' "$*" >> "$STUB_DIR/broken-calls.log" ;;\n'
             "esac\n"
@@ -648,7 +600,7 @@ class TestSessionShare:
         (plugin_env.stub_dir / "mute").write_text(
             "#!/bin/bash\n"
             'case "$1 $2" in\n'
-            '  "workspace list") exit 1 ;;\n'
+            '  "api snapshot") exit 1 ;;\n'
             '  *) printf \'%s\\n\' "$*" >> "$STUB_DIR/mute-calls.log" ;;\n'
             "esac\n"
         )

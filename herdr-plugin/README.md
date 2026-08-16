@@ -52,10 +52,9 @@ Ctrl+C in it — all three do the same thing. The link keeps showing the
 final frame until the server's room TTL evicts it (~6 hours on
 shellshare.net).
 
-If you open a tab of your own in the ◉ shellshare space, the action
-stops stopping: closing the space would close your tab too, so it says
-so and leaves everything running. Close the ◉ live tab to end the share
-by hand, or move your tab elsewhere and press again.
+Stopping closes the share's own tab, never the space — so if you have
+opened a tab of your own in there, it and the space survive (renamed
+**✗ shellshare (stopped)**, since nothing is being broadcast any more).
 
 One keybinding is the whole interface. Add to
 `~/.config/herdr/config.toml`, then `herdr server reload-config`:
@@ -127,11 +126,12 @@ shellshare refuse to start, and the pane shows why.
   which also means a leaked link stays valid for every future broadcast
   of that room, and the room name is visible to other users on a
   multi-user machine (`ps`). The default random room avoids both.
-- The plugin keeps no record of your share: it asks herdr which spaces
-  carry the marker it puts on the one it creates. That marker, not the
-  name, is what stopping acts on — so a space of your own can never be
-  closed by this plugin, whatever you call it, and a share you renamed
-  can still be stopped. In its state directory it writes only a
+- The plugin keeps no record of your share: it asks herdr which panes
+  carry the marker the live one puts on itself, and stopping closes
+  those panes' tabs. So the only thing it can ever close is the share
+  itself — never a space, never a tab of yours — and a share that has
+  died leaves nothing behind to act on, because the marker goes with the
+  pane. In its state directory it writes only a
   fifo (empty; carries the mirror's output between two processes while
   the share runs, removed when it ends) and a `mirror-<pid>.err` file
   holding shellshare's stderr, kept only when a share fails so there is

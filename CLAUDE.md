@@ -112,33 +112,42 @@ needing no `[ui.sidebar.*]` configuration. (A share that FAILED is the
 exception: its space is kept, relabelled `✗ shellshare (stopped)`, to
 hold the error.) Ctrl+C, closing the space, and toggling the action are
 all the same stop - and any of them that leaves the space standing,
-because the user put a tab of their own in it, clears the token on the
-way out, so what survives is theirs and no longer a share. The pane also renames its own tab
-(`tab rename $HERDR_TAB_ID`), since a manifest pane `title` does not
-become the tab label.
+because the user put a tab of their own in it, relabels it on the way
+out so the row stops claiming a broadcast that has ended. The pane also
+renames its own tab (`tab rename $HERDR_TAB_ID`), since a manifest pane
+`title` does not become the tab label.
 
 **herdr holds the state; the plugin holds none.** "Am I sharing?" is
-answered by looking for a workspace carrying the plugin's own metadata
-token (`workspace report-metadata` to stamp it, `workspace list` to read
-it back), never by a pid file: a file outlives crashes and reboots, and
-herdr ids are small per-server counters that get reused, so acting on a
-stale one means closing somebody else's space. The token, not the
-`◉ shellshare` label, is what authorises a close - the label is free
-text the user can type or rename into, and mistaking their space for the
-plugin's would close it and every tab in it; the token also survives a
-rename, so a share the user renamed is still stoppable. A space that
-cannot be stamped is closed rather than shared into, since the stamp is
-the only handle on it afterwards. For the same reason there is no
-fallback that opens the share in the caller's space - the plugin owns
-its space or refuses to start, because stopping means closing a space
-and closing the wrong one destroys the user's tabs. That also makes the
-space's own shell tab a hard requirement to close (a tab left in it
-outlives the broadcast and keeps the indicator up), and a stop that
-cannot close every claimed space a hard error, because "stopped
-sharing" while a link is still fed bytes is the one lie the action must
-never tell. Nothing is guessed anywhere else either: an unresolvable
-session name or an unreadable client size is a hard error, since a wrong
-guess silently broadcasts the wrong session or shrinks the real one.
+answered by asking `api snapshot` for panes carrying the plugin's
+metadata token, which the live pane puts on *itself*
+(`pane report-metadata`) before it starts broadcasting. Never a pid
+file: a file outlives crashes and reboots, and herdr ids are small
+per-server counters that get reused, so acting on a stale one means
+closing somebody else's tab. Marking the pane rather than the space is
+what makes the answer unfakeable *and* self-cleaning - a label is free
+text the user can type or rename into, a mark on the space would outlive
+the pane that made it, but a dead pane is simply absent from the
+snapshot. A pane that cannot mark itself refuses to broadcast, since the
+mark is the only handle on it afterwards.
+
+**Stopping closes that pane's tab, never a workspace.** Closing a space
+takes every tab in it, so a share parked in a space the user has also
+put a tab in could destroy their work; closing the share's own tab ends
+the broadcast and lets herdr drop the space when its last tab goes. The
+ordinary case is identical and the awkward one costs nothing, so no code
+here has to work out whose tabs are in the way - the one exception is
+`abort_start`, which closes a space created milliseconds earlier by the
+lines above it, and reports loudly if that close fails (by then the pane
+is open, so the session is already being broadcast). A stop that cannot
+close every share is a hard error, because "stopped sharing" while a
+link is still fed bytes is the one lie the action must never tell.
+Likewise there is no fallback that opens the share in the caller's
+space, the space's own shell tab is a hard requirement to close (a tab
+left in it outlives the broadcast and keeps the indicator up), and a
+pane that exits leaves the label corrected behind it. Nothing is guessed
+anywhere else either: an unresolvable session name or an unreadable
+client size is a hard error, since a wrong guess silently broadcasts the
+wrong session or shrinks the real one.
 
 **There is deliberately no pane-sharing mode.** To share one pane you
 run `shellshare` in it - a full-fidelity byte stream, better than any
