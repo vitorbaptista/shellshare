@@ -58,6 +58,9 @@ STUB_HERDR = textwrap.dedent("""\
     #!/bin/bash
     case "$1 $2" in
     "session list")
+        # Only with --json, as real herdr: without it the answer is a
+        # human table, and the plugin would resolve no session at all.
+        if [ "$3" != "--json" ]; then exit 1; fi
         printf '{"sessions":[{"default":true,"name":"e2e-session","running":true,"socket_path":"%s"},{"default":false,"name":"other-session","running":true,"socket_path":"/tmp/other.sock"}]}\\n' "$FAKE_SOCKET"
         ;;
     "api snapshot")
@@ -224,6 +227,10 @@ def start_pane(plugin_env, extra_env=None):
         env=env,
         start_new_session=True,
         cwd=str(REPO_ROOT),
+        # Not the terminal pytest was run from: die_pane parks on
+        # `read`, so an inherited TTY would hang the suite when run
+        # with -s instead of failing.
+        stdin=subprocess.DEVNULL,
     )
     lines = []
     threading.Thread(
@@ -738,7 +745,7 @@ class TestSessionShare:
 
     def test_a_corpse_that_cannot_be_relabelled_stays_stoppable(self, plugin_env):
         """The two ways of saying "not live" have to fail in the right
-        order. The token is what lets the next press close this space;
+        order. The token is what lets the next press close this pane;
         the label is what the user sees. Dropping the token and then
         failing to relabel would leave a row saying "◉ shellshare"
         forever, which no press can clear because nothing recognises it

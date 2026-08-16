@@ -40,12 +40,13 @@ A space called **◉ shellshare** appears with your link in it, and a QR
 code to scan it onto a phone. Copy the link, switch back to your own
 space, and carry on — viewers follow whatever tab you are looking at.
 
-That space is the indicator: it is there while you are broadcasting and
-gone when you stop, and you can see it from wherever you are working.
-(The exception is a share that *failed* — that space stays, relabelled
-**✗ shellshare (stopped)**, to hold the error.) What is being shared is
-the whole session, so it lives at the session level rather than inside
-one of your projects.
+That space is the indicator, visible from wherever you are working: it
+is there while you are broadcasting, and normally gone when you stop.
+When something of yours is keeping it open — a tab or a split you added,
+or the error left by a share that failed — it stays instead, renamed
+**✗ shellshare (stopped)**. What is being shared is the whole session,
+so it lives at the session level rather than inside one of your
+projects.
 
 To stop: run the action again, or press Ctrl+C in the ◉ live tab. Either
 way only the share's own pane closes — herdr then drops the tab and the
@@ -132,14 +133,17 @@ shellshare refuse to start, and the pane shows why.
   multi-user machine (`ps`). The default random room avoids both.
 - The plugin keeps no record of your share: it asks herdr which panes
   carry the marker the live one puts on itself, and stopping closes
-  exactly those panes. So the only thing it can ever close is the share
-  itself — never a tab, never a space, never anything of yours — and a
-  share that has died leaves nothing behind to act on, because the
-  marker goes with the pane. In its state directory it writes only a
-  fifo (empty; carries the mirror's output between two processes while
-  the share runs, removed when it ends) and a `mirror-<pid>.err` file
-  holding shellshare's stderr, kept only when a share fails so there is
-  something to read afterwards. No URLs, no keys, ever.
+  exactly those panes. So stopping can only ever close the share itself
+  — never a tab, never a space, never anything of yours — and a share
+  that has died leaves nothing behind to act on, because the marker goes
+  with the pane. (A *failed start* is the one thing that closes a space:
+  the one it created moments earlier, to undo itself.) In its state
+  directory it writes only a fifo (empty; carries the mirror's output
+  between two processes while the share runs, removed when it ends) and
+  a `mirror-<pid>.err` file holding shellshare's stderr, kept only when
+  a share fails so there is something to read afterwards. Never a share
+  link or an encryption key — though shellshare's own error messages,
+  which that file holds, can name the server you configured.
 - The ◉ shellshare space is a space like any other — if you focus it,
   viewers see it, link and all. They already have that link, so nothing
   leaks; it just isn't very interesting to watch.

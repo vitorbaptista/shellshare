@@ -87,12 +87,12 @@ die() { # for actions: stderr lands in `herdr plugin log`
 # the user, and drop the token for the toggle.
 #
 # Strictly in that order, and only dropping the mark if the relabel
-# worked. The mark is what lets the next press close this tab; the label
-# is what the user sees. Losing the mark first and then failing to
+# worked. The mark is what lets the next press close this pane; the
+# label is what the user sees. Losing the mark first and then failing to
 # relabel leaves the worst of both - a row that says "◉ shellshare"
 # forever, which no press can clear because nothing recognises it any
 # more. Keeping the mark instead costs one wasted press, which closes
-# this dead tab and takes the wrong label away with it.
+# this dead pane and takes the wrong label away with it.
 die_pane() {
     if [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ -n "${HERDR_PANE_ID:-}" ] &&
         "$HERDR" workspace rename "$HERDR_WORKSPACE_ID" "$DEAD_LABEL" >/dev/null 2>&1; then
@@ -140,7 +140,7 @@ cfg() { # cfg <key>
         tail -n 1 | tr -d '\r' | sed 's/[[:space:]]*$//'
 }
 
-# The tabs of the live share (normally one, and usually none), one id
+# The panes of the live share (normally one, and usually none), one id
 # per line. This is the plugin's entire notion of "am I sharing?" -
 # herdr is asked, never told.
 #
