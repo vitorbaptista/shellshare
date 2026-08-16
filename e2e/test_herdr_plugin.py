@@ -91,36 +91,43 @@ STUB_HERDR = textwrap.dedent("""\
         ;;
     "workspace report-metadata")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
-        # Real herdr stores these per workspace and hands them back in
-        # `workspace list`; the file is that store. Setting the token is
-        # what makes a space this plugin's, clearing it is what a dead
-        # share does to stop counting as one.
+        # Real herdr stores these against the workspace named in $3 and
+        # hands them back in `workspace list`; these files are that
+        # store. Setting the token is what makes a space this plugin's,
+        # clearing it is how a share stops counting as one.
         case "$*" in
-        *--clear-token*) rm -f "$STUB_DIR/space-token" ;;
-        *) : > "$STUB_DIR/space-token" ;;
+        *--clear-token*) rm -f "$STUB_DIR/token-$3" ;;
+        *) : > "$STUB_DIR/token-$3" ;;
         esac
         ;;
     "workspace list")
         # w1 is the user's, and in one test it wears the plugin's label
-        # to prove the label decides nothing. Only a token does.
+        # to prove the label decides nothing. Only a token does - and
+        # tokens are per workspace here, as they are in herdr, so
+        # stamping the wrong one cannot pass unnoticed.
         user_label="${STUB_USER_SPACE_LABEL:-work}"
+        w1_tokens=null; w9_tokens=null
+        [ -f "$STUB_DIR/token-w1" ] && w1_tokens='{"shellshare_live":"1"}'
+        [ -f "$STUB_DIR/token-w9" ] && w9_tokens='{"shellshare_live":"1"}'
         if [ -f "$STUB_DIR/space-label" ]; then
-            tokens=null
-            [ -f "$STUB_DIR/space-token" ] && tokens='{"shellshare_live":"1"}'
-            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"%s","tokens":null},{"workspace_id":"w9","label":"%s","tokens":%s}]}}\\n' "$user_label" "$(cat "$STUB_DIR/space-label")" "$tokens"
+            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"%s","tab_count":1,"tokens":%s},{"workspace_id":"w9","label":"%s","tab_count":%s,"tokens":%s}]}}\\n' "$user_label" "$w1_tokens" "$(cat "$STUB_DIR/space-label")" "${STUB_SHARE_TABS:-1}" "$w9_tokens"
         else
-            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"%s","tokens":null}]}}\\n' "$user_label"
+            printf '{"id":"x","result":{"workspaces":[{"workspace_id":"w1","label":"%s","tab_count":1,"tokens":%s}]}}\\n' "$user_label" "$w1_tokens"
         fi
         ;;
     "workspace close")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
-        rm -f "$STUB_DIR/space-label" "$STUB_DIR/space-token"
+        rm -f "$STUB_DIR/space-label" "$STUB_DIR/token-$3"
         ;;
     "tab close")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         if [ -f "$STUB_DIR/tab-close-fails" ]; then exit 1; fi
         ;;
-    "plugin pane"|"notification show"|"workspace focus"|"workspace rename"|"tab rename")
+    "workspace rename")
+        printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
+        if [ -f "$STUB_DIR/rename-fails" ]; then exit 1; fi
+        ;;
+    "plugin pane"|"notification show"|"workspace focus"|"tab rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
         ;;
     *)
@@ -378,8 +385,13 @@ class TestSessionShare:
         assert "shellshare" in calls.split("workspace create --label")[1].split("\n")[0]
         # Claimed before anything runs in it: the token is what makes the
         # space stoppable, so it has to exist before the share does.
+        # On w9, the space it just made - never on w1, the caller's,
+        # which the next stop would then close with the user's tabs.
         claim = [c for c in calls.splitlines() if c.startswith("workspace report-metadata")]
-        assert claim and "--token shellshare_live=1" in claim[0], calls
+        assert claim == [
+            "workspace report-metadata w9 --source shellshare "
+            "--token shellshare_live=1"
+        ], calls
         assert calls.index("report-metadata") < calls.index("plugin pane open"), calls
         # The pane goes into that space, not the caller's.
         pane_open = [c for c in calls.splitlines() if "plugin pane open" in c]
@@ -415,6 +427,72 @@ class TestSessionShare:
             f"a space the plugin never claimed was closed: {calls!r}"
         # It read the label as "no share running" and started one.
         assert "workspace create --label" in calls, calls
+
+    def test_a_space_the_user_moved_into_is_not_closed_by_stopping(self, plugin_env):
+        """The action focuses the share when it starts, so opening a tab
+        there is an easy thing to do - and stopping closes the whole
+        space. Ours to close means ours alone; otherwise one press
+        destroys work the user did in a tab they opened."""
+        result = run_script(plugin_env, "toggle")
+        assert result.returncode == 0, result.stderr
+
+        # The user has since opened a tab of their own in it.
+        result = run_script(
+            plugin_env, "toggle", extra_env={"STUB_SHARE_TABS": "2"}
+        )
+        assert result.returncode != 0
+        assert "tabs of your own" in result.stderr, result.stderr
+        calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
+        assert "workspace close" not in calls, \
+            f"stopping closed a space holding the user's own tab: {calls!r}"
+
+    def test_a_pane_that_outlives_its_space_gives_up_the_claim(self, plugin_env):
+        """Normally the space goes with this pane. When it does not -
+        the user left a tab of their own in there - the token must go
+        anyway, or their space stays marked as a live share and the next
+        stop closes it."""
+        proc, _url, _lines = start_pane(plugin_env)
+        calls_file = plugin_env.stub_dir / "herdr-calls.log"
+        try:
+            assert poll_until(
+                lambda: "tab rename" in calls_file.read_text(), timeout=60
+            ), "the share never came up"
+            # Ctrl+C, the way the README says to stop.
+            os.killpg(proc.pid, signal.SIGINT)
+            assert poll_until(
+                lambda: "--clear-token shellshare_live" in calls_file.read_text(),
+                timeout=30,
+            ), f"the pane exited still holding its claim: {calls_file.read_text()!r}"
+        finally:
+            stop_pane(proc)
+
+    def test_a_rollback_that_fails_says_the_share_may_still_be_live(self, plugin_env):
+        """By the time the last startup step can fail the pane is open,
+        so the session is already being broadcast. If the rollback that
+        should close it also fails, an error about a shell tab would
+        leave the user holding a live link they were never told about."""
+        stub = plugin_env.stub_dir / "stuck"
+        stub.write_text(
+            "#!/bin/bash\n"
+            'printf \'%s\\n\' "$*" >> "$STUB_DIR/stuck-calls.log"\n'
+            'case "$1 $2" in\n'
+            '  "workspace list") printf \'{"result":{"workspaces":[]}}\\n\' ;;\n'
+            '  "workspace create") printf \'{"result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"}}}\\n\' ;;\n'
+            '  "tab close") exit 1 ;;\n'
+            '  "workspace close") exit 1 ;;\n'
+            "esac\n"
+        )
+        stub.chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", str(SHARE_SH), "toggle"],
+            capture_output=True, text=True,
+            env=dict(plugin_env.env, HERDR_BIN_PATH=str(stub)),
+            cwd=str(REPO_ROOT), timeout=30,
+        )
+        assert result.returncode != 0
+        assert "still broadcasting" in result.stderr, result.stderr
+        assert "herdr workspace close w9" in result.stderr, result.stderr
 
     def test_a_share_that_cannot_be_claimed_is_not_started(self, plugin_env):
         """The token is the only handle on the space afterwards. Without
@@ -603,19 +681,19 @@ class TestSessionShare:
             def calls():
                 return calls_file.read_text() if calls_file.exists() else ""
 
+            # The label is what the user reads; the token is what the
+            # toggle reads. Both have to stop saying live, or the next
+            # keypress "stops" a share that is already over. Waiting on
+            # the token - the second of the two - also proves the order:
+            # it is only cleared once the relabel has succeeded.
             assert poll_until(
-                lambda: "workspace rename w1" in calls(), timeout=30,
-            ), f"the dead share kept its live label: {calls()!r}"
+                lambda: "--clear-token shellshare_live" in calls(), timeout=60,
+            ), f"the dead share still counts as one: {calls()!r}"
             rename = [
                 c for c in calls().splitlines()
                 if c.startswith("workspace rename")
             ][0]
             assert "shellshare" in rename and "live" not in rename, rename
-            # The label is what the user reads; the token is what the
-            # toggle reads. Both have to stop saying live, or the next
-            # keypress "stops" a share that is already over.
-            assert "--clear-token shellshare_live" in calls(), \
-                f"the dead share still counts as one: {calls()!r}"
             # The pane says what it knows. A mirror that dies inside
             # herdr writes to the PTY (i.e. into the broadcast), not to
             # shellshare's stderr, so the exit code is the diagnosis
@@ -626,6 +704,26 @@ class TestSessionShare:
                 if "stopped unexpectedly" in c
             ]
             assert notes and "exit 3" in notes[0], notes
+        finally:
+            stop_pane(proc)
+
+    def test_a_corpse_that_cannot_be_relabelled_stays_stoppable(self, plugin_env):
+        """The two ways of saying "not live" have to fail in the right
+        order. The token is what lets the next press close this space;
+        the label is what the user sees. Dropping the token and then
+        failing to relabel would leave a row saying "◉ shellshare"
+        forever, which no press can clear because nothing recognises it
+        any more - so the token is only given up once the label is."""
+        (plugin_env.stub_dir / "attach-dies").touch()
+        (plugin_env.stub_dir / "rename-fails").touch()
+        proc, _url, _lines = start_pane(plugin_env)
+        calls_file = plugin_env.stub_dir / "herdr-calls.log"
+        try:
+            assert poll_until(
+                lambda: "stopped unexpectedly" in calls_file.read_text(), timeout=60
+            ), f"the dead broadcast never reported itself: {calls_file.read_text()!r}"
+            assert "--clear-token" not in calls_file.read_text(), \
+                f"a corpse gave up the only handle on it: {calls_file.read_text()!r}"
         finally:
             stop_pane(proc)
 

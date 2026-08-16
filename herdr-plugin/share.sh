@@ -44,11 +44,6 @@ PLUGIN_ID="${HERDR_PLUGIN_ID:-shellshare}"
 STATE_ROOT="${HERDR_PLUGIN_STATE_DIR:-}"
 CONFIG_FILE="${HERDR_PLUGIN_CONFIG_DIR:-}/config"
 
-# The workspace metadata token that marks a space as this plugin's, and
-# is the sole authority for closing one. Unlike the label it is not free
-# text the user can type, so a space of their own can never be mistaken
-# for a share - and it survives a rename, so a share they renamed can
-# still be found and stopped.
 OWNER_TOKEN=shellshare_live
 
 # The label of the space that exists while a share is live, and of the
@@ -78,18 +73,22 @@ die() { # for actions: stderr lands in `herdr plugin log`
 # already gone to stderr, which that caller kept.
 #
 # Parking here keeps the pane - and therefore its space - alive after
-# the broadcast is over. So every way of failing, before or after the
-# link exists, has to give the space up first: drop the token, so the
-# toggle no longer counts it as a live share and the next keypress
-# starts one, and relabel it, so the sidebar stops saying live to the
-# user. If either call fails the worst case is bounded - the toggle
-# closes a space of ours holding an error message, which costs the user
-# nothing they had.
+# the broadcast is over, so every way of failing, before or after the
+# link exists, has to stop the space claiming to be live: relabel it for
+# the user, and drop the token for the toggle.
+#
+# Strictly in that order, and only clearing the token if the relabel
+# worked. The token is what lets the next press close this space; the
+# label is what the user sees. Losing the token first and then failing
+# to relabel leaves the worst of both - a row that says "◉ shellshare"
+# forever, which no press can clear because nothing recognises it any
+# more. Keeping the token instead costs one wasted press that closes a
+# dead space, which is the harmless direction.
 die_pane() {
-    if [ -n "${HERDR_WORKSPACE_ID:-}" ]; then
+    if [ -n "${HERDR_WORKSPACE_ID:-}" ] &&
+        "$HERDR" workspace rename "$HERDR_WORKSPACE_ID" "$DEAD_LABEL" >/dev/null 2>&1; then
         "$HERDR" workspace report-metadata "$HERDR_WORKSPACE_ID" \
             --source "$PLUGIN_ID" --clear-token "$OWNER_TOKEN" >/dev/null 2>&1
-        "$HERDR" workspace rename "$HERDR_WORKSPACE_ID" "$DEAD_LABEL" >/dev/null 2>&1
     fi
     # Closing this pane must not take the diagnostics with it: the
     # message about to be printed points at that file.
@@ -98,6 +97,17 @@ die_pane() {
     "$HERDR" notification show "Shellshare" --body "$*" >/dev/null 2>&1 || true
     read -r _ 2>/dev/null
     exit 1
+}
+
+# Give up the claim on the way out of the pane. Usually there is nothing
+# to give up: this pane is the space's last tab, so the space goes with
+# it. But if the user left a tab of their own in there the space
+# survives, and a token left behind would mark THEIR space as a live
+# share - which the next stop would try to close.
+release_space() {
+    [ -n "${HERDR_WORKSPACE_ID:-}" ] || return 0
+    "$HERDR" workspace report-metadata "$HERDR_WORKSPACE_ID" \
+        --source "$PLUGIN_ID" --clear-token "$OWNER_TOKEN" >/dev/null 2>&1 || true
 }
 
 need_env() {
@@ -115,14 +125,16 @@ cfg() { # cfg <key>
         tail -n 1 | tr -d '\r' | sed 's/[[:space:]]*$//'
 }
 
-# The workspace ids of the live share's spaces (normally one, and
-# usually none), one per line. This is the plugin's entire notion of
-# "am I sharing?" - herdr is asked, never told.
+# The live share's spaces (normally one, and usually none), one per
+# line as "<workspace id> <tab count>". This is the plugin's entire
+# notion of "am I sharing?" - herdr is asked, never told.
 #
 # Matched on the token, never the label: the answer authorises closing a
 # space, and closing one takes every tab in it with it. A user who
 # labels a space of their own "◉ shellshare" must not lose it, and a
-# share they renamed must still be stoppable.
+# share they renamed must still be stoppable. The tab count rides along
+# for the same reason - a space that has grown tabs of the user's own is
+# no longer this plugin's alone to close.
 #
 # Returns non-zero when herdr could not be asked at all. That has to be
 # distinguishable from "no share is running": treating a failed lookup
@@ -135,7 +147,23 @@ share_spaces() {
     [ -n "$out" ] || return 1
     printf '%s' "$out" | jq -r --arg t "$OWNER_TOKEN" '
         (.result.workspaces // error("no workspace list"))
-        | map(select((.tokens // {})[$t] != null) | .workspace_id) | .[]' 2>/dev/null
+        | map(select((.tokens // {})[$t] != null))
+        | .[] | "\(.workspace_id) \(.tab_count // 1)"' 2>/dev/null
+}
+
+# Undo a half-built share and report why it failed. Closing the space is
+# the undo - it takes whatever got created in it - so a close that fails
+# has to be said out loud rather than swallowed under the original
+# error: by the time the last step can fail the pane is already open,
+# which means the session is already being broadcast. An error about a
+# shell tab, with a live link still running behind it, is the wrong
+# thing to leave a user holding.
+abort_start() { # abort_start <workspace> <what-failed>
+    "$HERDR" workspace close "$1" >/dev/null 2>&1 && die "$2"
+    die "$2
+  The shellshare space ($1) could not be closed either, so it may still
+  be open - and if the share had started, still broadcasting. Close it
+  with: herdr workspace close $1"
 }
 
 # --------------------------------------------------------------------
@@ -146,7 +174,7 @@ action_toggle() {
     # Stop: closing the space takes the pane with it, and shellshare
     # exits on the pane's SIGHUP and flushes what it has. Only ever a
     # space this plugin stamped - never one the user made.
-    local spaces ws alive=""
+    local spaces ws tabs alive="" yours=""
     spaces=$(share_spaces) ||
         die "could not ask herdr which spaces exist, so refusing to guess whether you are sharing"
     if [ -n "$spaces" ]; then
@@ -155,9 +183,24 @@ action_toggle() {
         # reason one failed close fails the whole stop - reporting
         # "stopped sharing" while a link is still fed live bytes is the
         # one lie this action must never tell.
-        for ws in $spaces; do
-            "$HERDR" workspace close "$ws" >/dev/null 2>&1 || alive="$alive $ws"
-        done
+        #
+        # Except a space the user has moved into. The action focuses the
+        # share when it starts, so opening a tab there is an easy thing
+        # to do - and closing the space would take that tab with it.
+        # Ours to close means ours alone.
+        while read -r ws tabs; do
+            [ -n "$ws" ] || continue
+            if [ "${tabs:-1}" -gt 1 ]; then
+                yours="$yours $ws"
+            else
+                "$HERDR" workspace close "$ws" >/dev/null 2>&1 || alive="$alive $ws"
+            fi
+        done <<EOF
+$spaces
+EOF
+        [ -z "$yours" ] ||
+            die "the shellshare space has tabs of your own in it ($yours), and stopping closes the whole space.
+  Close its \"$TAB_LABEL\" tab to stop sharing, or move your tabs out and press again"
         [ -z "$alive" ] ||
             die "could not stop every shellshare space - still broadcasting:$alive
   Close them by hand (herdr workspace close <id>); the link stays live until you do"
@@ -182,14 +225,12 @@ action_toggle() {
     # not be started: it would broadcast with no way to turn it off.
     if ! "$HERDR" workspace report-metadata "$ws" \
         --source "$PLUGIN_ID" --token "$OWNER_TOKEN=1" >/dev/null 2>&1; then
-        "$HERDR" workspace close "$ws" >/dev/null 2>&1
-        die "could not mark the shellshare space as this plugin's, so refusing to start a share that could not be stopped"
+        abort_start "$ws" "could not mark the shellshare space as this plugin's, so refusing to start a share that could not be stopped"
     fi
 
     if ! "$HERDR" plugin pane open --plugin "$PLUGIN_ID" \
         --entrypoint live --placement tab --no-focus --workspace "$ws" >/dev/null; then
-        "$HERDR" workspace close "$ws" >/dev/null 2>&1
-        die "could not open the shellshare pane (see: herdr plugin log list --plugin shellshare)"
+        abort_start "$ws" "could not open the shellshare pane (see: herdr plugin log list --plugin shellshare)"
     fi
 
     # The space came with a shell tab; the share does not need it, and
@@ -198,8 +239,7 @@ action_toggle() {
     # user's next shell in that tab would be destroyed by the stop.
     # (Order matters: herdr closes a space when its last tab goes.)
     if [ -z "$root_tab" ] || ! "$HERDR" tab close "$root_tab" >/dev/null 2>&1; then
-        "$HERDR" workspace close "$ws" >/dev/null 2>&1
-        die "could not close the shellshare space's own shell tab, which would outlive the broadcast and keep claiming to be live"
+        abort_start "$ws" "could not close the shellshare space's own shell tab, which would outlive the broadcast and keep claiming to be live"
     fi
     "$HERDR" workspace focus "$ws" >/dev/null 2>&1 || true
 }
@@ -282,10 +322,11 @@ pane_live() {
     # pane, Ctrl+C INTs it), which bash does not run EXIT traps for
     # unless the signal itself is trapped.
     trap 'rm -f "$fifo"' EXIT
-    # $ss_pid is empty until the broadcaster starts; by the time a
-    # signal can arrive it is set, and killing it explicitly means a
-    # signal aimed at this pane alone cannot orphan a live broadcast.
-    trap 'kill "${ss_pid:-0}" 2>/dev/null; rm -f "$fifo" "$err"; exit 0' HUP INT TERM
+    # Killing the broadcaster explicitly means a signal aimed at this
+    # pane alone cannot orphan a live broadcast. Guarded because $ss_pid
+    # is empty until it starts, and `kill ""` would default to 0 - the
+    # whole process group, which is not this pane's to signal.
+    trap 'release_space; [ -n "${ss_pid:-}" ] && kill "$ss_pid" 2>/dev/null; rm -f "$fifo" "$err"; exit 0' HUP INT TERM
 
     # The mirror: a second herdr client attached to this session, inside
     # shellshare's PTY.
@@ -351,6 +392,7 @@ pane_live() {
         # A clean stop closes this pane (and with it the space), so
         # there is nobody left to read a goodbye - and nothing to
         # diagnose afterwards.
+        release_space
         rm -f "$err"
         exit 0
     fi

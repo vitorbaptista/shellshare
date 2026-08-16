@@ -30,7 +30,9 @@ command = ["bash", "herdr-plugin/share.sh", "toggle"]
 # stops when it closes. The action opens it as the only tab of a space
 # it creates for the purpose - a session-wide share does not belong
 # inside one project's space, and since herdr closes a space with its
-# last tab, that space is live exactly while the broadcast is.
+# last tab, that space goes when the broadcast does. (A share that
+# FAILED keeps its space, relabelled, to hold the error where it can be
+# read.)
 [[panes]]
 id = "live"
 title = "Shellshare · live"

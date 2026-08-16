@@ -52,6 +52,11 @@ Ctrl+C in it — all three do the same thing. The link keeps showing the
 final frame until the server's room TTL evicts it (~6 hours on
 shellshare.net).
 
+If you open a tab of your own in the ◉ shellshare space, the action
+stops stopping: closing the space would close your tab too, so it says
+so and leaves everything running. Close the ◉ live tab to end the share
+by hand, or move your tab elsewhere and press again.
+
 One keybinding is the whole interface. Add to
 `~/.config/herdr/config.toml`, then `herdr server reload-config`:
 
