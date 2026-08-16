@@ -10,7 +10,13 @@ homepage = "https://shellshare.net"
 readme = "README.md"
 keywords = ["terminal", "broadcast", "shell", "live", "tty"]
 categories = ["command-line-utilities", "network-programming"]
-rust-version = "1.75"
+# What the dependency graph actually requires, not an aspiration: idna
+# (via url -> reqwest) pulls in icu_* 2.x, which declares 1.86. The old
+# 1.75 had been untrue for a while, because CI builds on stable and never
+# exercised it - so a 1.75-1.85 toolchain got a compile error out of rustc
+# instead of cargo's clean "package requires a newer rustc". The `msrv` job
+# in e2e.yml reads this line and builds against it, so it stays true.
+rust-version = "1.86"
 
 [features]
 default = []

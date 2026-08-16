@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import subprocess
+import time
 
 import pytest
 import requests
@@ -21,6 +22,7 @@ from conftest import (
     CLI_SESSION_TIMEOUT,
     SERVER_URL,
     SocketListener,
+    open_records,
     parse_share_key,
     random_id,
     wait_for_content,
@@ -147,6 +149,53 @@ class TestExecSubcommand:
         events = parse_json_events(proc.stdout)
         assert events[-1] == {"event": "end", "exit_code": 3}, \
             f"stdout was: {proc.stdout!r}"
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="recipe uses a POSIX shell")
+    def test_exec_survives_a_silent_orphan(self, unique_room, unique_password):
+        """A descendant outliving the command must not hold the session open.
+
+        The command's exit is not the end of its terminal: anything it left
+        running keeps the PTY open, so the drain waits for output that will
+        never come. The orphan here ignores SIGHUP and prints nothing, so
+        only a clock can end that wait - and a clock only helps if the
+        waiting is interruptible, which a plain blocking read is not.
+
+        The tail must still survive the deadline and the JSON contract must
+        still close cleanly, or this trades a hang for a quieter bug.
+        """
+        marker = f"orphan-marker-{random_id()}"
+        # The orphan outlives the deadline by a wide margin on purpose: if
+        # the drain ever goes back to waiting for it, that has to fail
+        # unmistakably rather than land just the wrong side of the bound
+        recipe = f'trap "" HUP; (trap "" HUP; sleep 30) & echo {marker}; exit 3'
+        start = time.monotonic()
+        proc = subprocess.run(
+            CLI_COMMAND
+            + ["exec", "--json", "-s", SERVER_URL, "-r", unique_room, "-W", unique_password]
+            + ["--", "sh", "-c", recipe],
+            capture_output=True,
+            text=True,
+            timeout=CLI_SESSION_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+        elapsed = time.monotonic() - start
+        assert proc.returncode == 3
+        # Generous next to the drain's own grace period, tight enough that
+        # an unbounded wait (which only ends when the orphan does) fails
+        assert elapsed < 8, f"exec took {elapsed:.1f}s to give up on the orphan"
+        events = parse_json_events(proc.stdout)
+        assert events[-1] == {"event": "end", "exit_code": 3}, \
+            f"stdout was: {proc.stdout!r}"
+        assert marker in proc.stdout, \
+            f"output produced before the orphan was lost: {proc.stdout!r}"
+        # And reached the room, not just the local terminal: giving up on
+        # the orphan must not mean giving up on delivering what came
+        # before it. The broadcast is encrypted, so read it the way a
+        # viewer would, with the key from the share link.
+        key = parse_share_key(events[0]["url"])
+        snapshot = requests.get(f"{SERVER_URL}/r/{unique_room}.bin")
+        assert marker.encode() in open_records(key, snapshot.content), \
+            "the drain gave up before broadcasting the output it had"
 
     def test_exec_requires_command(self):
         proc = subprocess.run(

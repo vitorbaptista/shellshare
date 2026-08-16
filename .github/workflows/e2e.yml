@@ -16,6 +16,31 @@ permissions:
   contents: read
 
 jobs:
+  # Everything else here builds on stable, so `rust-version` is a claim
+  # nothing tests - which is how it came to be three years out of date.
+  # Checking it costs one job and turns "we think this still builds on the
+  # oldest toolchain we advertise" into something we know.
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the declared MSRV
+        id: msrv
+        run: |
+          version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$version" || { echo "no rust-version in Cargo.toml" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo check --all-targets
+
   e2e:
     strategy:
       matrix:
