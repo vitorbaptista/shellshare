@@ -561,17 +561,7 @@
     root.setProperty('--page-fg', colors.foreground);
     root.setProperty('--page-muted', muted);
     root.setProperty('--page-accent', accent);
-    // The first apply must land instantly, with no fade from the
-    // pre-size default; only a live re-theme animates. Next frame, so
-    // this apply isn't caught by the transition.
-    if (!pageChromeApplied) {
-      pageChromeApplied = true;
-      requestAnimationFrame(function () {
-        document.body.classList.add('theme-transitions');
-      });
-    }
   }
-  var pageChromeApplied = false;
 
   // The `fullscreen` class on #terminal drives all layout, so browsers
   // without requestFullscreen on divs (iOS Safari) still get a

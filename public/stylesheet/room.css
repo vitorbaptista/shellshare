@@ -46,12 +46,10 @@ body {
   color: var(--page-fg, #cccccc);
 }
 
-/* Animate only live theme changes (the broadcaster re-themes mid-session),
-   not the first paint - the initial apply must land instantly so there's
-   no fade from the pre-size default into the real theme. */
-body.theme-transitions {
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
+/* Deliberately no transition on these. The only theme change a viewer
+   reliably sees is the fallback above becoming the broadcast's, and that
+   one is a repaint rather than a change: animating it is the flash, not
+   the cure. */
 
 /* The fallbacks below are tango's accent (bright blue) and muted tone,
    matching the script's output for the default theme - see above. */
