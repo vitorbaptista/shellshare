@@ -18,9 +18,54 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+#[cfg(unix)]
 use signal_hook::consts::SIGWINCH;
 #[cfg(unix)]
 use signal_hook::iterator::{Signals, SignalsInfo};
+
+/// Bounds teardown, not throughput: the wait ends the moment the terminal
+/// has bytes, so it costs no output latency.
+#[cfg(unix)]
+const POLL_TIMEOUT_MS: libc::c_int = 100;
+
+#[cfg(unix)]
+enum Wait {
+    Readable,
+    Again,
+    Failed,
+}
+
+/// Hang-up counts as readable and must be read: the last output of a short
+/// command arrives with `POLLHUP` already set beside `POLLIN`, so treating
+/// it as the end would truncate the tail of every `exec -- echo hi`. The
+/// read that follows reports the real end.
+///
+/// A signal means "wait again" - `SA_RESTART` covers `read` but not
+/// `poll`, so a terminal resize interrupts this routinely. Anything else
+/// means we can no longer tell when the terminal has something to say:
+/// end the session, as a failing read always did, rather than stall on a
+/// wait that will keep failing or fall through to a read nothing can
+/// interrupt.
+#[cfg(unix)]
+fn wait_readable(fd: &OwnedFd, timeout_ms: libc::c_int) -> Wait {
+    let mut pollfd = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid, initialized entry, and `fd` outlives the call.
+    let ready = unsafe { libc::poll(&raw mut pollfd, 1, timeout_ms) };
+    match ready {
+        0 => Wait::Again,
+        n if n > 0 => Wait::Readable,
+        _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {
+            Wait::Again
+        }
+        _ => Wait::Failed,
+    }
+}
 
 /// RAII guard to enable/restore terminal raw mode.
 ///
@@ -137,6 +182,34 @@ pub fn run_script_mode(
         cmd.env(super::ENV_ROOM, session.room);
     }
 
+    // A descriptor of our own to wait on. The master's own would do until
+    // the drain watchdog closes it, at which point the number could be
+    // reissued to one of the sender thread's sockets and the reader would
+    // quietly wait on that. Readiness belongs to the terminal, so this and
+    // portable-pty's reader see the same bytes - and it is that reader's
+    // EIO-to-EOF mapping that ends the loop, where a raw read would report
+    // an error.
+    //
+    // Before the spawn, because failing here is fatal - without it the
+    // reader parks in a read nothing can interrupt - and refusing after
+    // the spawn would strand a running command.
+    #[cfg(unix)]
+    let poll_fd = {
+        let fd = pair
+            .master
+            .as_raw_fd()
+            .ok_or("this PTY has no descriptor to wait on")?;
+        // SAFETY: `fd` is the live master, owned by `pair`. Close-on-exec
+        // because plain dup() drops the flag portable-pty set on it and
+        // the child is spawned right below.
+        let duped = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+        if duped < 0 {
+            return Err(Box::new(std::io::Error::last_os_error()));
+        }
+        // SAFETY: a fresh, exclusively-owned descriptor.
+        unsafe { OwnedFd::from_raw_fd(duped) }
+    };
+
     let mut child = pair.slave.spawn_command(cmd)?;
 
     let master = pair.master;
@@ -250,6 +323,36 @@ pub fn run_script_mode(
             }
         }
 
+        // Take what the reader still owes us. Only the EOF exit leaves the
+        // channel empty: `running` going false breaks the loop wherever it
+        // stood, and `shutdown` flushes only what already reached the
+        // transport, so the paths that exist to bound the wait would
+        // otherwise drop output the terminal had already produced.
+        //
+        // Waiting, not just draining what is queued, because the reader
+        // sees the same flag and may be between its read and its send -
+        // measured as a ~50ms window in which output reaches the room with
+        // this loop and is lost without it. Its sender dropping is the
+        // real end; the deadline only keeps this from becoming the
+        // unbounded wait the rest of the teardown just removed, and gates
+        // every pass because each send can itself sit on a socket timeout.
+        let size = TermSize {
+            cols: http_cols.load(Ordering::SeqCst),
+            rows: http_rows.load(Ordering::SeqCst),
+        };
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(data) => {
+                    if transport.send(&data, size).is_err() {
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+
         // Normal end (shell exit or Ctrl+C): flush pending output, then
         // close - the room stays up so the link keeps working
         transport.shutdown();
@@ -264,6 +367,19 @@ pub fn run_script_mode(
         loop {
             if !running_clone.load(Ordering::SeqCst) {
                 break;
+            }
+
+            // Bounded, so the check above stays reachable: the drain
+            // watchdog only flips that flag, and a thread parked in a
+            // blocking read never gets back to it. Enough while whatever
+            // holds the slave open keeps writing, since each write returns
+            // from read() - but a silent survivor (`sleep 30 &` under a
+            // shell ignoring SIGHUP) gives it nothing to return from.
+            #[cfg(unix)]
+            match wait_readable(&poll_fd, POLL_TIMEOUT_MS) {
+                Wait::Readable => {}
+                Wait::Again => continue,
+                Wait::Failed => break,
             }
 
             match reader.read(&mut read_buffer) {
@@ -285,6 +401,13 @@ pub fn run_script_mode(
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
                         thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    // A signal is not the PTY closing. SA_RESTART means the
+                    // kernel resumes the read and this shouldn't surface,
+                    // but treating it as EOF would end a live session on a
+                    // stray signal.
+                    if e.kind() == std::io::ErrorKind::Interrupted {
                         continue;
                     }
                     // Likely the PTY closed
@@ -390,10 +513,14 @@ pub fn run_script_mode(
 
     // Close our copy of the slave BEFORE joining the reader thread.
     // The child has exited (or been killed and reaped, bounded) in every
-    // path that reaches here, so this is safe on Windows too (portable-pty
-    // only requires the slave to outlive the child). Without this, the
-    // master never sees EOF and the PTY reader thread can block in read()
-    // forever, hanging the join below.
+    // path that reaches here, so this is safe (portable-pty only requires
+    // the slave to outlive the child). Without this, the master never
+    // sees EOF and the PTY reader thread can block in read() forever,
+    // hanging the join below.
+    //
+    // Unix only, in effect: on Windows both handles refer to one
+    // refcounted ConPTY, so this releases a reference and closes nothing.
+    // See the watchdog below.
     drop(pair.slave);
 
     // Do NOT flip `running` before joining: a short-lived child (e.g.
@@ -405,13 +532,21 @@ pub fn run_script_mode(
     // Ctrl+C `running` is already false, keeping interrupts immediate.
     //
     // The drain must be bounded, though: an orphan that outlived the
-    // child (e.g. `ping example.com & exit`) holds the slave open and
-    // keeps writing, so EOF never comes. The watchdog flips the flag
-    // after a grace period and the reader stops at its next read.
+    // child (e.g. `ping example.com & exit`) holds the slave open, so EOF
+    // never comes. After a grace period the watchdog gives up on each
+    // platform's terms. `running` is what stops a Unix reader, which
+    // reaches the flag between bounded waits. Dropping the master is the
+    // only lever on a Windows one: it is the last reference to the
+    // pseudoconsole, and closing that releases the pipe the reader is
+    // parked on. The resize loop above was the master's only user, and
+    // the reader holds its own descriptors, so this costs Unix nothing.
+    // Dropped before the flag, so whatever the close shakes loose is
+    // still something the reader will relay.
     let drain_watchdog = {
         let running = running.clone();
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(2));
+            drop(master);
             running.store(false, Ordering::SeqCst);
         })
     };
