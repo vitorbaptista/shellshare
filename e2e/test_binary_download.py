@@ -49,7 +49,7 @@ class TestBinaryDownload:
 
     def test_all_os_query_params_serve_a_binary(self):
         # Every documented ?os= value must yield a download, embedded or not
-        for os_param in ["linux", "windows", "win", "mac", "macos", "mac-intel", "mac-arm"]:
+        for os_param in ["linux", "linux-arm", "windows", "win", "mac", "macos", "mac-intel", "mac-arm"]:
             status, headers = _fetch_headers(f"/bin/shellshare?os={os_param}")
             assert status == 200, f"?os={os_param} returned {status}"
             assert "attachment" in headers.get("Content-Disposition", ""), (
@@ -75,7 +75,7 @@ class TestBinaryDownload:
 
         _, headers = _fetch_headers("/bin/shellshare?os=windows")
         assert _disposition_filename(headers) == "shellshare.exe"
-        for os_param in ["linux", "mac", "mac-arm"]:
+        for os_param in ["linux", "linux-arm", "mac", "mac-arm"]:
             _, headers = _fetch_headers(f"/bin/shellshare?os={os_param}")
             assert _disposition_filename(headers) == "shellshare"
 

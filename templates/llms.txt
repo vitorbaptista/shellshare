@@ -8,7 +8,7 @@ Site: https://shellshare.net
 
 `npx shellshare` (needs Node.js), or download the static binary then run
 `chmod +x shellshare && ./shellshare`:
-https://get.shellshare.net/?os=linux  (also: mac, mac-arm, windows; auto-detected from the User-Agent if omitted)
+https://get.shellshare.net/?os=linux  (also: linux-arm, mac, mac-arm, windows; auto-detected from the User-Agent if omitted)
 
 ## Broadcast your terminal
 

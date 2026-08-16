@@ -12,6 +12,7 @@ use std::path::PathBuf;
 #[cfg(feature = "embed-binaries")]
 const REQUIRED_BINARIES: &[&str] = &[
     "shellshare-linux-x86_64",
+    "shellshare-linux-aarch64",
     "shellshare-windows-x86_64.exe",
     "shellshare-macos-x86_64",
     "shellshare-macos-aarch64",

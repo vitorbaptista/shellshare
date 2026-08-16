@@ -58,6 +58,11 @@ jobs:
             target: x86_64-unknown-linux-musl
             artifact: bare-linux-x86_64
             binary: shellshare
+          # Pinned because GitHub ships no `ubuntu-latest-arm` label
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: bare-linux-aarch64
+            binary: shellshare
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: bare-windows-x86_64
@@ -86,7 +91,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install musl tools (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build bare binary
@@ -114,6 +119,10 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: shellshare-linux-x86_64
+            binary: shellshare
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: shellshare-linux-aarch64
             binary: shellshare
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -143,7 +152,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install musl tools (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       # Download all bare binaries from Pass 1
@@ -152,6 +161,12 @@ jobs:
         with:
           name: bare-linux-x86_64
           path: binaries-temp/linux
+
+      - name: Download Linux ARM bare binary
+        uses: actions/download-artifact@v8
+        with:
+          name: bare-linux-aarch64
+          path: binaries-temp/linux-arm
 
       - name: Download Windows bare binary
         uses: actions/download-artifact@v8
@@ -177,6 +192,7 @@ jobs:
         run: |
           mkdir -p binaries
           cp binaries-temp/linux/shellshare binaries/shellshare-linux-x86_64
+          cp binaries-temp/linux-arm/shellshare binaries/shellshare-linux-aarch64
           cp binaries-temp/windows/shellshare.exe binaries/shellshare-windows-x86_64.exe
           cp binaries-temp/macos-intel/shellshare binaries/shellshare-macos-x86_64
           cp binaries-temp/macos-arm/shellshare binaries/shellshare-macos-aarch64
@@ -187,6 +203,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path binaries
           Copy-Item binaries-temp/linux/shellshare binaries/shellshare-linux-x86_64
+          Copy-Item binaries-temp/linux-arm/shellshare binaries/shellshare-linux-aarch64
           Copy-Item binaries-temp/windows/shellshare.exe binaries/shellshare-windows-x86_64.exe
           Copy-Item binaries-temp/macos-intel/shellshare binaries/shellshare-macos-x86_64
           Copy-Item binaries-temp/macos-arm/shellshare binaries/shellshare-macos-aarch64
@@ -258,6 +275,12 @@ jobs:
           name: shellshare-linux-x86_64
           path: release/linux
 
+      - name: Download Linux ARM binary
+        uses: actions/download-artifact@v8
+        with:
+          name: shellshare-linux-aarch64
+          path: release/linux-arm
+
       - name: Download Windows binary
         uses: actions/download-artifact@v8
         with:
@@ -280,10 +303,11 @@ jobs:
         run: |
           mkdir -p assets
           cp release/linux/shellshare assets/shellshare-linux-x86_64
+          cp release/linux-arm/shellshare assets/shellshare-linux-aarch64
           cp release/windows/shellshare.exe assets/shellshare-windows-x86_64.exe
           cp release/macos-intel/shellshare assets/shellshare-macos-x86_64
           cp release/macos-arm/shellshare assets/shellshare-macos-aarch64
-          chmod +x assets/shellshare-linux-x86_64 assets/shellshare-macos-x86_64 assets/shellshare-macos-aarch64
+          chmod +x assets/shellshare-linux-x86_64 assets/shellshare-linux-aarch64 assets/shellshare-macos-x86_64 assets/shellshare-macos-aarch64
           ls -la assets/
 
       - name: Create GitHub Release
@@ -291,6 +315,7 @@ jobs:
         with:
           files: |
             assets/shellshare-linux-x86_64
+            assets/shellshare-linux-aarch64
             assets/shellshare-windows-x86_64.exe
             assets/shellshare-macos-x86_64
             assets/shellshare-macos-aarch64

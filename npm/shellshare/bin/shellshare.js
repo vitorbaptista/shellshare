@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 
 const PLATFORMS = {
   'linux x64': 'shellshare-linux-x64',
+  'linux arm64': 'shellshare-linux-arm64',
   'darwin x64': 'shellshare-darwin-x64',
   'darwin arm64': 'shellshare-darwin-arm64',
   // "windows" not "win32": npm's spam filter rejects new win32-* names

@@ -34,6 +34,6 @@ Full agent-facing docs: [AGENTS.md](https://github.com/vitorbaptista/shellshare/
 
 ## About this package
 
-This package is a thin launcher around the prebuilt `shellshare` binary for your platform (Linux x64, macOS x64/arm64, Windows x64), fetched automatically through npm's `optionalDependencies` — no postinstall scripts.
+This package is a thin launcher around the prebuilt `shellshare` binary for your platform (Linux x64/arm64, macOS x64/arm64, Windows x64), fetched automatically through npm's `optionalDependencies` — no postinstall scripts.
 
 Docs, FAQ and other install methods: [shellshare.net](https://shellshare.net) · Source: [github.com/vitorbaptista/shellshare](https://github.com/vitorbaptista/shellshare)

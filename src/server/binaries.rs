@@ -13,16 +13,18 @@ use axum::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     LinuxX86_64,
+    LinuxAarch64,
     WindowsX86_64,
     MacosX86_64,
     MacosAarch64,
 }
 
 impl Platform {
-    /// Supports: linux, windows, win, mac, macos, mac-intel, mac-arm
+    /// Supports: linux, linux-arm, windows, win, mac, macos, mac-intel, mac-arm
     pub fn from_query_param(os: &str) -> Option<Self> {
         match os.to_lowercase().as_str() {
             "linux" => Some(Self::LinuxX86_64),
+            "linux-arm" => Some(Self::LinuxAarch64),
             "windows" | "win" => Some(Self::WindowsX86_64),
             "mac" | "macos" | "mac-intel" => Some(Self::MacosX86_64),
             "mac-arm" => Some(Self::MacosAarch64),
@@ -32,13 +34,14 @@ impl Platform {
 
     pub fn from_user_agent(user_agent: &str) -> Option<Self> {
         let ua = user_agent.to_lowercase();
+        let is_arm = ua.contains("arm64") || ua.contains("aarch64");
 
         if ua.contains("windows") {
             return Some(Self::WindowsX86_64);
         }
 
         if ua.contains("mac") || ua.contains("darwin") {
-            if ua.contains("arm64") || ua.contains("aarch64") {
+            if is_arm {
                 return Some(Self::MacosAarch64);
             }
             // Default to Intel for compatibility (runs on ARM via Rosetta)
@@ -46,7 +49,11 @@ impl Platform {
         }
 
         if ua.contains("linux") {
-            return Some(Self::LinuxX86_64);
+            return Some(if is_arm {
+                Self::LinuxAarch64
+            } else {
+                Self::LinuxX86_64
+            });
         }
 
         None
@@ -55,7 +62,9 @@ impl Platform {
     pub const fn filename(self) -> &'static str {
         match self {
             Self::WindowsX86_64 => "shellshare.exe",
-            Self::LinuxX86_64 | Self::MacosX86_64 | Self::MacosAarch64 => "shellshare",
+            Self::LinuxX86_64 | Self::LinuxAarch64 | Self::MacosX86_64 | Self::MacosAarch64 => {
+                "shellshare"
+            }
         }
     }
 
@@ -66,6 +75,12 @@ impl Platform {
                 include_bytes!(concat!(
                     env!("SHELLSHARE_BINARIES_DIR"),
                     "/shellshare-linux-x86_64"
+                ))
+            }
+            Self::LinuxAarch64 => {
+                include_bytes!(concat!(
+                    env!("SHELLSHARE_BINARIES_DIR"),
+                    "/shellshare-linux-aarch64"
                 ))
             }
             Self::WindowsX86_64 => {
@@ -99,7 +114,7 @@ impl Platform {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct BinaryDownloadQuery {
-    /// Optional OS override: linux, windows, win, mac, macos, mac-intel, mac-arm
+    /// Optional OS override: linux, linux-arm, windows, win, mac, macos, mac-intel, mac-arm
     pub os: Option<String>,
 }
 
