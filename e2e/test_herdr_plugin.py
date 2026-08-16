@@ -415,10 +415,15 @@ class TestSessionShare:
 
         assert "workspace create --label" in calls
         assert "shellshare" in calls.split("workspace create --label")[1].split("\n")[0]
-        # The pane goes into that space, not the caller's.
-        pane_open = [c for c in calls.splitlines() if "plugin pane open" in c]
-        assert pane_open and "--workspace w9" in pane_open[0], pane_open
-        assert "--placement tab" in pane_open[0]
+        # The pane goes into that space, not the caller's - spelled in
+        # full, because every part of it is load-bearing and a stub will
+        # accept a call real herdr would not: the plugin and entrypoint
+        # name the pane to open, --workspace puts it in the new space,
+        # and --no-focus keeps the layout still until it is in place.
+        assert [c for c in calls.splitlines() if "plugin pane open" in c] == [
+            "plugin pane open --plugin shellshare --entrypoint live "
+            "--placement tab --no-focus --workspace w9"
+        ], calls
         # The space's own shell tab is closed, and it ends up focused so
         # the link is in front of the user who just asked to share.
         assert "tab close w9:t1" in calls
@@ -725,11 +730,18 @@ class TestSessionShare:
             ), f"the dead broadcast never reported itself: {calls()!r}"
             assert "--clear-token shellshare_live" in calls(), \
                 f"the dead share still counts as one: {calls()!r}"
-            rename = [
+            # The whole command, not just "it does not say live": a
+            # rename herdr would reject still logs here, and the token
+            # is given up on the strength of it succeeding. (There is
+            # more than one - die_pane's, then the retry on the way out
+            # - and every one has to be well formed.)
+            renames = [
                 c for c in calls().splitlines()
                 if c.startswith("workspace rename")
-            ][0]
-            assert "shellshare" in rename and "live" not in rename, rename
+            ]
+            assert renames and set(renames) == {
+                "workspace rename w1 ✗ shellshare (stopped)"
+            }, renames
             # The pane says what it knows. A mirror that dies inside
             # herdr writes to the PTY (i.e. into the broadcast), not to
             # shellshare's stderr, so the exit code is the diagnosis

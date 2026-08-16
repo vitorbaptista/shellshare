@@ -152,8 +152,11 @@ shellshare refuse to start, and the pane shows why.
 
 The share tab shows what went wrong and waits for you to read it. If a
 broadcast dies on its own, the space is renamed **✗ shellshare
-(stopped)** — so the sidebar never claims you are live when you are not
-— and the tab stays open with the reason.
+(stopped)** and the tab stays open with the reason, so the sidebar does
+not claim you are live when you are not. (That rename is the one thing
+here that is best-effort: if herdr refuses it, a space you have your own
+tab in can keep the old name after the share has stopped. Rename or
+close it yourself — nothing is broadcasting.)
 
 `shellshare`'s own stderr is kept alongside:
 
@@ -166,7 +169,9 @@ herdr plugin log list --plugin shellshare   # what herdr ran, and when
 
 - Linux and macOS (the plugin is bash; shellshare itself runs on
   Windows).
-- One share per herdr session.
+- One share per herdr session in practice — the action toggles the one
+  that is running. Two presses at literally the same moment can start
+  two, and then one press stops both.
 - herdr's right-click menus are built-in only, so the action lives on a
   keybinding and `plugin action invoke`. The manifest already declares
   its contexts, so it would appear automatically if herdr ever surfaces
