@@ -15,34 +15,51 @@
 # That pane lives in a space of its own, created when the share starts.
 # What is being shared is the whole session, so parking it inside one
 # project's space would misfile it - and herdr closes a space when its
-# last tab goes, so the space exists exactly as long as the broadcast
-# does. A labelled row that appears in the spaces sidebar while you are
-# live, and vanishes when you stop, is the status indicator; it needs no
-# sidebar configuration and is visible from wherever you are working.
+# last tab goes, so the space is gone as soon as the broadcast is. A
+# labelled row that appears in the spaces sidebar while you are live is
+# the status indicator; it needs no sidebar configuration and is visible
+# from wherever you are working. (The one thing that outlives the
+# broadcast is a space whose share FAILED: it is kept, relabelled, to
+# hold the error where it can be read.)
 #
 # herdr is also the only place live-share state is kept. The toggle asks
-# it whether a space with our label exists rather than keeping a pid
-# file: a file would go stale across a crash or a reboot, and acting on
-# a stale herdr id (they are small per-server counters, reused after a
-# restart) means closing somebody else's space. Asking cannot go stale.
+# it which spaces are shares rather than keeping a pid file: a file
+# would go stale across a crash or a reboot, and acting on a stale herdr
+# id (they are small per-server counters, reused after a restart) means
+# closing somebody else's space. Asking cannot go stale.
+#
+# What it asks about is the workspace metadata token this plugin stamps
+# on the space it creates - not the label. Stopping means closing a
+# space, which takes every tab in it, so that has to be authorised by
+# something the user cannot set by accident: a label is free text they
+# can type or rename into, a token is not. It also survives a rename,
+# so a renamed share is still a share and can still be stopped.
 #
 # bash 3.2 (macOS) compatible; needs jq.
 
 set -u
 
 HERDR="${HERDR_BIN_PATH:-herdr}"
+PLUGIN_ID="${HERDR_PLUGIN_ID:-shellshare}"
 STATE_ROOT="${HERDR_PLUGIN_STATE_DIR:-}"
 CONFIG_FILE="${HERDR_PLUGIN_CONFIG_DIR:-}/config"
 
+# The workspace metadata token that marks a space as this plugin's, and
+# is the sole authority for closing one. Unlike the label it is not free
+# text the user can type, so a space of their own can never be mistaken
+# for a share - and it survives a rename, so a share they renamed can
+# still be found and stopped.
+OWNER_TOKEN=shellshare_live
+
 # The label of the space that exists while a share is live, and of the
-# tab inside it. Short: a spaces sidebar row is narrow. The label is
-# also how the toggle recognises its own space, so it must stay
-# distinctive.
+# tab inside it. Short: a spaces sidebar row is narrow. This is what the
+# user reads; it decides nothing.
 SPACE_LABEL="◉ shellshare"
 TAB_LABEL="◉ live"
 # What the space is renamed to when a broadcast dies on its own. The
-# pane stays open holding the error, but the label must stop saying
-# "live" - it is the only thing that answers "am I sharing?".
+# pane stays open holding the error, so the label has to stop saying
+# "live" to the user - the token that answers it for the toggle is
+# dropped at the same time.
 DEAD_LABEL="✗ shellshare (stopped)"
 
 umask 077
@@ -60,15 +77,20 @@ die() { # for actions: stderr lands in `herdr plugin log`
 # `read` blocks; when it does not (an automated run) the message has
 # already gone to stderr, which that caller kept.
 #
-# Parking here keeps the pane - and therefore its space - alive, and the
-# space's label is the only thing that answers "am I sharing?". So every
-# way of failing, before or after the link exists, has to correct the
-# label first: otherwise the sidebar claims a live share that is not
-# running, and the next keypress stops that corpse instead of starting
-# a share.
+# Parking here keeps the pane - and therefore its space - alive after
+# the broadcast is over. So every way of failing, before or after the
+# link exists, has to give the space up first: drop the token, so the
+# toggle no longer counts it as a live share and the next keypress
+# starts one, and relabel it, so the sidebar stops saying live to the
+# user. If either call fails the worst case is bounded - the toggle
+# closes a space of ours holding an error message, which costs the user
+# nothing they had.
 die_pane() {
-    [ -n "${HERDR_WORKSPACE_ID:-}" ] &&
+    if [ -n "${HERDR_WORKSPACE_ID:-}" ]; then
+        "$HERDR" workspace report-metadata "$HERDR_WORKSPACE_ID" \
+            --source "$PLUGIN_ID" --clear-token "$OWNER_TOKEN" >/dev/null 2>&1
         "$HERDR" workspace rename "$HERDR_WORKSPACE_ID" "$DEAD_LABEL" >/dev/null 2>&1
+    fi
     # Closing this pane must not take the diagnostics with it: the
     # message about to be printed points at that file.
     trap 'rm -f "${fifo:-}"; exit 1' HUP INT TERM
@@ -97,6 +119,11 @@ cfg() { # cfg <key>
 # usually none), one per line. This is the plugin's entire notion of
 # "am I sharing?" - herdr is asked, never told.
 #
+# Matched on the token, never the label: the answer authorises closing a
+# space, and closing one takes every tab in it with it. A user who
+# labels a space of their own "◉ shellshare" must not lose it, and a
+# share they renamed must still be stoppable.
+#
 # Returns non-zero when herdr could not be asked at all. That has to be
 # distinguishable from "no share is running": treating a failed lookup
 # as "not sharing" would turn a stop into a second broadcast.
@@ -106,9 +133,9 @@ share_spaces() {
     # An empty answer is not "no spaces" - jq would read it as one and
     # print nothing, which reads as "not sharing".
     [ -n "$out" ] || return 1
-    printf '%s' "$out" | jq -r --arg l "$SPACE_LABEL" '
+    printf '%s' "$out" | jq -r --arg t "$OWNER_TOKEN" '
         (.result.workspaces // error("no workspace list"))
-        | map(select(.label == $l) | .workspace_id) | .[]' 2>/dev/null
+        | map(select((.tokens // {})[$t] != null) | .workspace_id) | .[]' 2>/dev/null
 }
 
 # --------------------------------------------------------------------
@@ -118,18 +145,22 @@ action_toggle() {
 
     # Stop: closing the space takes the pane with it, and shellshare
     # exits on the pane's SIGHUP and flushes what it has. Only ever a
-    # space this plugin labelled - never one the user made.
-    local spaces ws stopped=0
+    # space this plugin stamped - never one the user made.
+    local spaces ws alive=""
     spaces=$(share_spaces) ||
         die "could not ask herdr which spaces exist, so refusing to guess whether you are sharing"
     if [ -n "$spaces" ]; then
         # Close every match, not just the first: two would mean two live
-        # broadcasts, and stopping has to mean stopped.
+        # broadcasts, and stopping has to mean stopped. For the same
+        # reason one failed close fails the whole stop - reporting
+        # "stopped sharing" while a link is still fed live bytes is the
+        # one lie this action must never tell.
         for ws in $spaces; do
-            "$HERDR" workspace close "$ws" >/dev/null 2>&1 &&
-                stopped=$((stopped + 1))
+            "$HERDR" workspace close "$ws" >/dev/null 2>&1 || alive="$alive $ws"
         done
-        [ "$stopped" -gt 0 ] || die "could not close the shellshare space ($spaces)"
+        [ -z "$alive" ] ||
+            die "could not stop every shellshare space - still broadcasting:$alive
+  Close them by hand (herdr workspace close <id>); the link stays live until you do"
         "$HERDR" notification show "Shellshare" \
             --body "Stopped sharing. The link stays readable until the room idles out (~6h)" \
             >/dev/null 2>&1 || true
@@ -146,15 +177,30 @@ action_toggle() {
     root_tab=$(printf '%s' "$created" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
     [ -n "$ws" ] || die "could not create the shellshare space (see: herdr plugin log list --plugin shellshare)"
 
-    if ! "$HERDR" plugin pane open --plugin "${HERDR_PLUGIN_ID:-shellshare}" \
+    # Claim it before anything runs in it. The token is what makes this
+    # space stoppable later, so a share that could not be stamped must
+    # not be started: it would broadcast with no way to turn it off.
+    if ! "$HERDR" workspace report-metadata "$ws" \
+        --source "$PLUGIN_ID" --token "$OWNER_TOKEN=1" >/dev/null 2>&1; then
+        "$HERDR" workspace close "$ws" >/dev/null 2>&1
+        die "could not mark the shellshare space as this plugin's, so refusing to start a share that could not be stopped"
+    fi
+
+    if ! "$HERDR" plugin pane open --plugin "$PLUGIN_ID" \
         --entrypoint live --placement tab --no-focus --workspace "$ws" >/dev/null; then
         "$HERDR" workspace close "$ws" >/dev/null 2>&1
         die "could not open the shellshare pane (see: herdr plugin log list --plugin shellshare)"
     fi
 
-    # The space came with a shell tab; the share does not need it.
+    # The space came with a shell tab; the share does not need it, and
+    # must not keep it: a tab that outlives the broadcast holds the space
+    # open, so the sidebar would claim a share that has ended - and the
+    # user's next shell in that tab would be destroyed by the stop.
     # (Order matters: herdr closes a space when its last tab goes.)
-    [ -n "$root_tab" ] && "$HERDR" tab close "$root_tab" >/dev/null 2>&1
+    if [ -z "$root_tab" ] || ! "$HERDR" tab close "$root_tab" >/dev/null 2>&1; then
+        "$HERDR" workspace close "$ws" >/dev/null 2>&1
+        die "could not close the shellshare space's own shell tab, which would outlive the broadcast and keep claiming to be live"
+    fi
     "$HERDR" workspace focus "$ws" >/dev/null 2>&1 || true
 }
 
@@ -174,9 +220,12 @@ pane_live() {
     elif command -v shellshare >/dev/null 2>&1; then
         ss=shellshare
     else
+        # Not `npx -y shellshare`, which shellshare.net leads with: it
+        # runs a copy and leaves nothing behind, so the next press would
+        # land here again. The plugin needs a binary that stays.
         die_pane "could not find the shellshare binary.
-  Install it (https://shellshare.net - npx -y shellshare, or a static
-  binary) or set shellshare_bin= in $CONFIG_FILE"
+  Put one on your PATH (npm i -g shellshare, or a static binary from
+  https://get.shellshare.net), or set shellshare_bin= in $CONFIG_FILE"
     fi
     # --cols/--rows arrived in shellshare 3.12. Without them the mirror
     # attaches at 80x24 and drags the real session down to that size, so

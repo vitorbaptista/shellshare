@@ -40,10 +40,12 @@ A space called **◉ shellshare** appears with your link in it, and a QR
 code to scan it onto a phone. Copy the link, switch back to your own
 space, and carry on — viewers follow whatever tab you are looking at.
 
-That space is the indicator: it exists for exactly as long as you are
-broadcasting, and you can see it from wherever you are working. What is
-being shared is the whole session, so it lives at the session level
-rather than inside one of your projects.
+That space is the indicator: it is there while you are broadcasting and
+gone when you stop, and you can see it from wherever you are working.
+(The exception is a share that *failed* — that space stays, relabelled
+**✗ shellshare (stopped)**, to hold the error.) What is being shared is
+the whole session, so it lives at the session level rather than inside
+one of your projects.
 
 To stop: run the action again, close the ◉ shellshare space, or press
 Ctrl+C in it — all three do the same thing. The link keeps showing the
@@ -74,13 +76,18 @@ in a file named `config`. Two keys, `key=value`, parsed not executed:
 # Explicit path to the shellshare binary (default: found on PATH)
 shellshare_bin=/usr/local/bin/shellshare
 
-# Extra flags passed to shellshare verbatim. Anything the CLI accepts:
+# Extra flags for shellshare, split on whitespace - so a value that
+# contains a space cannot be expressed here:
 #   --server https://shellshare.example.com   (self-hosted: shellshare server)
 #   --theme dracula
 #   --room my-room                            (a stable link; see below)
 #   --disable-encryption                      (plaintext - you own the consequences)
 shellshare_args=--server https://shellshare.example.com --theme dracula
 ```
+
+`--cols`, `--rows` and `--json` are the plugin's own (they pin the
+mirror's size and carry the link back); passing them here makes
+shellshare refuse to start, and the pane shows why.
 
 ## What viewers see, and what they don't
 
@@ -115,8 +122,11 @@ shellshare_args=--server https://shellshare.example.com --theme dracula
   which also means a leaked link stays valid for every future broadcast
   of that room, and the room name is visible to other users on a
   multi-user machine (`ps`). The default random room avoids both.
-- The plugin keeps no record of your share: it asks herdr whether the
-  ◉ shellshare space exists. In its state directory it writes only a
+- The plugin keeps no record of your share: it asks herdr which spaces
+  carry the marker it puts on the one it creates. That marker, not the
+  name, is what stopping acts on — so a space of your own can never be
+  closed by this plugin, whatever you call it, and a share you renamed
+  can still be stopped. In its state directory it writes only a
   fifo (empty; carries the mirror's output between two processes while
   the share runs, removed when it ends) and a `mirror-<pid>.err` file
   holding shellshare's stderr, kept only when a share fails so there is

@@ -114,16 +114,27 @@ the action are all the same stop. The pane also renames its own tab
 become the tab label.
 
 **herdr holds the state; the plugin holds none.** "Am I sharing?" is
-answered by looking for a workspace whose label is the plugin's own
-(`workspace list`), never by a pid file: a file outlives crashes and
-reboots, and herdr ids are small per-server counters that get reused, so
-acting on a stale one means closing somebody else's space. For the same
-reason there is no fallback that opens the share in the caller's space -
-the plugin owns its space or refuses to start, because stopping means
-closing a space and closing the wrong one destroys the user's tabs.
-Nothing is guessed anywhere else either: an unresolvable session name or
-an unreadable client size is a hard error, since a wrong guess silently
-broadcasts the wrong session or shrinks the real one.
+answered by looking for a workspace carrying the plugin's own metadata
+token (`workspace report-metadata` to stamp it, `workspace list` to read
+it back), never by a pid file: a file outlives crashes and reboots, and
+herdr ids are small per-server counters that get reused, so acting on a
+stale one means closing somebody else's space. The token, not the
+`◉ shellshare` label, is what authorises a close - the label is free
+text the user can type or rename into, and mistaking their space for the
+plugin's would close it and every tab in it; the token also survives a
+rename, so a share the user renamed is still stoppable. A space that
+cannot be stamped is closed rather than shared into, since the stamp is
+the only handle on it afterwards. For the same reason there is no
+fallback that opens the share in the caller's space - the plugin owns
+its space or refuses to start, because stopping means closing a space
+and closing the wrong one destroys the user's tabs. That also makes the
+space's own shell tab a hard requirement to close (a tab left in it
+outlives the broadcast and keeps the indicator up), and a stop that
+cannot close every claimed space a hard error, because "stopped
+sharing" while a link is still fed bytes is the one lie the action must
+never tell. Nothing is guessed anywhere else either: an unresolvable
+session name or an unreadable client size is a hard error, since a wrong
+guess silently broadcasts the wrong session or shrinks the real one.
 
 **There is deliberately no pane-sharing mode.** To share one pane you
 run `shellshare` in it - a full-fidelity byte stream, better than any
