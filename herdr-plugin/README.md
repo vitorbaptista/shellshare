@@ -132,10 +132,10 @@ shellshare refuse to start, and the pane shows why.
   multi-user machine (`ps`). The default random room avoids both.
 - The plugin keeps no record of your share: it asks herdr which panes
   carry the marker the live one puts on itself, and stopping closes
-  those panes' tabs. So the only thing it can ever close is the share
-  itself — never a space, never a tab of yours — and a share that has
-  died leaves nothing behind to act on, because the marker goes with the
-  pane. In its state directory it writes only a
+  exactly those panes. So the only thing it can ever close is the share
+  itself — never a tab, never a space, never anything of yours — and a
+  share that has died leaves nothing behind to act on, because the
+  marker goes with the pane. In its state directory it writes only a
   fifo (empty; carries the mirror's output between two processes while
   the share runs, removed when it ends) and a `mirror-<pid>.err` file
   holding shellshare's stderr, kept only when a share fails so there is

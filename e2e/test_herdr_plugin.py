@@ -65,9 +65,16 @@ STUB_HERDR = textwrap.dedent("""\
         # mirror is pinned to, and the pane list is where a live share
         # announces itself. A pane that has died is simply absent, which
         # is the whole point of marking the pane rather than the space.
+        # While a share is live the space around it is deliberately
+        # crowded: the marked pane, a split the user made beside it in
+        # the SAME tab, and a tab of theirs elsewhere in the space. Every
+        # stop assertion therefore runs against windows that must not be
+        # touched.
         panes='{"pane_id":"w1:p1","tab_id":"w1:t1","tokens":null}'
         if [ -f "$STUB_DIR/pane-token" ]; then
             panes="$panes"',{"pane_id":"w9:p2","tab_id":"w9:t9","tokens":{"shellshare_live":"1"}}'
+            panes="$panes"',{"pane_id":"w9:p3","tab_id":"w9:t9","tokens":null}'
+            panes="$panes"',{"pane_id":"w9:p4","tab_id":"w9:t8","tokens":null}'
         fi
         printf '{"id":"x","result":{"snapshot":{"focused_tab_id":"w1:t1","layouts":[{"tab_id":"w1:t1","area":{"height":37,"width":133,"x":10,"y":1}}],"panes":[%s]}}}\\n' "$panes"
         ;;
@@ -131,7 +138,12 @@ STUB_HERDR = textwrap.dedent("""\
         ;;
     "workspace rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
-        if [ -f "$STUB_DIR/rename-fails" ]; then exit 1; fi
+        # Fails ONCE, like a transient herdr hiccup - so a test can
+        # check both what the failure costs and that the retry pays.
+        if [ -f "$STUB_DIR/rename-fails" ]; then
+            rm -f "$STUB_DIR/rename-fails"
+            exit 1
+        fi
         ;;
     "notification show"|"workspace focus"|"tab rename")
         printf '%s\\n' "$*" >> "$STUB_DIR/herdr-calls.log"
@@ -385,11 +397,11 @@ class TestSessionShare:
         """One press makes a space, claims it, puts the share in it and
         drops the shell tab herdr created with it (that tab would
         outlive the broadcast and keep the space - the indicator - up).
-        The next press stops the share by closing that space, found by
+        The next press stops the share by closing its pane, found by
         asking herdr, not by trusting a file: a pid file would go stale
         across a crash or a reboot, and herdr ids are small per-server
         counters that get reused, so acting on a stale one means closing
-        somebody else's space."""
+        somebody else's window."""
         result = run_script(plugin_env, "toggle")
         assert result.returncode == 0, result.stderr
         calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
@@ -407,9 +419,9 @@ class TestSessionShare:
 
         # Now that a marked pane exists, the same action stops it - by
         # closing that PANE, the narrowest thing that is unambiguously
-        # the share. Never a tab (the user may have split it) and never
-        # a space (they may have another tab in it); herdr unwinds both
-        # by itself when nothing else is in them.
+        # the share. Never its tab (the stub's share has a split of the
+        # user's in it) and never its space (they have a tab there too);
+        # herdr unwinds both by itself when nothing else is left in them.
         result = run_script(plugin_env, "toggle")
         assert result.returncode == 0, result.stderr
         calls = (plugin_env.stub_dir / "herdr-calls.log").read_text()
@@ -420,39 +432,38 @@ class TestSessionShare:
         assert "tab close w9:t9" not in calls, \
             f"stopping closed the share's whole tab: {calls!r}"
 
-    def test_stopping_leaves_the_user_s_own_pane_and_tab_alone(self, plugin_env):
-        """A space holds tabs and a tab holds panes, and the user can
-        put work in either - a tab beside the share, or a split inside
-        its tab. Stopping must reach neither: closing the tab would take
-        their split, closing the space would take their tab."""
-        stub = plugin_env.stub_dir / "crowded"
-        stub.write_text(
-            "#!/bin/bash\n"
-            'printf \'%s\\n\' "$*" >> "$STUB_DIR/crowded-calls.log"\n'
-            'case "$1 $2" in\n'
-            # The share's pane, a split the user made beside it in the
-            # SAME tab, and a tab of theirs elsewhere in the space.
-            '  "api snapshot") printf \'{"result":{"snapshot":{"panes":['
-            '{"pane_id":"w9:p2","tab_id":"w9:t9","tokens":{"shellshare_live":"1"}},'
-            '{"pane_id":"w9:p3","tab_id":"w9:t9","tokens":null},'
-            '{"pane_id":"w9:p4","tab_id":"w9:t8","tokens":null}]}}}\\n\' ;;\n'
-            "esac\n"
+    def test_an_interrupt_during_startup_still_corrects_the_label(self, plugin_env):
+        """The pane is stoppable from the moment it marks itself, but
+        startup keeps going for a while after that - looking up
+        shellshare, the session, the client size. A stop landing in that
+        window must still leave the label right, or a space the user has
+        a tab in keeps claiming a broadcast that never began."""
+        slow = plugin_env.stub_dir / "slow-shellshare"
+        slow.write_text("#!/bin/bash\nsleep 30\n")
+        slow.chmod(0o755)
+        (plugin_env.stub_dir.parent / "config" / "config").write_text(
+            f"shellshare_bin={slow}\n"
         )
-        stub.chmod(0o755)
-
-        result = subprocess.run(
-            ["bash", str(SHARE_SH), "toggle"],
-            capture_output=True, text=True,
-            env=dict(plugin_env.env, HERDR_BIN_PATH=str(stub)),
-            cwd=str(REPO_ROOT), timeout=30,
+        proc = subprocess.Popen(
+            ["bash", str(SHARE_SH), "live"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=plugin_env.env, cwd=str(REPO_ROOT), stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
-        assert result.returncode == 0, result.stderr
-        calls = (plugin_env.stub_dir / "crowded-calls.log").read_text()
-        assert [c for c in calls.splitlines() if c.startswith("pane close")] == \
-            ["pane close w9:p2"], calls
-        for wider in ("tab close", "workspace close"):
-            assert wider not in calls, \
-                f"stopping reached past the share's own pane: {calls!r}"
+        calls_file = plugin_env.stub_dir / "herdr-calls.log"
+        try:
+            # Marked, and now stuck in `shellshare --help`.
+            assert poll_until(
+                lambda: calls_file.exists()
+                and "--token shellshare_live=1" in calls_file.read_text(),
+                timeout=60,
+            ), "the pane never marked itself"
+            os.killpg(proc.pid, signal.SIGINT)
+            assert poll_until(
+                lambda: "workspace rename w1" in calls_file.read_text(), timeout=60
+            ), f"an interrupted startup left the space live: {calls_file.read_text()!r}"
+        finally:
+            stop_pane(proc)
 
     def test_a_space_that_outlives_the_share_stops_saying_live(self, plugin_env):
         """Normally the space goes when this pane does. When it does not
@@ -742,6 +753,21 @@ class TestSessionShare:
             ), f"the dead broadcast never reported itself: {calls_file.read_text()!r}"
             assert "--clear-token" not in calls_file.read_text(), \
                 f"a corpse gave up the only handle on it: {calls_file.read_text()!r}"
+
+            # And the relabel gets another go on the way out of the
+            # parked pane - the stub fails it only once. Without that
+            # retry the pane and its mark vanish together, leaving a
+            # space the user has a tab in still saying "◉ shellshare",
+            # with nothing left to recognise it by.
+            assert poll_until(
+                lambda: calls_file.read_text().count("workspace rename") > 1,
+                timeout=60,
+            ), f"the failed relabel was never retried: {calls_file.read_text()!r}"
+            last = [
+                c for c in calls_file.read_text().splitlines()
+                if c.startswith("workspace rename")
+            ][-1]
+            assert "live" not in last, last
         finally:
             stop_pane(proc)
 

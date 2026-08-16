@@ -34,12 +34,14 @@
 # put it there. A pane that has died is not in the snapshot, so the only
 # thing that can answer "yes, sharing" is a broadcast that exists.
 #
-# And what it closes is that pane's TAB. Closing a space would take
-# every tab in it, including any the user opened there; closing the
-# share's own tab ends the broadcast and lets herdr drop the space when
-# its last tab goes. Same outcome in the ordinary case, nothing of the
-# user's at risk in any other - so no part of this has to work out whose
-# tabs are in the way, or be careful not to be wrong about it.
+# And what it closes is that PANE. A space holds tabs and a tab holds
+# panes, and the user can put their own work in either - a tab beside
+# the share, or a split inside its tab - so closing either could take it
+# with them. herdr unwinds the rest by itself: the tab goes with its
+# last pane, the space with its last tab, which is why the ordinary stop
+# still ends with the whole row disappearing. Same outcome, nothing of
+# the user's at risk in any other case - so no part of this has to work
+# out whose windows are in the way, or be careful not to be wrong.
 #
 # bash 3.2 (macOS) compatible; needs jq.
 
@@ -98,11 +100,16 @@ die_pane() {
             --source "$PLUGIN_ID" --clear-token "$OWNER_TOKEN" >/dev/null 2>&1
     fi
     # Closing this pane must not take the diagnostics with it: the
-    # message about to be printed points at that file.
-    trap 'rm -f "${fifo:-}"; exit 1' HUP INT TERM
+    # message about to be printed points at that file. The relabel gets
+    # another go on the way out, whichever way that is - if it failed
+    # above, this pane and its mark are about to vanish, and a space the
+    # user has a tab in would be left saying "◉ shellshare" with nothing
+    # left to recognise it by.
+    trap 'retire_space; rm -f "${fifo:-}"; exit 1' HUP INT TERM
     printf '\n  \033[1;31mshellshare\033[0m %s\n\n  Press Enter to close.\n' "$*" >&2
     "$HERDR" notification show "Shellshare" --body "$*" >/dev/null 2>&1 || true
     read -r _ 2>/dev/null
+    retire_space
     exit 1
 }
 
@@ -212,7 +219,7 @@ action_toggle() {
             die "could not stop every shellshare pane - still broadcasting:$alive
   Close them by hand (herdr pane close <id>); the link stays live until you do"
         "$HERDR" notification show "Shellshare" \
-            --body "Stopped sharing. The link stays readable until the room idles out (~6h)" \
+            --body "Stopped sharing. The link stays readable until the room idles out (~6h on shellshare.net)" \
             >/dev/null 2>&1 || true
         exit 0
     fi
@@ -260,14 +267,16 @@ pane_live() {
     # early - a broadcast nothing can stop is not worth starting.
     [ -n "${HERDR_PANE_ID:-}" ] ||
         die_pane "could not tell herdr which pane this is, so refusing to start a share that could not be stopped"
+    # Before the mark, not after: the moment the mark lands another press
+    # can close this pane, and the signal that arrives has to find a
+    # handler that puts the label right. Everything below is setup that
+    # takes a moment, and the same applies throughout it; the fuller trap
+    # replaces this one once there is a broadcaster to kill and files to
+    # remove.
+    trap 'retire_space; exit 0' HUP INT TERM
     "$HERDR" pane report-metadata "$HERDR_PANE_ID" \
         --source "$PLUGIN_ID" --token "$OWNER_TOKEN=1" >/dev/null 2>&1 ||
         die_pane "could not mark this pane as the share, so refusing to start one that could not be stopped"
-    # From here on this pane is a share, and everything below is setup
-    # that takes a moment. A signal arriving in that moment still has to
-    # leave the label right; the fuller trap replaces this one once
-    # there is a broadcaster to kill and files to remove.
-    trap 'retire_space; exit 0' HUP INT TERM
 
     local ss
     ss=$(cfg shellshare_bin)
