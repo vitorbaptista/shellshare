@@ -41,14 +41,14 @@ impl RawModeGuard {
             }
 
             let mut original: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(libc::STDIN_FILENO, &mut original) != 0 {
+            if libc::tcgetattr(libc::STDIN_FILENO, &raw mut original) != 0 {
                 return Self { original: None };
             }
 
-            let mut raw = original;
-            libc::cfmakeraw(&mut raw);
+            let mut raw_mode = original;
+            libc::cfmakeraw(&raw mut raw_mode);
 
-            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) != 0 {
+            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw const raw_mode) != 0 {
                 return Self { original: None };
             }
 
