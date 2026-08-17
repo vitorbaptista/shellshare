@@ -485,6 +485,7 @@ dependencies = [
     { name = "playwright" },
     { name = "pytest" },
     { name = "requests" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "websocket-client" },
     { name = "wsaccel" },
 ]
@@ -500,6 +501,7 @@ requires-dist = [
     { name = "playwright", specifier = ">=1.40.0" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "requests", specifier = ">=2.34.2" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.0" },
     { name = "websocket-client", specifier = ">=1.9.0" },
     { name = "wsaccel", specifier = ">=0.6.7" },
 ]

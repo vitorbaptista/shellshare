@@ -72,6 +72,112 @@ xterm.js and its WebGL/Unicode11 addons are vendored under
 lives here too. Must stay in lockstep with `public/javascript/room.js`
 and `e2e/conftest.py`.
 
+One viewer-side rewrite happens on the way into xterm.js
+(`writeBytes` in `public/javascript/room.js`): colon-form colour parameters
+(`38:2:R:G:B`, what herdr and other modern TUIs emit) are converted to
+the classic `38;2;R;G;B`. The vendored xterm.js reads the colon form as
+`38:2:<colour-space>:R:G:B` and takes R,G,B from the 4th/5th/6th slots,
+so the short spelling shifts every channel one place - Catppuccin blue
+`#89b4fa` renders as `rgb(180,250,0)`, and a whole mirrored UI comes out
+yellow-green. Only 38/48/58 params are touched (`4:3` is a curly
+underline, not underline+italic), and an unterminated escape at the end
+of a frame is carried to the next one rather than half-rewritten.
+Covered by `e2e/test_viewer_sgr.py`.
+
+### Herdr plugin (`herdr-plugin.toml` + `herdr-plugin/`)
+
+The repo doubles as a [herdr](https://herdr.dev) plugin: one action that
+broadcasts the whole herdr session, read-only, as a shellshare link. The
+manifest sits at the repo ROOT (not in `herdr-plugin/`) so
+`herdr plugin install vitorbaptista/shellshare` works as typed - the
+marketplace card does not surface subdirectories.
+
+**The share is a pane, not a daemon.** The manifest declares one action
+(`share`, a toggle) and one pane (`live`), and the pane runs
+`shellshare exec -- env -u HERDR_ENV herdr session attach <name>`: the
+process's lifetime IS the share's lifetime. herdr already owns pane
+lifetime, so there is nothing to supervise, garbage collect or sweep. An
+earlier design used a detached daemon plus a sidebar badge, a link fifo
+and an overlay; it was ~800 lines more and bought nothing herdr was not
+already doing.
+
+That pane lives in a **space of its own**, created by the action
+(`workspace create --label "◉ shellshare"`, then the pane opens there as
+a tab and the space's own shell tab is closed). A session-wide share
+parked inside one project's space is misfiled, and herdr closes a space
+when its last tab goes - so the space is there while the broadcast is
+and gone when it ends, which makes it the status indicator: a labelled
+row in the spaces sidebar, visible from wherever the user is working,
+needing no `[ui.sidebar.*]` configuration. (A share that FAILED is the
+exception: its space is kept, relabelled `✗ shellshare (stopped)`, to
+hold the error.) Ctrl+C and toggling the action are the same stop, and
+both leave anything of the user's in that space standing - relabelled on
+the way out, so the row stops claiming a broadcast that has ended.
+Closing the space by hand also stops the share, but is deliberately NOT
+documented as equivalent: that one closes every tab in it, including the
+user's. The pane also
+renames its own tab (`tab rename $HERDR_TAB_ID`), since a manifest pane
+`title` does not become the tab label.
+
+**herdr holds the state; the plugin holds none.** "Am I sharing?" is
+answered by asking `api snapshot` for panes carrying the plugin's
+metadata token, which the live pane puts on *itself*
+(`pane report-metadata`) before it starts broadcasting. Never a pid
+file: a file outlives crashes and reboots, and herdr ids are small
+per-server counters that get reused, so acting on a stale one means
+closing somebody else's tab. Marking the pane rather than the space is
+what makes the answer unfakeable *and* self-cleaning - a label is free
+text the user can type or rename into, a mark on the space would outlive
+the pane that made it, but a dead pane is simply absent from the
+snapshot. A pane that cannot mark itself refuses to broadcast, since the
+mark is the only handle on it afterwards.
+
+**Stopping closes that pane, and nothing wider.** A space holds tabs and
+a tab holds panes, and the user can put their own work in either - a tab
+beside the share, or a split inside its tab - so closing either would
+risk taking work with it. Closing the pane ends the broadcast and herdr
+unwinds the rest: the tab goes with its last pane, the space with its
+last tab, which is why the ordinary stop still ends with the whole
+`◉ shellshare` row disappearing. Nothing here has to work out whose
+windows are in the way, which is the point - the one exception is
+`abort_start`, which closes a space created milliseconds earlier by the
+lines above it, and reports loudly if that close fails (by then the pane
+is open, so the session is already being broadcast). A stop that cannot
+close every share is a hard error, because "stopped sharing" while a
+link is still fed bytes is the one lie the action must never tell.
+Likewise there is no fallback that opens the share in the caller's
+space, the space's own shell tab is a hard requirement to close (a tab
+left in it outlives the broadcast and keeps the indicator up), and a
+pane that exits leaves the label corrected behind it. Nothing is guessed
+anywhere else either: an unresolvable session name or an unreadable
+client size is a hard error, since a wrong guess silently broadcasts the
+wrong session or shrinks the real one.
+
+**There is deliberately no pane-sharing mode.** To share one pane you
+run `shellshare` in it - a full-fidelity byte stream, better than any
+snapshot mirror a plugin could build. The plugin only does what you
+cannot type, and all four reasons are verified against herdr 0.8.0:
+`herdr session attach` from inside a pane is refused (HERDR_ENV gates
+nesting); `HERDR_SESSION` is not exported, so a hand-typed attach guesses
+the name and a wrong guess silently starts and broadcasts the DEFAULT
+session; without `--cols/--rows` (derived from the focused tab's
+`api snapshot` layout extent) the mirror attaches at 80x24 and herdr's
+smallest-client-wins sizing shrinks the real session; and `shellshare
+exec` echoes the mirror's PTY bytes on stdout, so run by hand the mirror
+renders the pane it lives in - infinite regress. share.sh reads the
+`sharing` line off a fifo in the main shell (not through a pipe, where
+`exit` would only leave a subshell) and hands the rest to a background
+`cat >/dev/null`. Lockstep contract: `herdr-plugin.toml` action/pane ids
+and commands ↔ `share.sh` dispatch arms ↔ `e2e/test_herdr_plugin.py`. The banner does not print the link
+itself: it runs `SHELLSHARE_URL=<url> shellshare status`, which is
+shellshare's own link-presentation path and therefore brings the QR code
+with it on a terminal - no second QR renderer, and no new CLI surface.
+Do not pipe that call (to indent it, say): `status` gates the QR on
+`stdout.is_terminal()`. Test split: the plugin test asserts the
+delegation happened, `e2e/test_cli_tty.py` owns the QR-on-a-TTY
+behavior. The plugin's e2e test stubs `herdr` but runs a real encrypted
+broadcast against a real local server.
+
 ## Cross-Platform Notes
 
 - **Unix**: PTY via portable-pty, raw terminal mode via libc tcgetattr/tcsetattr, SIGWINCH handling

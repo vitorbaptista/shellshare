@@ -1,0 +1,40 @@
+# Herdr plugin manifest (https://herdr.dev/docs/plugins/). It lives at
+# the repo root - not in herdr-plugin/ - so the install command the
+# marketplace card suggests, `herdr plugin install vitorbaptista/shellshare`,
+# works as typed: the v1 marketplace index does not surface
+# subdirectories, so a subdir manifest would fail with "missing
+# manifest". Everything routes into herdr-plugin/share.sh, which is the
+# whole plugin; see herdr-plugin/README.md.
+
+id = "shellshare"
+name = "Shellshare"
+version = "0.1.0"
+# Needs `herdr plugin pane open --entrypoint`
+min_herdr_version = "0.8.0"
+description = "Share your herdr session live, read-only, as a shellshare link"
+# share.sh is bash; shellshare itself supports Windows, this plugin not yet
+platforms = ["linux", "macos"]
+
+# One verb. Pressed again while a share is live, it stops it - so a
+# single keybinding is the whole interface.
+[[actions]]
+id = "share"
+title = "Shellshare: share this session (read-only)"
+description = "Broadcast this herdr session as a live link, or stop the current broadcast"
+# What it shares is the session, so it is not scoped to the focused
+# workspace or pane - it does the same thing from anywhere.
+contexts = ["global"]
+command = ["bash", "herdr-plugin/share.sh", "toggle"]
+
+# The share IS this pane: it runs the broadcaster, shows the link, and
+# stops when it closes. The action opens it as the only tab of a space
+# it creates for the purpose - a session-wide share does not belong
+# inside one project's space, and since herdr closes a space with its
+# last tab, that space goes when the broadcast does. (A share that
+# FAILED keeps its space, relabelled, to hold the error where it can be
+# read.)
+[[panes]]
+id = "live"
+title = "Shellshare · live"
+placement = "tab"
+command = ["bash", "herdr-plugin/share.sh", "live"]

@@ -83,6 +83,17 @@ struct Cli {
     /// see the terminal contents
     #[arg(long, global = true)]
     disable_encryption: bool,
+
+    /// Fix the broadcast width at this many columns instead of the
+    /// detected terminal size. Without a terminal (piped stdin, a
+    /// wrapper spawning shellshare headless) detection falls back to
+    /// 80x24; this pins the geometry viewers see
+    #[arg(long, global = true, value_parser = clap::value_parser!(u16).range(1..))]
+    cols: Option<u16>,
+
+    /// Fix the broadcast height at this many rows; see --cols
+    #[arg(long, global = true, value_parser = clap::value_parser!(u16).range(1..))]
+    rows: Option<u16>,
 }
 
 #[derive(Subcommand)]
@@ -316,6 +327,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json: cli.json,
                 theme: cli.theme,
                 encrypt: !cli.disable_encryption,
+                cols: cli.cols,
+                rows: cli.rows,
             };
             serve(&host, port, tunnel, share);
         }
@@ -332,6 +345,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 exec: Some(command),
                 theme: cli.theme,
                 encrypt: !cli.disable_encryption,
+                cols: cli.cols,
+                rows: cli.rows,
             };
             exit_on_error(cli::run(args));
         }
@@ -345,6 +360,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 exec: None,
                 theme: cli.theme,
                 encrypt: !cli.disable_encryption,
+                cols: cli.cols,
+                rows: cli.rows,
             };
             exit_on_error(cli::run(args));
         }
@@ -361,6 +378,8 @@ struct ShareArgs {
     json: bool,
     theme: Option<String>,
     encrypt: bool,
+    cols: Option<u16>,
+    rows: Option<u16>,
 }
 
 /// `shellshare serve`: boot the embedded server, optionally tunnel it,
@@ -441,6 +460,8 @@ fn serve(host: &str, port: u16, tunnel: bool, share: ShareArgs) {
         exec: None,
         theme: share.theme,
         encrypt: share.encrypt,
+        cols: share.cols,
+        rows: share.rows,
     };
     let result = cli::run(args);
     // Close the tunnel before a possible exit: process::exit

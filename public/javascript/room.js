@@ -187,7 +187,74 @@
     });
   }
 
+  // xterm.js reads colon-form colours as `38:2:<colour-space>:R:G:B`
+  // and pulls R,G,B from the 4th/5th/6th slots. Plenty of modern TUIs
+  // (herdr, ratatui apps, anything following the common short form)
+  // omit the colour-space slot and send `38:2:R:G:B`, so every channel
+  // lands one place early: a blue #89b4fa arrives as rgb(180,250,0),
+  // a yellow-green. Whole UIs come out the wrong colour.
+  //
+  // Rewriting those params into the classic `38;2;R;G;B` form - which
+  // xterm.js parses correctly - fixes it without touching the vendored
+  // bundle. Only 38/48/58 (fore/back/underline colour) params are
+  // touched: other sub-parameters mean different things (`4:3` is a
+  // curly underline, not underline+italic) and are passed through.
+  var SGR_COLON = /\x1b\[([0-9;:]*)m/g;
+  function normalizeSgrColons(text) {
+    return text.replace(SGR_COLON, function (whole, params) {
+      if (params.indexOf(':') === -1) return whole;
+      var parts = params.split(';');
+      for (var i = 0; i < parts.length; i++) {
+        if (!/^(38|48|58):/.test(parts[i])) continue;
+        // Drop the empty colour-space slot of the long form
+        // (`38:2::R:G:B`) along the way; both spellings end up as
+        // `38;2;R;G;B`.
+        parts[i] = parts[i].split(':').filter(function (piece) {
+          return piece !== '';
+        }).join(';');
+      }
+      return '\x1b[' + parts.join(';') + 'm';
+    });
+  }
+
+  // An escape sequence can be split across frames, so hold back an
+  // unterminated tail rather than rewriting half of one. Bounded: a
+  // lone ESC (or a sequence longer than this) must not stall output.
+  var sgrCarry = '';
+  var SGR_CARRY_MAX = 256;
+
   function writeBytes(bytes) {
+    // Fast path: no escape sequences and nothing held back means
+    // there is nothing to rewrite. Terminal output is mostly this.
+    if (!sgrCarry && bytes.indexOf(0x1b) === -1) {
+      writeRaw(bytes);
+      return;
+    }
+    var text = sgrCarry;
+    for (var i = 0; i < bytes.length; i++) {
+      text += String.fromCharCode(bytes[i]);
+    }
+    sgrCarry = '';
+    // Find a trailing escape sequence that has not ended yet (no
+    // final byte in 0x40-0x7e after the last ESC).
+    var lastEsc = text.lastIndexOf('\x1b');
+    if (lastEsc !== -1 && !/[\x40-\x7e]/.test(text.slice(lastEsc + 2))) {
+      var tail = text.slice(lastEsc);
+      if (tail.length <= SGR_CARRY_MAX) {
+        sgrCarry = tail;
+        text = text.slice(0, lastEsc);
+      }
+    }
+    if (!text) return;
+    text = normalizeSgrColons(text);
+    var out = new Uint8Array(text.length);
+    for (var j = 0; j < text.length; j++) {
+      out[j] = text.charCodeAt(j) & 0xff;
+    }
+    writeRaw(out);
+  }
+
+  function writeRaw(bytes) {
     if (term) {
       term.write(bytes);
     } else {

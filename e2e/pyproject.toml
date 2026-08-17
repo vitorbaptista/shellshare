@@ -8,6 +8,8 @@ dependencies = [
     "playwright>=1.40.0",
     "pytest>=8.0.0",
     "requests>=2.34.2",
+    # tomllib is stdlib only from 3.11; the manifest-lockstep test needs it
+    "tomli>=2.0.0; python_version < '3.11'",
     "websocket-client>=1.9.0",
     "wsaccel>=0.6.7",
 ]

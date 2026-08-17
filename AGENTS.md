@@ -180,6 +180,18 @@ take `/llms.txt`, which carries the same file verbatim.
   fatal.
 - `--theme <name>` controls the colors viewers see (e.g. `dracula`,
   `solarized-dark`; see `--help` for the full list).
+- `shellshare status` prints whatever link `SHELLSHARE_URL` holds, plus a
+  phone-scannable QR when its stdout is a terminal. A wrapper that
+  captured a URL from `--json` can hand it back — `SHELLSHARE_URL=<url>
+  shellshare status` — to show the link and QR without shipping a QR
+  renderer of its own.
+- Headless runs (no TTY, the normal agent case) fall back to an 80x24
+  viewer size. `--cols <n>` / `--rows <n>` pin each dimension
+  independently when you want a different geometry.
+- `exec` with `</dev/null` gives the command a silent stdin: nothing is
+  typed into it, not even an end-of-input. A command that reads stdin
+  until EOF should be fed a pipe instead (`printf '' | shellshare exec
+  -- cmd` works - an empty pipe still delivers EOF).
 
 Machine-readable copy of this document: https://shellshare.net/llms.txt
 Source: https://github.com/vitorbaptista/shellshare

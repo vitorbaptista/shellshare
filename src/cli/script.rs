@@ -81,6 +81,26 @@ impl RawModeGuard {
     }
 }
 
+/// Whether stdin is a character device - i.e. `</dev/null` (or a tty,
+/// but a tty never returns immediate EOF), as opposed to a pipe or
+/// regular file. Distinguishes "no input intended" from "an input
+/// stream that happens to be empty" at the forwarder's EOF.
+#[cfg(unix)]
+fn stdin_is_char_device() -> bool {
+    // SAFETY: fstat only reads metadata of the already-open fd 0
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        libc::fstat(0, &mut st) == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFCHR
+    }
+}
+
+/// Windows has no /dev/null semantics on the console handle worth
+/// special-casing; keep the historical writer-drop EOF behavior.
+#[cfg(windows)]
+fn stdin_is_char_device() -> bool {
+    false
+}
+
 /// Run script mode - spawn a shell (or, for `exec`, a single command) in a
 /// PTY and stream output to server. Returns the exit code to propagate:
 /// the child's status when it can be observed, otherwise 0.
@@ -309,6 +329,7 @@ pub fn run_script_mode(
         let mut stdin_lock = stdin.lock();
         let mut buffer = [0u8; 1024];
         let mut last_ctrlc: Option<Instant> = None;
+        let mut forwarded_any = false;
 
         loop {
             if !running_stdin.load(Ordering::SeqCst) {
@@ -316,8 +337,27 @@ pub fn run_script_mode(
             }
 
             match stdin_lock.read(&mut buffer) {
-                Ok(0) => break, // EOF
+                Ok(0) => {
+                    // EOF. Dropping the writer makes portable-pty encode
+                    // EOF for the child (newline + VEOF) - which a pipe
+                    // wants even when it carried zero bytes, so `printf x
+                    // | shellshare exec -- cat` ends and an empty pipe
+                    // still delivers EOF. But `</dev/null` (the
+                    // documented way to run exec headless) means "no
+                    // input", not "type end-of-input": the encoding
+                    // would inject a stray Enter+Ctrl+D that a TUI reads
+                    // as keystrokes and an interactive shell answers by
+                    // exiting. A null-style stdin is recognizable as a
+                    // character device that returned EOF; leak the
+                    // writer there - the fd lives until process exit,
+                    // which closes it without the encoding.
+                    if !forwarded_any && stdin_is_char_device() {
+                        std::mem::forget(writer);
+                    }
+                    break;
+                }
                 Ok(n) => {
+                    forwarded_any = true;
                     let data = &buffer[..n];
 
                     if data.contains(&CTRLC_BYTE) {
