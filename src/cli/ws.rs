@@ -39,16 +39,14 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// How long shutdown may wait for the final acknowledgments.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(1);
 /// Total budget for the TCP dial, shared across every address the
-/// server's hostname resolves to (see `dial`). Ten seconds is the same
-/// bound as the write timeout below: long enough for a slow link or a
-/// cold serverless backend, short enough that a black-holed address
-/// becomes a retry rather than a wait.
+/// server's hostname resolves to (see `dial`): long enough for a slow
+/// link or a cold serverless backend, short enough that a black-holed
+/// address becomes a retry rather than a wait.
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Budget for the whole WebSocket upgrade once connected - TLS
-/// handshake, request write and `101 Switching Protocols` response.
-/// Also ten seconds: a server that has accepted the connection but
-/// cannot finish the upgrade within it is not one worth waiting on, and
-/// the reconnect backoff will try again anyway.
+/// handshake, request write and `101 Switching Protocols` response. A
+/// server that cannot finish within it is not worth waiting on; the
+/// reconnect backoff will try again anyway.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Ceiling on how often a stalled upgrade is retried while it waits.
 const HANDSHAKE_POLL: Duration = Duration::from_millis(5);
@@ -106,7 +104,6 @@ pub struct Transport {
     /// Their acks still arrive and must be consumed BEFORE the queue
     /// walk, or `apply_ack` would release chunks that were never acked.
     dropped_unacked: u64,
-    /// Terminal size the caller last reported
     size: TermSize,
     /// Size already delivered on the CURRENT connection, if any
     sent_size: Option<TermSize>,
@@ -126,7 +123,6 @@ pub struct Transport {
     backoff: Duration,
     /// Do not attempt to reconnect before this instant
     next_attempt: Option<Instant>,
-    /// When the last keepalive ping went out
     last_ping: Instant,
 }
 
@@ -172,12 +168,10 @@ impl Transport {
         };
         transport.socket = Some(transport.handshake()?);
         // A room outlives its broadcaster, and the default password is
-        // this machine's id, so rerunning a named room re-claims one
-        // that still holds the previous session. Clear it here - on the
-        // FIRST connection only, never in `handshake`'s reconnect path,
-        // where wiping history would destroy exactly what replay is
-        // rebuilding. Best effort: a failed write means the connection
-        // died, and the reconnect carries on without the reset.
+        // this machine's id, so rerunning a named room re-claims one that
+        // still holds the previous session. Clear it on the FIRST
+        // connection only, never in `handshake`'s reconnect path, where
+        // wiping history would destroy exactly what replay is rebuilding.
         let _ = transport.write(Message::text(json!({"reset": true}).to_string()));
         Ok(transport)
     }
@@ -186,10 +180,9 @@ impl Transport {
     /// failures keep data buffered and schedule a reconnect; only
     /// authorization failures surface.
     pub fn send(&mut self, data: &[u8], size: TermSize) -> Result<(), TransportError> {
-        // Feed the emulator the exact bytes being broadcast, then buffer the
-        // data, then (when due) a keyframe AFTER it, so the redraw reflects the
-        // screen as of this frame. The keyframe is an ordinary sealed record:
-        // it rides the same acks/cap/replay path with no protocol change.
+        // The keyframe is buffered AFTER the data, so the redraw reflects
+        // the screen as of this frame. It is an ordinary sealed record:
+        // same acks/cap/replay path, no protocol change.
         self.keyframer.feed(data, size);
         if !data.is_empty() {
             self.buffer_plaintext(data);
@@ -206,8 +199,8 @@ impl Transport {
     ///
     /// Sealed here, before buffering: everything downstream (acks, the cap,
     /// replay) counts ciphertext bytes, exactly what the server sees and
-    /// acknowledges. A replayed record is byte-identical, never re-encrypted
-    /// (no nonce reuse).
+    /// acknowledges. A replayed record is byte-identical, never
+    /// re-encrypted (no nonce reuse).
     fn buffer_plaintext(&mut self, data: &[u8]) {
         let sealed: Bytes = self.cipher.as_ref().map_or_else(
             || Bytes::copy_from_slice(data),
@@ -215,8 +208,8 @@ impl Transport {
         );
         self.buffered_bytes += sealed.len();
         self.pending.push_back(sealed);
-        // Drop the oldest buffered output (acked data is already
-        // gone; the oldest is the front of `unacked`, then `pending`)
+        // Acked data is already gone, so the oldest is the front of
+        // `unacked`, then `pending`
         while self.buffered_bytes > MAX_BUFFERED_BYTES {
             if let Some(dropped) = self.unacked.pop_front() {
                 // Already written: its ack may still arrive and must
@@ -248,8 +241,8 @@ impl Transport {
     ///
     /// Pending output is written and its acknowledgments awaited,
     /// briefly, because nothing will retransmit it: the room outlives
-    /// this process (until the server's inactivity TTL evicts it), so
-    /// the tail of the output has to land before the socket closes.
+    /// this process, so the tail of the output has to land before the
+    /// socket closes.
     pub fn shutdown(&mut self) {
         let _ = self.flush();
         let deadline = Instant::now() + SHUTDOWN_DRAIN;
@@ -400,22 +393,14 @@ impl Transport {
     /// arms the backoff and lets the caller try again later. On success
     /// the per-connection state (backoff, acks, size) is reset.
     ///
-    /// The dial is done here rather than by `tungstenite::connect`,
-    /// which offers no way to bound any part of it: it resolves,
-    /// connects, writes the upgrade request and then blocks reading the
-    /// response on a socket with no timeouts at all. A peer that accepts
-    /// the connection and then says nothing parked this thread in
-    /// `recvfrom` forever, and since every termination signal only sets
-    /// a flag that a blocked thread never reads, the process needed
-    /// SIGKILL (issue #173). Now the dial is bounded by `DIAL_TIMEOUT`
-    /// and the upgrade by `HANDSHAKE_TIMEOUT`, so an unresponsive peer
-    /// is just another `Connect` error feeding the reconnect backoff.
-    ///
-    /// One thing `tungstenite::connect` did that this does not: follow
-    /// redirects. Nothing needs it - the `Location` would have to name a
-    /// `ws://` or `wss://` URL to be usable at all, and an https
-    /// redirect (what a real server in front of shellshare sends) failed
-    /// on the old path too.
+    /// The dial is done here rather than by `tungstenite::connect`, which
+    /// offers no way to bound any part of it: a peer that accepted the
+    /// connection and then said nothing parked this thread in `recvfrom`
+    /// forever, and since every termination signal only sets a flag that
+    /// a blocked thread never reads, the process needed SIGKILL (issue
+    /// #173). The one thing `tungstenite::connect` did that this does not
+    /// is follow redirects, which nothing needs - the `Location` would
+    /// have to name a `ws://` or `wss://` URL to be usable at all.
     fn handshake(&mut self) -> Result<WsSocket, TransportError> {
         let result = (|| {
             let mut request = self
@@ -515,10 +500,9 @@ impl Transport {
 /// A hostname routinely resolves to several addresses - shellshare.net
 /// alone answers with two IPv4 and two IPv6 - and `connect_timeout`
 /// takes exactly one, so every candidate is tried in the resolver's
-/// order (which already encodes the OS's source-address preference).
-/// The budget is *shared*: each attempt gets an equal slice of what is
-/// left, so a black-holed IPv6 address cannot spend the time its IPv4
-/// sibling needs, and the whole dial still ends within `DIAL_TIMEOUT`.
+/// order. The budget is *shared*: each attempt gets an equal slice of
+/// what is left, so a black-holed IPv6 address cannot spend the time its
+/// IPv4 sibling needs.
 ///
 /// Name resolution itself stays blocking - `getaddrinfo` has no timeout
 /// to give it - but it is bounded by the resolver's own retry limits,
@@ -556,8 +540,6 @@ fn dial(uri: &Uri) -> Result<TcpStream, TransportError> {
         }
         match TcpStream::connect_timeout(&addr, slice) {
             Ok(stream) => {
-                // Broadcasts are many small frames; Nagle would only add
-                // delay, and the handshake is the first thing to profit
                 let _ = stream.set_nodelay(true);
                 return Ok(stream);
             }

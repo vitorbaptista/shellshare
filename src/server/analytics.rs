@@ -167,13 +167,9 @@ impl Analytics {
 
     /// A viewer joined an existing room - live (`broadcasting`) or a
     /// replay of one whose broadcaster dropped but wasn't evicted yet.
-    /// Viewers send no credentials and have no server-side identity, so
-    /// each join gets a throwaway random distinct id: the event honestly
-    /// represents an anonymous viewer (not the broadcaster), and the
-    /// `room` property still ties it back to the broadcast events. This
-    /// measures which rooms drew an audience and how big it was (via
-    /// `user_count`), not unique viewers - the id deliberately carries
-    /// no information to dedupe on.
+    /// This measures which rooms drew an audience and how big it was,
+    /// not unique viewers: the throwaway distinct id deliberately
+    /// carries no information to dedupe on.
     pub fn viewer_joined(&self, room_name: &str, user_count: usize, broadcasting: bool) {
         if let Some(inner) = &self.inner {
             inner.send(Event {

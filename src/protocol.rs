@@ -3,7 +3,7 @@
 //! Terminal output travels as **raw bytes** end to end: the CLI sends
 //! binary WebSocket frames, the server stores raw bytes, and viewers
 //! receive binary WebSocket frames which xterm.js decodes with its
-//! streaming UTF-8 decoder (`templates/room.html`). The Python e2e
+//! streaming UTF-8 decoder (`public/javascript/room.js`). The Python e2e
 //! helpers (`e2e/conftest.py`) must stay in lockstep.
 //!
 //! End-to-end encryption changes none of this: every broadcast's bytes
@@ -22,15 +22,11 @@ use std::collections::VecDeque;
 ///
 /// Two independent bounds, because they guard different things. The byte
 /// budget is the memory bound: a chunk is a coalesced frame of up to
-/// 64KB (plus periodic full-screen keyframes), so counting frames alone
-/// left a room's ceiling at frames x 64KB. The frame count bounds
-/// per-chunk overhead instead - every chunk costs a `Bytes` in the deque
-/// and a step in `accumulated`'s walk, so without it a producer writing
-/// a byte at a time could sit inside the byte budget while holding
-/// millions of slivers. Which bound binds depends on frame size: below
-/// the budget-over-count average the frame cap wins (interactive typing
-/// keeps its full 200 frames), while any fast output - a build log, a
-/// `cat` - coalesces into large frames and is bounded by bytes instead.
+/// 64KB, so counting frames alone left a room's ceiling at frames x 64KB.
+/// The frame count bounds per-chunk overhead instead - every chunk costs a
+/// `Bytes` in the deque and a step in `accumulated`'s walk, so without it
+/// a producer writing a byte at a time could sit inside the byte budget
+/// while holding millions of slivers.
 pub struct MessageHistory {
     chunks: VecDeque<Bytes>,
     max_messages: usize,

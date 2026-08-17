@@ -24,16 +24,16 @@ broadcast finishes. Errors go to stderr as `ERROR: ...` with a non-zero exit.
 
 ```bash
 # Share a single command live; exits with the command's exit code
-npx -y shellshare exec --json -- npm test
+npx shellshare exec --json -- npm test
 
 # Stream a log or any pipe (a non-TTY stdin auto-detects this, reads until EOF)
-tail -f build.log | npx -y shellshare --json
+tail -f build.log | npx shellshare --json
 ```
 
 Full agent-facing docs: [AGENTS.md](https://github.com/vitorbaptista/shellshare/blob/main/AGENTS.md) · [shellshare.net/llms.txt](https://shellshare.net/llms.txt)
 
 ## About this package
 
-This package is a thin launcher around the prebuilt `shellshare` binary for your platform (Linux x64, macOS x64/arm64, Windows x64), fetched automatically through npm's `optionalDependencies` — no postinstall scripts.
+This package is a thin launcher around the prebuilt `shellshare` binary for your platform (Linux x64/arm64, macOS x64/arm64, Windows x64), fetched automatically through npm's `optionalDependencies` — no postinstall scripts.
 
 Docs, FAQ and other install methods: [shellshare.net](https://shellshare.net) · Source: [github.com/vitorbaptista/shellshare](https://github.com/vitorbaptista/shellshare)

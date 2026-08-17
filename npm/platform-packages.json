@@ -5,6 +5,12 @@
     "os": "linux",
     "cpu": "x64"
   },
+  "shellshare-linux-arm64": {
+    "artifact": "shellshare-linux-aarch64",
+    "binary": "shellshare",
+    "os": "linux",
+    "cpu": "arm64"
+  },
   "shellshare-darwin-x64": {
     "artifact": "shellshare-macos-x86_64",
     "binary": "shellshare",

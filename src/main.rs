@@ -285,7 +285,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             posthog_salt,
             tunnel,
         }) => {
-            // Initialize logging for server
             let subscriber = FmtSubscriber::builder()
                 .with_max_level(Level::INFO)
                 .finish();
@@ -293,7 +292,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let analytics_config = analytics_config(posthog_key, posthog_host, posthog_salt);
 
-            // Create runtime only for server mode
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
                 let listeners = server::bind(&host, port).await?;
@@ -353,7 +351,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit_on_error(cli::run(args));
         }
         None => {
-            // Run client mode
             let args = cli::ClientArgs {
                 server: cli.server,
                 display_server: None,

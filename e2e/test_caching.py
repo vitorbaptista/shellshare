@@ -1,8 +1,9 @@
 """Tests for the page/asset caching behavior.
 
-The server renders the HTML pages once at startup (inlining local
-stylesheets and content-hash-versioning asset URLs) and serves
-everything with cache headers tuned for a CDN in front:
+The server renders the HTML pages once at startup (flattening each
+page's local stylesheets into one bundle and content-hash-versioning
+asset URLs) and serves everything with cache headers tuned for a CDN
+in front:
 
 - HTML: ``no-cache`` + ETag, so deploys take effect immediately and
   repeat loads are cheap 304s
@@ -50,16 +51,29 @@ class TestPageCaching:
         status, _, _ = make_request('GET', '/', headers={'If-None-Match': weak})
         assert status == 304, "Weak If-None-Match must still revalidate to 304"
 
-    def test_pages_inline_their_stylesheets(self):
-        """First paint must not depend on extra stylesheet requests."""
+    def test_pages_bundle_their_stylesheets(self):
+        """One flattened stylesheet per page, at an immutable URL.
+
+        Every room URL is distinct, so CSS inlined into room HTML is
+        re-sent for every broadcast a viewer opens and can never be
+        reused; at its own versioned URL it is fetched once.
+        """
         wait_for_server(SERVER_URL)
         for path in ['/', '/r/some-room']:
             _, _, body = make_request('GET', path)
-            assert '<style>' in body, f"{path} must inline its CSS"
-            assert not re.search(r'<link[^>]*rel="stylesheet"', body), \
-                f"{path} must not load stylesheets over the network"
-            assert '@import' not in body, \
-                f"{path} inlined CSS must have @imports resolved"
+            assert '<style>' not in body, f"{path} must not inline its CSS"
+            links = re.findall(r'<link[^>]*rel="stylesheet"[^>]*>', body)
+            assert len(links) == 1, \
+                f"{path} must link exactly one bundle, got {links}"
+            href = re.search(r'href="([^"]+)"', links[0]).group(1)
+            assert re.fullmatch(r'/stylesheet/\w+\.bundle\.css\?v=[0-9a-f]+', href), \
+                f"{path} stylesheet must be a versioned bundle, got {href}"
+            status, css_headers, css = make_request('GET', href)
+            assert status == 200, f"{href} must be served"
+            assert css_headers.get('Cache-Control') == \
+                'public, max-age=31536000, immutable'
+            assert '@import' not in css, \
+                f"{href} must have its @imports resolved"
 
     def test_room_page_announces_preloads(self):
         """The Link header lets the CDN emit 103 Early Hints for the
@@ -68,11 +82,31 @@ class TestPageCaching:
         _, headers, body = make_request('GET', '/r/some-room')
         link = headers.get('Link', '')
         for asset in ['xterm.js', 'xterm-addon-webgl.js',
-                      'xterm-addon-unicode11.js',
-                      'Inconsolata.woff2']:
+                      'xterm-addon-unicode11.js', 'room.js']:
             assert asset in link, f"Link preload header must announce {asset}"
             assert re.search(rf'{re.escape(asset)}\?v=[0-9a-f]+', body), \
                 f"{asset} must be referenced with a content-hash version"
+
+    def test_preloads_name_the_urls_actually_requested(self):
+        """A preload for a URL nobody requests is worse than none: the
+        browser fetches a second copy and warns. Both halves are easy to
+        drift, because neither is requested by the HTML - the stylesheet
+        is only in the <link>, and the font only inside the stylesheet.
+        """
+        wait_for_server(SERVER_URL)
+        _, headers, body = make_request('GET', '/r/some-room')
+        link = headers.get('Link', '')
+
+        href = re.search(r'<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"',
+                         body).group(1)
+        assert f'<{href}>; rel=preload; as=style' in link, \
+            f"Link header must preload the stylesheet the page links ({href})"
+
+        preloaded = re.search(r'<(/font/Inconsolata\.woff2\?v=[0-9a-f]+)>', link)
+        assert preloaded, "Link header must preload a versioned Inconsolata"
+        _, _, css = make_request('GET', href)
+        assert preloaded.group(1) in css, \
+            f"{href} must request the preloaded font URL {preloaded.group(1)}"
 
 
 class TestAssetCaching:
@@ -89,14 +123,22 @@ class TestAssetCaching:
         assert headers.get('Cache-Control') == 'public, max-age=31536000, immutable'
         assert replay_status == 304
 
-    def test_stale_version_is_not_immutable(self):
-        """A pre-deploy URL may serve different bytes after a deploy,
-        so it must not be cached forever."""
+    def test_stale_version_revalidates(self):
+        """A version we do not have names bytes we cannot serve, so the
+        answer must not be cached at all.
+
+        During a rolling deploy this is how a viewer holding new HTML
+        reaches an old replica. Storing that answer would pin stale
+        code against fresh markup for as long as the TTL, and no reload
+        would clear it: the HTML revalidates, the asset would not.
+        """
         wait_for_server(SERVER_URL)
-        status, headers, _ = make_request(
-            'GET', '/javascript/vendor/xterm.js?v=0000000000000000')
-        assert status == 200
-        assert headers.get('Cache-Control') == 'public, max-age=86400'
+        for path in ['/javascript/room.js', '/stylesheet/room.bundle.css']:
+            status, headers, _ = make_request(
+                'GET', f'{path}?v=0000000000000000')
+            assert status == 200, f"{path} must still serve current bytes"
+            assert headers.get('Cache-Control') == 'public, no-cache', \
+                f"{path} with a foreign version must revalidate"
 
     def test_unversioned_asset_caches_for_a_day(self):
         wait_for_server(SERVER_URL)

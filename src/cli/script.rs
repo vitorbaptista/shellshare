@@ -20,14 +20,13 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use signal_hook::consts::SIGWINCH;
 #[cfg(unix)]
-use signal_hook::iterator::Signals;
+use signal_hook::iterator::{Signals, SignalsInfo};
 
 /// RAII guard to enable/restore terminal raw mode.
-/// This is essential for interactive apps like vim to work properly.
 ///
-/// The key insight: `portable_pty` handles the PTY (slave side), but we also need
-/// to configure the **user's terminal** (master side) to be in raw mode for proper
-/// character-by-character input and escape sequence handling.
+/// `portable_pty` handles the PTY (slave side), but the **user's terminal**
+/// (master side) also needs raw mode for character-by-character input and
+/// escape sequence handling - which is what interactive apps like vim need.
 #[cfg(unix)]
 struct RawModeGuard {
     original: Option<libc::termios>,
@@ -37,22 +36,18 @@ struct RawModeGuard {
 impl RawModeGuard {
     fn new() -> Self {
         unsafe {
-            // Check if stdin is a TTY
             if libc::isatty(libc::STDIN_FILENO) == 0 {
                 return Self { original: None };
             }
 
-            // Save original terminal settings
             let mut original: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(libc::STDIN_FILENO, &mut original) != 0 {
                 return Self { original: None };
             }
 
-            // Create raw mode settings
             let mut raw = original;
             libc::cfmakeraw(&mut raw);
 
-            // Apply raw mode
             if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) != 0 {
                 return Self { original: None };
             }
@@ -121,19 +116,16 @@ pub fn run_script_mode(
     exec: Option<&[String]>,
     session: &super::SessionEnv<'_>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
-    // Enable raw mode BEFORE spawning shell
-    // This allows character-by-character input and proper escape sequence handling
-    // for interactive TUI apps like vim, less, htop, etc.
+    // Raw mode BEFORE spawning the shell, so the first keystroke already
+    // reaches an interactive TUI app character by character
     let _raw_guard = RawModeGuard::new();
 
-    // Get the user's shell (platform-specific)
     #[cfg(unix)]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
     #[cfg(windows)]
     let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
 
-    // Get terminal size
     let size = get_terminal_size();
     let pty_size = PtySize {
         rows: size.rows,
@@ -142,14 +134,9 @@ pub fn run_script_mode(
         pixel_height: 0,
     };
 
-    // Create PTY system
     let pty_system = native_pty_system();
-
-    // Open a PTY pair
     let pair = pty_system.openpty(pty_size)?;
 
-    // Build the command to spawn - the user's shell, or the `exec`
-    // command verbatim - preserving the current working directory
     let mut cmd = match exec {
         Some([program, args @ ..]) => {
             let mut cmd = CommandBuilder::new(program);
@@ -161,84 +148,83 @@ pub fn run_script_mode(
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
-    // Export the live session into the spawned shell's environment so
-    // `shellshare status`, run from inside it, can recover the link -
-    // kept in memory only, never written to disk. Only for an interactive
-    // shell: `exec` runs one arbitrary command that can't usefully call
-    // `status` and might forward its environment onward (CI logs, crash
-    // reporters), so it must not carry the URL's secret #fragment.
+    // Only for an interactive shell: `exec` runs one arbitrary command that
+    // can't usefully call `status` and might forward its environment onward
+    // (CI logs, crash reporters), so it must not carry the URL's secret
+    // #fragment.
     if exec.is_none() {
         cmd.env(super::ENV_URL, session.url);
         cmd.env(super::ENV_ROOM, session.room);
     }
 
-    // Spawn the shell in the PTY
     let mut child = pair.slave.spawn_command(cmd)?;
 
-    // Keep master reference for resize operations
     let master = pair.master;
 
-    // Explicitly resize PTY after spawning to ensure correct dimensions
+    // Explicitly resize after spawning to ensure correct dimensions
     master.resize(pty_size)?;
 
-    // Get a reader for the PTY master
     let mut reader = master.try_clone_reader()?;
-
-    // Get a writer for the PTY master (for forwarding stdin)
     let mut writer = master.take_writer()?;
 
-    // Shared terminal size for HTTP thread (updated by SIGWINCH handler)
+    // Shared terminal size, updated by the SIGWINCH handler
     let current_cols = Arc::new(AtomicU16::new(size.cols));
     let current_rows = Arc::new(AtomicU16::new(size.rows));
 
-    // Channel for resize requests from SIGWINCH handler to main loop
     #[cfg(unix)]
     let (resize_tx, resize_rx) = mpsc::channel::<PtySize>();
 
-    // Spawn SIGWINCH handler thread for dynamic terminal resize
+    // Watch SIGWINCH for dynamic terminal resize.
+    //
+    // Registered here, on this thread, rather than inside the worker
+    // below, because the `Handle` it yields is what stops that worker at
+    // the end of the session. Waking it with `raise(SIGWINCH)` instead
+    // raced with its own registration: SIGWINCH's default disposition is
+    // to be ignored, so a wake-up sent before the handler existed was
+    // discarded, the worker stayed parked in `forever()` and the join
+    // below never returned - a hang no termination signal could clear,
+    // since those only set flags a blocked thread never reads. Registering
+    // first closes the window; `close()` then needs no signal at all.
+    // `exec` is where it bit: a child like `sh -c 'exit 3'` produces no
+    // output, so nothing delays the teardown that races the worker's start.
     #[cfg(unix)]
-    let sigwinch_thread = {
-        let running_sigwinch = running.clone();
+    let sigwinch = Signals::new([SIGWINCH]).ok();
+    #[cfg(unix)]
+    let sigwinch_handle = sigwinch.as_ref().map(SignalsInfo::handle);
+    #[cfg(unix)]
+    let sigwinch_thread = sigwinch.map(|mut signals| {
         let cols = current_cols.clone();
         let rows = current_rows.clone();
 
-        let handle = thread::spawn(move || {
-            if let Ok(mut signals) = Signals::new([SIGWINCH]) {
-                for _ in signals.forever() {
-                    if !running_sigwinch.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    // Get new terminal size
-                    let new_size = get_terminal_size();
-                    // Update shared size atomics
-                    cols.store(new_size.cols, Ordering::SeqCst);
-                    rows.store(new_size.rows, Ordering::SeqCst);
-                    // Send resize request to main loop (which owns the master)
-                    let _ = resize_tx.send(PtySize {
-                        rows: new_size.rows,
-                        cols: new_size.cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    });
-                }
+        thread::spawn(move || {
+            // Ends when the handle is closed, not on a flag: `forever()`
+            // blocks, so a flag would only be read after a signal that
+            // may never come.
+            for _ in signals.forever() {
+                let new_size = get_terminal_size();
+                cols.store(new_size.cols, Ordering::SeqCst);
+                rows.store(new_size.rows, Ordering::SeqCst);
+                // The main loop owns the master, so it does the resize
+                let _ = resize_tx.send(PtySize {
+                    rows: new_size.rows,
+                    cols: new_size.cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
             }
-        });
-        Some(handle)
-    };
+        })
+    });
 
-    // Channel for sending PTY output to the sender thread (non-blocking)
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
-    // Clone for threads
     let running_clone = running.clone();
     let running_http = running.clone();
 
-    // Move atomics to HTTP thread (last use of these Arcs)
     let http_cols = current_cols;
     let http_rows = current_rows;
 
-    // Spawn the sender thread - it owns the transport and handles all
-    // network I/O, so network latency never blocks terminal display
+    // The sender thread owns the transport and handles all network I/O, so
+    // network latency never blocks terminal display
     let http_thread = thread::spawn(move || {
         // Bound on one frame's payload; chunks queued beyond this are
         // simply sent as further frames on the same connection
@@ -289,8 +275,8 @@ pub fn run_script_mode(
         transport.shutdown();
     });
 
-    // Spawn PTY reader thread - reads from PTY, displays locally, sends to channel
-    // This thread NEVER blocks on network I/O
+    // Reads from the PTY, displays locally, and hands off to the sender
+    // thread. NEVER blocks on network I/O.
     let stream_thread = thread::spawn(move || {
         let mut read_buffer = [0u8; 4096];
         let mut stdout = std::io::stdout();
@@ -302,21 +288,18 @@ pub fn run_script_mode(
 
             match reader.read(&mut read_buffer) {
                 Ok(0) => {
-                    // EOF
                     break;
                 }
                 Ok(n) => {
                     let data = &read_buffer[..n];
 
-                    // Write to local stdout IMMEDIATELY - never blocks on network
                     if stdout.write_all(data).is_err() {
                         break;
                     }
                     let _ = stdout.flush();
 
-                    // Send to HTTP thread via channel (non-blocking)
-                    // If channel is full/closed, we just drop the data for server
-                    // (local display already happened)
+                    // A closed channel just drops the data for the server;
+                    // the local display already happened
                     let _ = tx.send(data.to_vec());
                 }
                 Err(e) => {
@@ -324,21 +307,20 @@ pub fn run_script_mode(
                         thread::sleep(Duration::from_millis(10));
                         continue;
                     }
-                    // Other errors - likely the PTY closed
+                    // Likely the PTY closed
                     break;
                 }
             }
         }
 
-        // Drop sender to signal HTTP thread to flush and exit
+        // Signals the sender thread to flush and exit
         drop(tx);
     });
 
-    // Clone running flag for stdin thread
     let running_stdin = running.clone();
 
-    // Spawn a thread to forward stdin to the PTY
-    // Also detects double Ctrl+C for force-quit (useful when shell is unresponsive)
+    // Forwards stdin to the PTY, and detects double Ctrl+C for force-quit
+    // (useful when the shell is unresponsive)
     let _stdin_thread = thread::spawn(move || {
         const CTRLC_BYTE: u8 = 0x03;
         const DOUBLE_CTRLC_WINDOW: Duration = Duration::from_millis(500);
@@ -354,7 +336,6 @@ pub fn run_script_mode(
                 break;
             }
 
-            // Use read with a small buffer to be responsive
             match stdin_lock.read(&mut buffer) {
                 Ok(0) => {
                     // EOF. Dropping the writer makes portable-pty encode
@@ -379,11 +360,9 @@ pub fn run_script_mode(
                     forwarded_any = true;
                     let data = &buffer[..n];
 
-                    // Check for Ctrl+C (0x03) for double-tap force quit
                     if data.contains(&CTRLC_BYTE) {
                         if let Some(last) = last_ctrlc {
                             if last.elapsed() < DOUBLE_CTRLC_WINDOW {
-                                // Double Ctrl+C detected - force quit
                                 running_stdin.store(false, Ordering::SeqCst);
                                 break;
                             }
@@ -391,11 +370,10 @@ pub fn run_script_mode(
                         last_ctrlc = Some(Instant::now());
                     }
 
-                    // Forward input to PTY (including single Ctrl+C for normal use)
+                    // A single Ctrl+C is forwarded like any other input
                     if writer.write_all(data).is_err() {
                         break;
                     }
-                    // Flush to ensure data reaches the PTY immediately
                     if writer.flush().is_err() {
                         break;
                     }
@@ -415,9 +393,8 @@ pub fn run_script_mode(
     // it to the caller (interrupted/unobservable children report 0)
     let mut exit_code = 0;
 
-    // Poll child status instead of blocking, so we can respond to Ctrl+C and resize requests
+    // Poll rather than block, so Ctrl+C and resize requests get a turn
     loop {
-        // Check if Ctrl+C was pressed
         if !running.load(Ordering::SeqCst) {
             // Kill the child process and reap it (bounded), so the slave
             // is only dropped after the child is actually gone
@@ -431,25 +408,21 @@ pub fn run_script_mode(
             break;
         }
 
-        // Handle any pending resize requests (Unix only)
         #[cfg(unix)]
         while let Ok(new_size) = resize_rx.try_recv() {
             let _ = master.resize(new_size);
         }
 
-        // Check if child has exited (non-blocking)
         match child.try_wait() {
             Ok(Some(status)) => {
-                // Child exited
                 exit_code = i32::try_from(status.exit_code()).unwrap_or(1);
                 break;
             }
             Ok(None) => {
-                // Child still running, sleep briefly and check again
                 thread::sleep(Duration::from_millis(50));
             }
+            // Error checking status: assume the child died
             Err(_) => {
-                // Error checking status, assume child died
                 break;
             }
         }
@@ -489,12 +462,13 @@ pub fn run_script_mode(
     // Signal the remaining helper threads (stdin forwarder, SIGWINCH) to stop
     running.store(false, Ordering::SeqCst);
 
-    // Join SIGWINCH handler thread (Unix only)
+    // Join SIGWINCH handler thread (Unix only). Closing the handle ends
+    // its `forever()` loop directly - no signal to deliver, so nothing
+    // to lose, and this join always returns.
     #[cfg(unix)]
     if let Some(handle) = sigwinch_thread {
-        // Send SIGWINCH to ourselves to unblock the signal iterator
-        unsafe {
-            libc::raise(SIGWINCH);
+        if let Some(signals) = sigwinch_handle {
+            signals.close();
         }
         let _ = handle.join();
     }

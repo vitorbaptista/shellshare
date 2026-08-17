@@ -53,7 +53,7 @@
         "name": "How do I share my terminal live without signing up?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Run `npx -y shellshare` (or download the binary from https://get.shellshare.net). It prints a link like https://shellshare.net/r/abc123 - anyone who opens it watches your terminal live. Exit the shell to stop."
+          "text": "Run `npx shellshare` (or download the binary from https://get.shellshare.net). It prints a link like https://shellshare.net/r/abc123 - anyone who opens it watches your terminal live. Exit the shell to stop."
         }
       },
       {
@@ -112,7 +112,7 @@
       <section class="instructions">
         <div class="download">
           <code title="Click to copy">
-            <span class="node">npx -y shellshare</span>
+            <span class="node">npx shellshare</span>
             <span class="macos">curl -sLo shellshare https://get.shellshare.net/?os=mac &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
             <span class="linux">wget -qO shellshare https://get.shellshare.net/?os=linux &amp;&amp; chmod +x shellshare &amp;&amp; ./shellshare</span>
             <span class="windows">iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe; .\shellshare.exe</span>
@@ -134,7 +134,7 @@
         <p>Shellshare allows you to broadcast your terminal live with a single command. Read-only, end-to-end encrypted, great for teaching and presentations.</p>
         <h3>How to use?</h3>
         <p>Open a terminal and write:</p>
-        <pre class="demo" data-duration="5000"><code><span class="node">$ npx -y shellshare</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
+        <pre class="demo" data-duration="5000"><code><span class="node">$ npx shellshare</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
 $ chmod +x shellshare
 $ ./shellshare</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
 $ chmod +x shellshare
@@ -158,7 +158,7 @@ PS&gt; exit</span>
         <p>No. Shellshare was made only for live broadcasts. If you'd like to save your terminal, try <a href="https://asciinema.org">asciinema.org</a>.</p>
         <h3>Can I broadcast to a custom room name?</h3>
         <p>Yes. You can broadcast to a named room secured with a password by calling shellshare as:</p>
-        <pre><code><span class="node">$ npx -y shellshare --room MY-ROOM --password MY-PASS</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
+        <pre><code><span class="node">$ npx shellshare --room MY-ROOM --password MY-PASS</span><span class="macos">$ curl -sLo shellshare https://get.shellshare.net/?os=mac
 $ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="linux">$ wget -qO shellshare https://get.shellshare.net/?os=linux
 $ chmod +x shellshare &amp;&amp; ./shellshare --room MY-ROOM --password MY-PASS</span><span class="windows">PS&gt; iwr https://get.shellshare.net/?os=windows -OutFile shellshare.exe
 PS&gt; .\shellshare.exe --room MY-ROOM --password MY-PASS</span>
@@ -175,8 +175,8 @@ PS&gt; exit</span>
         <h3>Can I recover the password to a custom room?</h3>
         <p>No. However, a room is deleted once it goes idle (6 hours on shellshare.net), so you can claim the name again after that. The same window applies to sharing a room name with someone else: while a room is alive it belongs to the computer that claimed it, and anyone else broadcasting to that name is turned away.</p>
         <h3>Can I run shellshare on Windows?</h3>
-        <p>Yes. We have pre-built binaries for Linux, macOS (Intel and Apple Silicon), and Windows. When you download from <a href="https://get.shellshare.net">https://get.shellshare.net</a>, we automatically detect your operating system and give you the correct binary.</p>
-        <p>You can also pass the <code>os</code> query parameter to explicitly download a specific binary. The options are <code>linux</code>, <code>windows</code>, <code>mac</code> and <code>mac-arm</code>. For example, if you want to download the Linux binary regardless of your operating system, access <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a>.</p>
+        <p>Yes. We have pre-built binaries for Linux (x86-64 and ARM64), macOS (Intel and Apple Silicon), and Windows. When you download from <a href="https://get.shellshare.net">https://get.shellshare.net</a>, we automatically detect your operating system and give you the correct binary.</p>
+        <p>You can also pass the <code>os</code> query parameter to explicitly download a specific binary. The options are <code>linux</code>, <code>linux-arm</code>, <code>windows</code>, <code>mac</code> and <code>mac-arm</code>. For example, if you want to download the Linux binary regardless of your operating system, access <a href="https://get.shellshare.net/?os=linux">https://get.shellshare.net/?os=linux</a>.</p>
         <h3>Can I self-host shellshare?</h3>
         <p>Yes. The shellshare binary also includes the server. You can start it by running <code>shellshare serve</code> and accessing the server at <a href="http://localhost:3000">http://localhost:3000</a>. No data leaves your computer. To let other people access your server, add <code>--tunnel</code> (e.g. <code>shellshare serve --tunnel</code>): it uses <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/">cloudflared</a> (which you need installed) to create a public link for your broadcast.</p>
         <p>End-to-end encryption only works over HTTPS or localhost. If your viewers reach a self-hosted server over plain HTTP, for example a teacher sharing their terminal with students on a lab's local network, broadcast with <code>--disable-encryption</code> to send in plaintext instead.</p>

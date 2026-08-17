@@ -11,12 +11,12 @@ Viewers see the terminal live in their browser, read-only.
 ## Install
 
 ```bash
-npx -y shellshare --help                 # no install (Node.js)
+npx shellshare --help                    # no install (Node.js)
 curl -sLo shellshare https://get.shellshare.net/ && chmod +x shellshare   # static binary (auto-detects OS)
 ```
 
-Binaries exist for Linux x64, macOS x64/arm64, and Windows x64
-(`https://get.shellshare.net/?os=linux|mac|mac-arm|windows`).
+Binaries exist for Linux x64/arm64, macOS x64/arm64, and Windows x64
+(`https://get.shellshare.net/?os=linux|linux-arm|mac|mac-arm|windows`).
 
 ## The machine-readable contract: `--json`
 
