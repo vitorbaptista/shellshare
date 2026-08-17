@@ -90,7 +90,8 @@ impl Keyframer {
         }
         // avt uses the 8-bit CSI (U+009B); rewrite to the 7-bit `ESC [` form
         // that every terminal and xterm.js accept.
-        Some(dump.replace('\u{9b}', "\x1b[").into_bytes())
+        let dump = dump.replace('\u{9b}', "\x1b[");
+        Some(semicolon_sgr_params(&dump).into_bytes())
     }
 
     fn apply_resize(&mut self, size: TermSize) {
@@ -148,4 +149,38 @@ impl Keyframer {
             self.carry.clear();
         }
     }
+}
+
+/// avt writes truecolor as `38:2:R:G:B`, which T.416 does not allow: the
+/// color-space field is positional, not optional, so a reader following the
+/// spec takes G and B for R and G and defaults B to 0 - blue arrives as
+/// yellow-green. xterm.js follows the spec (xtermjs/xterm.js#5792 was closed
+/// as working-as-intended), so the emitter is what has to change.
+///
+/// The only colons avt puts inside an SGR are colors, and screen text can
+/// never contain an ESC, so rewriting every colon in a `...m` sequence is
+/// enough. A dump's trailing sequence can be unterminated - `Vt::dump`
+/// reproduces in-flight parser state - so the end of the dump terminates one
+/// too. A param that already spells the empty color space (`38:2::R:G:B`) is
+/// left alone: that form is valid, and flattening its `::` to `;;` would
+/// reintroduce the very shift this removes.
+fn semicolon_sgr_params(dump: &str) -> String {
+    let mut out = String::with_capacity(dump.len());
+    let mut rest = dump;
+    while let Some(start) = rest.find("\x1b[") {
+        let (head, body) = rest.split_at(start + 2);
+        out.push_str(head);
+        let end = body
+            .find(|c: char| !matches!(c, '0'..='9' | ';' | ':'))
+            .unwrap_or(body.len());
+        let (params, tail) = body.split_at(end);
+        if (tail.starts_with('m') || tail.is_empty()) && !params.contains("::") {
+            out.push_str(&params.replace(':', ";"));
+        } else {
+            out.push_str(params);
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }
