@@ -1,4 +1,4 @@
-# shellshare
+# Shellshare
 
 > Live, read-only terminal broadcasting via a web link. One command, no signup.
 
@@ -14,15 +14,14 @@ remote access, durable recording, secret storage, or unattended jobs.
 
 ## Developer resources
 
-- Developer documentation: https://shellshare.net/docs
-- Agent instructions and reader: https://shellshare.net/llms.txt
-- About: https://shellshare.net/about
-- Privacy: https://shellshare.net/privacy
-- Contact and support: https://shellshare.net/contact
-- Source and protocol implementation: https://github.com/vitorbaptista/shellshare
+- Shellshare homepage: https://shellshare.net
+- Agent documentation and reader: https://shellshare.net/llms.txt
+- Source, self-hosting, and protocol implementation: https://github.com/vitorbaptista/shellshare
+- Static binary downloads: https://get.shellshare.net
 
-Shellshare has no OpenAPI specification, webhooks, OAuth flow, or MCP server.
-See `/docs` for its CLI, WebSocket API, and authentication boundaries.
+Shellshare's supported integration surfaces are the CLI, HTTP snapshot, and
+WebSocket protocol documented below. It has no OpenAPI specification, webhooks,
+OAuth flow, or MCP server.
 
 ## Install
 

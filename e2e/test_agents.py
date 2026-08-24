@@ -184,8 +184,7 @@ class TestDiscoveryEndpoints:
         assert '"event":"sharing"' in response.text.replace(" ", "")
         assert "## When to use shellshare" in response.text
         assert "## Developer resources" in response.text
-        for resource in ["/docs", "/about", "/contact", "/privacy"]:
-            assert resource in response.text
+        assert "https://github.com/vitorbaptista/shellshare" in response.text
 
     def test_home_page_is_complete_without_javascript(self):
         """The raw response must carry semantic, substantial page content."""
@@ -216,6 +215,7 @@ class TestDiscoveryEndpoints:
         assert {"accept", "accept-encoding"} <= vary
         if expected_type.startswith("text/markdown"):
             assert response.text.startswith("# Shellshare")
+            assert "## When to use shellshare" in response.text
         else:
             assert response.text.startswith("<!DOCTYPE html>")
 
@@ -227,39 +227,13 @@ class TestDiscoveryEndpoints:
         assert "Accept" in response.headers["vary"]
         assert "text/markdown" in response.text
 
-    @pytest.mark.parametrize("path,title", [
-        ("/docs", "Shellshare Developer Documentation"),
-        ("/about", "About Shellshare"),
-        ("/contact", "Contact Shellshare"),
-        ("/privacy", "Shellshare Privacy"),
-    ])
-    def test_public_content_pages_have_substantial_html(self, path, title):
-        wait_for_server(SERVER_URL)
-        html_response = requests.get(f"{SERVER_URL}{path}")
-        assert html_response.status_code == 200
-        assert html_response.headers["content-type"] == "text/html; charset=utf-8"
-        assert "Shellshare" in re.search(
-            r"<title>(.*?)</title>", html_response.text, re.DOTALL
-        ).group(1)
-        h1 = re.search(r"<h1\b[^>]*>(.*?)</h1>", html_response.text,
-                       flags=re.IGNORECASE | re.DOTALL)
-        assert h1 and title in visible_html_text(h1.group(1))
-        assert len(visible_html_text(html_response.text)) >= 500
-
-    def test_developer_docs_name_integration_boundaries(self):
-        wait_for_server(SERVER_URL)
-        response = requests.get(f"{SERVER_URL}/docs")
-        for term in ["API", "authentication", "OpenAPI", "webhook", "MCP",
-                     "WebSocket", "--json"]:
-            assert term in response.text
-
     def test_unknown_paths_return_recoverable_markdown_404(self):
         wait_for_server(SERVER_URL)
         response = requests.get(f"{SERVER_URL}/some-path-that-does-not-exist")
         assert response.status_code == 404
         assert response.headers["content-type"] == "text/markdown; charset=utf-8"
         assert response.text.startswith("# 404:")
-        for resource in ["/docs", "/llms.txt", "/sitemap.xml"]:
+        for resource in ["/llms.txt", "/sitemap.xml"]:
             assert resource in response.text
 
     def test_html_and_markdown_have_distinct_etags(self):
@@ -449,8 +423,7 @@ class TestDiscoveryEndpoints:
         response = requests.get(f"{SERVER_URL}/sitemap.xml")
         assert response.status_code == 200
         assert "<urlset" in response.text
-        for path in ["/", "/docs", "/about", "/contact", "/privacy",
-                     "/llms.txt"]:
+        for path in ["/", "/llms.txt"]:
             assert f"<loc>https://shellshare.net{path}</loc>" in response.text
 
     def test_home_page_has_structured_data(self):
