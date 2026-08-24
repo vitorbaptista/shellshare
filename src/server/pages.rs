@@ -62,6 +62,13 @@ struct Page {
     stylesheet: (String, Stylesheet),
 }
 
+/// A canonical public page with equivalent HTML and Markdown representations.
+struct ContentPage {
+    html: Page,
+    markdown: String,
+    markdown_etag: String,
+}
+
 /// A page's local stylesheets, flattened in cascade order with
 /// `@import`s resolved and asset URLs versioned, served as one file.
 struct Stylesheet {
@@ -71,9 +78,29 @@ struct Stylesheet {
     hash: [u8; 32],
 }
 
-fn index_page() -> &'static Page {
+fn index_page() -> &'static ContentPage {
+    static PAGE: OnceLock<ContentPage> = OnceLock::new();
+    PAGE.get_or_init(|| render_content_page("index.html", "index.md"))
+}
+
+fn docs_page() -> &'static Page {
     static PAGE: OnceLock<Page> = OnceLock::new();
-    PAGE.get_or_init(|| render_page("index.html", &[]))
+    PAGE.get_or_init(|| render_page("docs.html", &[]))
+}
+
+fn about_page() -> &'static Page {
+    static PAGE: OnceLock<Page> = OnceLock::new();
+    PAGE.get_or_init(|| render_page("about.html", &[]))
+}
+
+fn contact_page() -> &'static Page {
+    static PAGE: OnceLock<Page> = OnceLock::new();
+    PAGE.get_or_init(|| render_page("contact.html", &[]))
+}
+
+fn privacy_page() -> &'static Page {
+    static PAGE: OnceLock<Page> = OnceLock::new();
+    PAGE.get_or_init(|| render_page("privacy.html", &[]))
 }
 
 fn room_page() -> &'static Page {
@@ -176,8 +203,35 @@ pub async fn llms_handler(headers: HeaderMap) -> Response {
 /// instead of the first request.
 pub fn warm() {
     index_page();
+    docs_page();
+    about_page();
+    contact_page();
+    privacy_page();
     room_page();
     llms_txt();
+}
+
+fn render_content_page(html_name: &str, markdown_name: &str) -> ContentPage {
+    let file = Templates::get(markdown_name)
+        .unwrap_or_else(|| panic!("template {markdown_name} not embedded"));
+    let markdown = String::from_utf8(file.data.into_owned())
+        .unwrap_or_else(|_| panic!("template {markdown_name} is not UTF-8"));
+    assert!(
+        markdown
+            .lines()
+            .next()
+            .is_some_and(|heading| heading.starts_with("# ") && heading.contains("Shellshare")),
+        "template {markdown_name} must start with an H1 containing Shellshare"
+    );
+    let markdown_etag = format!(
+        "\"{}\"",
+        hex::encode(Sha256::digest(markdown.as_bytes()))
+    );
+    ContentPage {
+        html: render_page(html_name, &[]),
+        markdown,
+        markdown_etag,
+    }
 }
 
 fn render_page(name: &str, preloads: &[(&str, &str)]) -> Page {
@@ -377,9 +431,16 @@ fn replace_stylesheet_links(html: &str, links: &[(Range<usize>, String)], url: &
 
 /// The bundle behind `/stylesheet/<page>.bundle.css`, if that is what
 /// the path names. Generated, so it is not in `StaticAssets`; a linear
-/// scan is enough for two pages.
+/// scan is enough for this small fixed set of pages.
 fn stylesheet_bundle(path: &str) -> Option<&'static Stylesheet> {
-    [index_page(), room_page()]
+    [
+        &index_page().html,
+        room_page(),
+        docs_page(),
+        about_page(),
+        contact_page(),
+        privacy_page(),
+    ]
         .into_iter()
         .find(|page| page.stylesheet.0 == path)
         .map(|page| &page.stylesheet.1)
@@ -451,8 +512,24 @@ fn asset_version(path: &str) -> Option<String> {
     StaticAssets::get(path).map(|file| hex::encode(&file.metadata.sha256_hash()[..VERSION_BYTES]))
 }
 
-pub async fn index_handler(headers: HeaderMap) -> impl IntoResponse {
-    serve_page(index_page(), &headers)
+pub async fn index_handler(headers: HeaderMap) -> Response {
+    serve_content_page(index_page(), &headers)
+}
+
+pub async fn docs_handler(headers: HeaderMap) -> Response {
+    serve_page(docs_page(), &headers)
+}
+
+pub async fn about_handler(headers: HeaderMap) -> Response {
+    serve_page(about_page(), &headers)
+}
+
+pub async fn contact_handler(headers: HeaderMap) -> Response {
+    serve_page(contact_page(), &headers)
+}
+
+pub async fn privacy_handler(headers: HeaderMap) -> Response {
+    serve_page(privacy_page(), &headers)
 }
 
 /// The viewer page response for `GET /r/:room`. Not an axum handler:
@@ -477,6 +554,183 @@ pub const fn noindex_header() -> (header::HeaderName, header::HeaderValue) {
     (
         header::HeaderName::from_static("x-robots-tag"),
         header::HeaderValue::from_static("noindex"),
+    )
+}
+
+const VARY_ACCEPT: &str = "Accept, Accept-Encoding";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Representation {
+    Html,
+    Markdown,
+}
+
+impl Representation {
+    const fn media_type(self) -> &'static str {
+        match self {
+            Self::Html => "text/html",
+            Self::Markdown => "text/markdown",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AcceptEntry {
+    media_type: String,
+    quality: f32,
+    specificity: u8,
+    position: usize,
+}
+
+/// Serve the representation preferred by `Accept`, following RFC 9110's
+/// quality and specificity rules. HTML is the default for an absent header or
+/// a wildcard tie, while an unsatisfiable header gets a real 406.
+fn serve_content_page(page: &ContentPage, request_headers: &HeaderMap) -> Response {
+    match preferred_representation(request_headers) {
+        Some(Representation::Markdown) => serve_markdown(page, request_headers),
+        Some(Representation::Html) => {
+            let mut response = serve_page(&page.html, request_headers);
+            response.headers_mut().insert(
+                header::VARY,
+                header::HeaderValue::from_static(VARY_ACCEPT),
+            );
+            response
+        }
+        None => Response::builder()
+            .status(StatusCode::NOT_ACCEPTABLE)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::VARY, VARY_ACCEPT)
+            .header(header::CACHE_CONTROL, CACHE_REVALIDATE)
+            .body(Body::from(
+                "Not Acceptable\n\nAvailable: text/html, text/markdown\n",
+            ))
+            .unwrap(),
+    }
+}
+
+fn serve_markdown(page: &ContentPage, request_headers: &HeaderMap) -> Response {
+    let response = Response::builder()
+        .header(header::CACHE_CONTROL, CACHE_REVALIDATE)
+        .header(header::ETAG, &page.markdown_etag)
+        .header(header::VARY, VARY_ACCEPT);
+    if none_match(request_headers, &page.markdown_etag) {
+        return response
+            .status(StatusCode::NOT_MODIFIED)
+            .body(Body::empty())
+            .unwrap();
+    }
+    response
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/markdown; charset=utf-8")
+        .body(Body::from(page.markdown.clone()))
+        .unwrap()
+}
+
+fn preferred_representation(headers: &HeaderMap) -> Option<Representation> {
+    let values: Vec<_> = headers
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect();
+    if values.is_empty() {
+        return Some(Representation::Html);
+    }
+
+    let entries = parse_accept(&values.join(","));
+    if entries.is_empty() {
+        return Some(Representation::Html);
+    }
+
+    let candidates = [Representation::Html, Representation::Markdown];
+    let mut best: Option<(Representation, f32, usize)> = None;
+    for candidate in candidates {
+        let mut matched: Option<&AcceptEntry> = None;
+        for entry in &entries {
+            if !accept_matches(entry, candidate.media_type()) {
+                continue;
+            }
+            let is_better_match = matched.map_or(true, |current| {
+                entry.specificity > current.specificity
+                    || (entry.specificity == current.specificity
+                        && entry.position < current.position)
+            });
+            if is_better_match {
+                matched = Some(entry);
+            }
+        }
+
+        let Some(matched) = matched.filter(|entry| entry.quality > 0.0) else {
+            continue;
+        };
+        let is_better_candidate = match best {
+            None => true,
+            Some((_, quality, position)) => {
+                matched.quality.total_cmp(&quality).is_gt()
+                    || (matched.quality.total_cmp(&quality).is_eq()
+                        && matched.position < position)
+            }
+        };
+        if is_better_candidate {
+            best = Some((candidate, matched.quality, matched.position));
+        }
+    }
+    best.map(|(candidate, _, _)| candidate)
+}
+
+fn parse_accept(value: &str) -> Vec<AcceptEntry> {
+    value
+        .split(',')
+        .enumerate()
+        .filter_map(|(position, raw)| {
+            let mut parts = raw.trim().split(';');
+            let media_type = parts.next()?.trim().to_ascii_lowercase();
+            let (kind, subtype) = media_type.split_once('/')?;
+            if kind.is_empty()
+                || subtype.is_empty()
+                || kind == "*" && subtype != "*"
+                || subtype.contains('*') && subtype != "*"
+            {
+                return None;
+            }
+
+            let mut quality = 1.0;
+            for parameter in parts {
+                let Some((name, raw_value)) = parameter.trim().split_once('=') else {
+                    continue;
+                };
+                if name.trim().eq_ignore_ascii_case("q") {
+                    quality = raw_value
+                        .trim()
+                        .trim_matches('"')
+                        .parse::<f32>()
+                        .ok()?
+                        .clamp(0.0, 1.0);
+                }
+            }
+            let specificity = if media_type == "*/*" {
+                0
+            } else if subtype == "*" {
+                1
+            } else {
+                2
+            };
+            Some(AcceptEntry {
+                media_type,
+                quality,
+                specificity,
+                position,
+            })
+        })
+        .collect()
+}
+
+fn accept_matches(entry: &AcceptEntry, candidate: &str) -> bool {
+    if entry.media_type == "*/*" {
+        return true;
+    }
+    entry.media_type.strip_suffix("/*").map_or_else(
+        || entry.media_type == candidate,
+        |kind| candidate.split_once('/').is_some_and(|(candidate_kind, _)| candidate_kind == kind),
     )
 }
 
@@ -510,11 +764,7 @@ pub async fn serve_static(req: Request<Body>) -> impl IntoResponse {
     let method = req.method();
 
     let Some((bytes, hash)) = asset_bytes(path) else {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Not Found"))
-            .unwrap();
+        return not_found_response();
     };
     if method != Method::GET && method != Method::HEAD {
         return Response::builder()
@@ -571,6 +821,25 @@ pub async fn serve_static(req: Request<Body>) -> impl IntoResponse {
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .body(Body::from(bytes.into_owned()))
+        .unwrap()
+}
+
+/// A machine-readable recovery path for unknown public URLs. Markdown is
+/// useful even when the caller did not negotiate it: this resource represents
+/// an error, not an alternate form of a page that exists.
+pub fn not_found_response() -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header(header::CONTENT_TYPE, "text/markdown; charset=utf-8")
+        .header(header::CACHE_CONTROL, CACHE_REVALIDATE)
+        .body(Body::from(
+            "# 404: Shellshare page not found\n\n\
+             The requested path does not exist. Try one of these resources:\n\n\
+             - [Shellshare home](/)\n\
+             - [Developer documentation](/docs)\n\
+             - [Agent instructions](/llms.txt)\n\
+             - [Site map](/sitemap.xml)\n",
+        ))
         .unwrap()
 }
 
