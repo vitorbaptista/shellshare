@@ -1,0 +1,92 @@
+@import "base.css";
+
+.wrapper {
+  width: 45em;
+}
+
+.content-header {
+  margin: 3.5em 0 1.5em;
+  text-align: center;
+}
+
+.wordmark {
+  margin: 0;
+  font-family: ‘Lucida Console’, Monaco, monospace;
+  font-size: 3em;
+  line-height: 1;
+}
+
+.wordmark a,
+.wordmark a:hover,
+.wordmark a:visited {
+  color: #333;
+  text-decoration: none;
+}
+
+.content-header h1 {
+  margin: 0.65em 0 0;
+  font-size: 1.75em;
+  text-wrap: balance;
+}
+
+.content-page article {
+  margin: 3.5em 0;
+}
+
+.content-page article h2 {
+  margin-top: 2.25em;
+  margin-bottom: 0.65em;
+  font-size: 1.5em;
+}
+
+.content-page article p,
+.content-page article li {
+  line-height: 1.65;
+}
+
+.content-page pre {
+  padding: 1em;
+  overflow-x: auto;
+  border-radius: 10px;
+  background: #222;
+  color: #f0f0f0;
+}
+
+.content-page code {
+  overflow-wrap: anywhere;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6em 1.35em;
+  text-align: center;
+}
+
+.site-nav a[aria-current="page"] {
+  font-weight: bold;
+}
+
+@media (max-width: 47em) {
+  .wrapper {
+    width: auto;
+    padding: 0 1em;
+  }
+
+  .content-header {
+    margin-top: 2em;
+  }
+
+  .wordmark {
+    font-size: clamp(2.25em, 13vw, 3em);
+  }
+
+  .content-header h1 {
+    font-size: 1.5em;
+  }
+
+  .content-page article {
+    margin-top: 2.5em;
+  }
+}

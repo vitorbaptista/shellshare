@@ -11,7 +11,9 @@ E2E tests for the machine-readable surfaces aimed at scripts and AI agents:
 import json
 import os
 import platform
+import re
 import subprocess
+from html import unescape
 
 import pytest
 import requests
@@ -28,6 +30,15 @@ from conftest import (
 )
 
 IS_WINDOWS = platform.system() == "Windows"
+
+
+def visible_html_text(document):
+    """Approximate what a no-JavaScript text extractor can read."""
+    without_scripts = re.sub(
+        r"<(script|style)\b[^>]*>.*?</\1>", " ", document,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return " ".join(unescape(re.sub(r"<[^>]+>", " ", without_scripts)).split())
 
 def parse_json_events(stdout):
     """Parse the shellshare events out of stdout. Exec mode interleaves the
@@ -171,6 +182,102 @@ class TestDiscoveryEndpoints:
         # The agent contract must be documented
         assert "--json" in response.text
         assert '"event":"sharing"' in response.text.replace(" ", "")
+        assert "## When to use shellshare" in response.text
+        assert "## Developer resources" in response.text
+        for resource in ["/docs", "/about", "/contact", "/privacy"]:
+            assert resource in response.text
+
+    def test_home_page_is_complete_without_javascript(self):
+        """The raw response must carry semantic, substantial page content."""
+        wait_for_server(SERVER_URL)
+        response = requests.get(SERVER_URL)
+        assert response.status_code == 200
+        h1 = re.search(r"<h1\b[^>]*>(.*?)</h1>", response.text,
+                       flags=re.IGNORECASE | re.DOTALL)
+        assert h1, "The server-rendered homepage must contain an H1"
+        assert "shellshare" in visible_html_text(h1.group(1)).lower().replace(" ", "")
+        assert len(visible_html_text(response.text)) >= 500
+
+    @pytest.mark.parametrize("accept,expected_type", [
+        ("text/markdown", "text/markdown; charset=utf-8"),
+        ("text/markdown, text/html;q=0.8", "text/markdown; charset=utf-8"),
+        ("text/html", "text/html; charset=utf-8"),
+        ("text/markdown;q=0, text/html", "text/html; charset=utf-8"),
+        ("text/html;q=0.5, text/*;q=1", "text/markdown; charset=utf-8"),
+        ("*/*", "text/html; charset=utf-8"),
+    ])
+    def test_markdown_content_negotiation(self, accept, expected_type):
+        """Canonical URLs honor q-values, specificity, and the HTML default."""
+        wait_for_server(SERVER_URL)
+        response = requests.get(SERVER_URL, headers={"Accept": accept})
+        assert response.status_code == 200
+        assert response.headers["content-type"] == expected_type
+        vary = {part.strip().lower() for part in response.headers["vary"].split(",")}
+        assert {"accept", "accept-encoding"} <= vary
+        if expected_type.startswith("text/markdown"):
+            assert response.text.startswith("# Shellshare")
+        else:
+            assert response.text.startswith("<!DOCTYPE html>")
+
+    def test_unsatisfiable_accept_returns_406(self):
+        wait_for_server(SERVER_URL)
+        response = requests.get(SERVER_URL, headers={"Accept": "application/pdf"})
+        assert response.status_code == 406
+        assert response.headers["content-type"] == "text/plain; charset=utf-8"
+        assert "Accept" in response.headers["vary"]
+        assert "text/markdown" in response.text
+
+    @pytest.mark.parametrize("path,title", [
+        ("/docs", "Shellshare Developer Documentation"),
+        ("/about", "About Shellshare"),
+        ("/contact", "Contact Shellshare"),
+        ("/privacy", "Shellshare Privacy"),
+    ])
+    def test_public_content_pages_have_substantial_html(self, path, title):
+        wait_for_server(SERVER_URL)
+        html_response = requests.get(f"{SERVER_URL}{path}")
+        assert html_response.status_code == 200
+        assert html_response.headers["content-type"] == "text/html; charset=utf-8"
+        assert "Shellshare" in re.search(
+            r"<title>(.*?)</title>", html_response.text, re.DOTALL
+        ).group(1)
+        h1 = re.search(r"<h1\b[^>]*>(.*?)</h1>", html_response.text,
+                       flags=re.IGNORECASE | re.DOTALL)
+        assert h1 and title in visible_html_text(h1.group(1))
+        assert len(visible_html_text(html_response.text)) >= 500
+
+    def test_developer_docs_name_integration_boundaries(self):
+        wait_for_server(SERVER_URL)
+        response = requests.get(f"{SERVER_URL}/docs")
+        for term in ["API", "authentication", "OpenAPI", "webhook", "MCP",
+                     "WebSocket", "--json"]:
+            assert term in response.text
+
+    def test_unknown_paths_return_recoverable_markdown_404(self):
+        wait_for_server(SERVER_URL)
+        response = requests.get(f"{SERVER_URL}/some-path-that-does-not-exist")
+        assert response.status_code == 404
+        assert response.headers["content-type"] == "text/markdown; charset=utf-8"
+        assert response.text.startswith("# 404:")
+        for resource in ["/docs", "/llms.txt", "/sitemap.xml"]:
+            assert resource in response.text
+
+    def test_html_and_markdown_have_distinct_etags(self):
+        wait_for_server(SERVER_URL)
+        html_response = requests.get(SERVER_URL, headers={"Accept": "text/html"})
+        markdown_response = requests.get(
+            SERVER_URL, headers={"Accept": "text/markdown"}
+        )
+        assert html_response.headers["etag"] != markdown_response.headers["etag"]
+        replay = requests.get(
+            SERVER_URL,
+            headers={
+                "Accept": "text/markdown",
+                "If-None-Match": markdown_response.headers["etag"],
+            },
+        )
+        assert replay.status_code == 304
+        assert "Accept" in replay.headers["vary"]
 
     def test_rooms_are_noindex_rather_than_disallowed(self):
         """Rooms stay out of search indexes without an agent allowlist.
@@ -342,7 +449,9 @@ class TestDiscoveryEndpoints:
         response = requests.get(f"{SERVER_URL}/sitemap.xml")
         assert response.status_code == 200
         assert "<urlset" in response.text
-        assert "https://shellshare.net/" in response.text
+        for path in ["/", "/docs", "/about", "/contact", "/privacy",
+                     "/llms.txt"]:
+            assert f"<loc>https://shellshare.net{path}</loc>" in response.text
 
     def test_home_page_has_structured_data(self):
         wait_for_server(SERVER_URL)

@@ -145,6 +145,10 @@ pub async fn serve_on(
 
     let app = Router::new()
         .route("/", get(pages::index_handler))
+        .route("/docs", get(pages::docs_handler))
+        .route("/about", get(pages::about_handler))
+        .route("/contact", get(pages::contact_handler))
+        .route("/privacy", get(pages::privacy_handler))
         // Rendered, not static: it inlines templates/agent.mjs
         .route("/llms.txt", get(pages::llms_handler))
         .route("/r/{*room}", get(room_get_handler))

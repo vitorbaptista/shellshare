@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Shellshare Privacy — Terminal Data and Analytics</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How Shellshare handles encrypted terminal data, room metadata, retention, optional analytics, and self-hosted deployments.">
+  <link href="https://shellshare.net/privacy" rel="canonical">
+  <link rel="stylesheet" href="/stylesheet/content.css">
+  <link rel="icon" type="image/png" href="/favicon.png">
+</head>
+<body>
+  <div class="wrapper content-page">
+    <header class="content-header">
+      <p class="wordmark"><a href="/"><span class="title-shell">shell</span><span class="title-share">share</span></a></p>
+      <h1>Shellshare Privacy</h1>
+    </header>
+    <nav class="site-nav" aria-label="Main navigation">
+      <a href="/">Home</a>
+      <a href="/docs">Developer docs</a>
+      <a href="/about">About</a>
+      <a href="/privacy" aria-current="page">Privacy</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <main class="main">
+      <article>
+        <p><strong>Last updated: August 21, 2026.</strong> This page describes the data behavior implemented by Shellshare and the hosted shellshare.net service. A separately operated, self-hosted Shellshare server can use different infrastructure and retention settings, so its operator is responsible for documenting those choices.</p>
+
+        <p>Shellshare broadcasts terminal output one way, from the broadcaster to read-only viewers. Broadcasts are end-to-end encrypted by default. Encryption happens in the CLI before output is sent, and decryption happens in the viewer. The key is the part of the share URL after <code>#</code>; URL fragments are not sent to the server. The hosted relay stores and forwards encrypted records, not readable terminal text, unless the broadcaster explicitly uses <code>--disable-encryption</code>.</p>
+        <p>Shellshare does not require user accounts. The server keeps recent room history so someone joining late or reconnecting can see the current terminal state. On shellshare.net, a room and its recent history are removed after the room has been idle for six hours. Reads do not extend that window. Reusing the same named room starts a fresh session and clears the previous run’s stored output. The embedded <code>shellshare serve</code> mode keeps data only in that local server process.</p>
+        <p>The server software supports optional PostHog usage analytics, disabled unless an operator configures both an API key and a private salt. When enabled, events describe broadcasts starting and ending, durations, room names, viewer joins, and viewer counts. Broadcasters receive a pseudonymous identifier produced by HMAC-SHA256 from the operator’s private salt and the room password. Viewer identifiers are random for each join. Shellshare does not send terminal contents, room passwords, decryption keys, or visitor IP addresses to PostHog, and GeoIP enrichment and person profiles are disabled in those events.</p>
+        <p>Room names, timing, connection metadata, and traffic volume are not hidden by encryption, and infrastructure providers process connection information such as IP addresses to deliver the service. Anyone with the complete share link can watch, so do not broadcast secrets. The implementation is public in the <a href="https://github.com/vitorbaptista/shellshare">source repository</a>; privacy questions can use the <a href="/contact">contact page</a>.</p>
+      </article>
+    </main>
+    <footer>
+      <p>Shellshare is free software under the Apache License 2.0.</p>
+      <p><a href="/about">About</a> · <a href="/contact">Contact</a> · <a href="https://github.com/vitorbaptista/shellshare">Source code</a></p>
+    </footer>
+  </div>
+</body>
+</html>

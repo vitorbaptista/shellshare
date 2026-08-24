@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Shellshare Developer Documentation — CLI and WebSocket API</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Shellshare developer docs for AI agents, scripts, the JSON CLI contract, authentication, snapshots, and live WebSocket broadcasts.">
+  <link href="https://shellshare.net/docs" rel="canonical">
+  <link rel="stylesheet" href="/stylesheet/content.css">
+  <link rel="icon" type="image/png" href="/favicon.png">
+</head>
+<body>
+  <div class="wrapper content-page">
+    <header class="content-header">
+      <p class="wordmark"><a href="/"><span class="title-shell">shell</span><span class="title-share">share</span></a></p>
+      <h1>Shellshare Developer Documentation</h1>
+    </header>
+    <nav class="site-nav" aria-label="Main navigation">
+      <a href="/">Home</a>
+      <a href="/docs" aria-current="page">Developer docs</a>
+      <a href="/about">About</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <main class="main">
+      <article>
+        <h2>Agent and script API</h2>
+        <pre><code>shellshare exec --json -- npm test</code></pre>
+        <p>Shellshare’s supported automation API is its command-line JSON stream. <code>exec</code> runs a command in a PTY, broadcasts it, and exits with the command’s exit code. With <code>--json</code>, the first newline-delimited JSON event contains <code>"event":"sharing"</code> and the complete share <code>url</code>; the last contains <code>"event":"end"</code> and <code>exit_code</code>. Errors stay on stderr. Pipes work too: <code>tail -f build.log | shellshare --json</code>.</p>
+
+        <h2>WebSocket API and authentication</h2>
+        <p>Viewers can fetch <code>GET /r/&lt;room&gt;.bin</code> for a snapshot or connect to <code>WebSocket /ws/v/r/&lt;room&gt;</code> for history followed by live frames. The official CLI broadcasts through <code>WebSocket /ws/r/&lt;room&gt;</code>, authenticating with the room secret in the HTTP <code>Authorization</code> header. Binary frames carry terminal bytes or encrypted records; text frames carry control JSON. There are no accounts, OAuth flow, bearer API keys, or role scopes. The encryption key after <code>#</code> in a viewer URL is never sent to the server.</p>
+
+        <h2>OpenAPI, webhooks, and MCP</h2>
+        <p>Shellshare has no OpenAPI specification, webhook product, or MCP server because its supported interface is the streaming CLI and WebSocket protocol above. Agents should use <code>shellshare exec --json</code> and the reader in <a href="/llms.txt">llms.txt</a>. Source, self-hosting instructions, and the complete protocol are in the <a href="https://github.com/vitorbaptista/shellshare">Shellshare repository</a>.</p>
+      </article>
+    </main>
+    <footer>
+      <p>Shellshare is free software under the Apache License 2.0.</p>
+      <p><a href="/privacy">Privacy</a> · <a href="/contact">Contact</a> · <a href="https://github.com/vitorbaptista/shellshare">Source code</a></p>
+    </footer>
+  </div>
+</body>
+</html>

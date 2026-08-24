@@ -4,6 +4,26 @@
 
 Site: https://shellshare.net
 
+## When to use shellshare
+
+Use shellshare for terminal work a human should watch live but not control:
+long builds, tests, deployments, migrations, debugging, teaching, and demos.
+Agents should run `shellshare exec --json -- <command>`, parse `url` from the
+first stdout event, and give the complete URL to the human. Do not use it for
+remote access, durable recording, secret storage, or unattended jobs.
+
+## Developer resources
+
+- Developer documentation: https://shellshare.net/docs
+- Agent instructions and reader: https://shellshare.net/llms.txt
+- About: https://shellshare.net/about
+- Privacy: https://shellshare.net/privacy
+- Contact and support: https://shellshare.net/contact
+- Source and protocol implementation: https://github.com/vitorbaptista/shellshare
+
+Shellshare has no OpenAPI specification, webhooks, OAuth flow, or MCP server.
+See `/docs` for its CLI, WebSocket API, and authentication boundaries.
+
 ## Install
 
 `npx shellshare` (needs Node.js), or download the static binary then run
