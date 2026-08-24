@@ -62,7 +62,7 @@ struct Page {
     stylesheet: (String, Stylesheet),
 }
 
-/// A canonical public page with equivalent HTML and Markdown representations.
+/// The homepage with HTML for people and the agent documentation as Markdown.
 struct ContentPage {
     html: Page,
     markdown: String,
@@ -80,27 +80,7 @@ struct Stylesheet {
 
 fn index_page() -> &'static ContentPage {
     static PAGE: OnceLock<ContentPage> = OnceLock::new();
-    PAGE.get_or_init(|| render_content_page("index.html", "index.md"))
-}
-
-fn docs_page() -> &'static Page {
-    static PAGE: OnceLock<Page> = OnceLock::new();
-    PAGE.get_or_init(|| render_page("docs.html", &[]))
-}
-
-fn about_page() -> &'static Page {
-    static PAGE: OnceLock<Page> = OnceLock::new();
-    PAGE.get_or_init(|| render_page("about.html", &[]))
-}
-
-fn contact_page() -> &'static Page {
-    static PAGE: OnceLock<Page> = OnceLock::new();
-    PAGE.get_or_init(|| render_page("contact.html", &[]))
-}
-
-fn privacy_page() -> &'static Page {
-    static PAGE: OnceLock<Page> = OnceLock::new();
-    PAGE.get_or_init(|| render_page("privacy.html", &[]))
+    PAGE.get_or_init(|| render_content_page("index.html"))
 }
 
 fn room_page() -> &'static Page {
@@ -203,34 +183,23 @@ pub async fn llms_handler(headers: HeaderMap) -> Response {
 /// instead of the first request.
 pub fn warm() {
     index_page();
-    docs_page();
-    about_page();
-    contact_page();
-    privacy_page();
     room_page();
     llms_txt();
 }
 
-fn render_content_page(html_name: &str, markdown_name: &str) -> ContentPage {
-    let file = Templates::get(markdown_name)
-        .unwrap_or_else(|| panic!("template {markdown_name} not embedded"));
-    let markdown = String::from_utf8(file.data.into_owned())
-        .unwrap_or_else(|_| panic!("template {markdown_name} is not UTF-8"));
+fn render_content_page(html_name: &str) -> ContentPage {
+    let (markdown, markdown_etag) = llms_txt();
     assert!(
         markdown
             .lines()
             .next()
             .is_some_and(|heading| heading.starts_with("# ") && heading.contains("Shellshare")),
-        "template {markdown_name} must start with an H1 containing Shellshare"
-    );
-    let markdown_etag = format!(
-        "\"{}\"",
-        hex::encode(Sha256::digest(markdown.as_bytes()))
+        "llms.txt must start with an H1 containing Shellshare"
     );
     ContentPage {
         html: render_page(html_name, &[]),
-        markdown,
-        markdown_etag,
+        markdown: markdown.clone(),
+        markdown_etag: markdown_etag.clone(),
     }
 }
 
@@ -431,16 +400,9 @@ fn replace_stylesheet_links(html: &str, links: &[(Range<usize>, String)], url: &
 
 /// The bundle behind `/stylesheet/<page>.bundle.css`, if that is what
 /// the path names. Generated, so it is not in `StaticAssets`; a linear
-/// scan is enough for this small fixed set of pages.
+/// scan is enough for two pages.
 fn stylesheet_bundle(path: &str) -> Option<&'static Stylesheet> {
-    [
-        &index_page().html,
-        room_page(),
-        docs_page(),
-        about_page(),
-        contact_page(),
-        privacy_page(),
-    ]
+    [&index_page().html, room_page()]
         .into_iter()
         .find(|page| page.stylesheet.0 == path)
         .map(|page| &page.stylesheet.1)
@@ -514,22 +476,6 @@ fn asset_version(path: &str) -> Option<String> {
 
 pub async fn index_handler(headers: HeaderMap) -> Response {
     serve_content_page(index_page(), &headers)
-}
-
-pub async fn docs_handler(headers: HeaderMap) -> Response {
-    serve_page(docs_page(), &headers)
-}
-
-pub async fn about_handler(headers: HeaderMap) -> Response {
-    serve_page(about_page(), &headers)
-}
-
-pub async fn contact_handler(headers: HeaderMap) -> Response {
-    serve_page(contact_page(), &headers)
-}
-
-pub async fn privacy_handler(headers: HeaderMap) -> Response {
-    serve_page(privacy_page(), &headers)
 }
 
 /// The viewer page response for `GET /r/:room`. Not an axum handler:
@@ -836,9 +782,9 @@ pub fn not_found_response() -> Response {
             "# 404: Shellshare page not found\n\n\
              The requested path does not exist. Try one of these resources:\n\n\
              - [Shellshare home](/)\n\
-             - [Developer documentation](/docs)\n\
              - [Agent instructions](/llms.txt)\n\
-             - [Site map](/sitemap.xml)\n",
+             - [Site map](/sitemap.xml)\n\
+             - [Source code](https://github.com/vitorbaptista/shellshare)\n",
         ))
         .unwrap()
 }

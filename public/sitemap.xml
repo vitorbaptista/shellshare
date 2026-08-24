@@ -5,22 +5,6 @@
     <changefreq>monthly</changefreq>
   </url>
   <url>
-    <loc>https://shellshare.net/docs</loc>
-    <changefreq>monthly</changefreq>
-  </url>
-  <url>
-    <loc>https://shellshare.net/about</loc>
-    <changefreq>yearly</changefreq>
-  </url>
-  <url>
-    <loc>https://shellshare.net/contact</loc>
-    <changefreq>yearly</changefreq>
-  </url>
-  <url>
-    <loc>https://shellshare.net/privacy</loc>
-    <changefreq>yearly</changefreq>
-  </url>
-  <url>
     <loc>https://shellshare.net/llms.txt</loc>
     <changefreq>monthly</changefreq>
   </url>
