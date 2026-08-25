@@ -39,7 +39,8 @@ STATIC_MARKER = "DASHBOARD"
 # marker; this is the "base paint" a real TUI does once on startup.
 BASE_PAINT = (
     "\x1b[?1049h\x1b[2J\x1b[H"
-    "\x1b[1;1H+==== DASHBOARD ====+"
+    "\x1b[1;1H\x1b[38;2;137;180;250;48;2;24;24;37m"
+    "+==== DASHBOARD ====+\x1b[0m"
     "\x1b[2;1H| loading...        |"
     "\x1b[3;1H+===================+"
 )
@@ -120,6 +121,13 @@ def test_late_joiner_sees_static_chrome_of_long_running_tui(
         assert FIRST_COUNTER not in snapshot, (
             "history was not evicted - raise NUM_UPDATES "
             f"(snapshot head: {snapshot[:80]!r})"
+        )
+        assert "38;2;137;180;250" in snapshot, (
+            "the keyframe lost the base paint's truecolor"
+        )
+        assert "38:2:137:180:250" not in snapshot, (
+            "the keyframe kept avt's ambiguous RGB form, which xterm.js "
+            "reads shifted by one channel"
         )
 
         # Behavior under test: a freshly-loaded viewer renders the static
